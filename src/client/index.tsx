@@ -1,0 +1,881 @@
+/**
+ * dsh-workbench client v0.2 — 方案 A 左右分栏：
+ *  - 左侧导航区：今日 / 可导航日历(周/月) / 树状列表（默认折叠、记忆展开）
+ *  - 右侧详情区：仅显示选中任务；未选中显示占位
+ *  - AI 澄清/咨询/拆解统一跳官方会话区；工作台侧边栏显示待确认草稿红点
+ */
+import { createRoot, type Root } from 'react-dom/client'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+
+const PANEL_NAME = 'workbench'
+const ACTIVE_ATTR = 'data-dsh-workbench-active'
+const PENDING_ATTR = 'data-dsh-workbench-pending'
+const VIEW_ATTR = 'data-dsh-workbench-view'
+const ENTRY_ATTR = 'data-dsh-workbench-entry'
+const SIBLING_ATTRS = ['data-dsh-taskboard-active', 'data-dsh-ssh-active']
+const ACTIVATE_EVENT = 'dsh-panel-activate'
+
+const CSS = `
+[data-pane='conversation'], [class*='centerCol'] { position: relative; }
+[${VIEW_ATTR}] {
+  position: absolute; inset: 0; display: none; z-index: 60;
+  background: var(--dsw-alias-bg-base, #111); color: var(--dsw-alias-label-primary, #eee);
+  font-family: var(--dsw-font-family, system-ui); overflow: hidden;
+}
+html[${ACTIVE_ATTR}]:not([data-dsh-taskboard-active]):not([data-dsh-ssh-active]) [${VIEW_ATTR}] { display: block; }
+html[${ACTIVE_ATTR}]:not([data-dsh-taskboard-active]):not([data-dsh-ssh-active]) [data-pane='conversation'] > :not([${VIEW_ATTR}]),
+html[${ACTIVE_ATTR}]:not([data-dsh-taskboard-active]):not([data-dsh-ssh-active]) [class*='centerCol'] > :not([${VIEW_ATTR}]) { display: none !important; }
+[${ENTRY_ATTR}] { position:relative; display:flex; align-items:center; gap:8px; width:100%; height:32px; padding:0 12px; background:transparent; border:none; border-radius:8px; color:var(--dsw-alias-label-secondary); cursor:pointer; font-size:13px; white-space:nowrap; text-align:left; }
+[${ENTRY_ATTR}]:hover { background: var(--dsw-specific-sidebar-nav-item-hover); color: var(--dsw-alias-label-primary); }
+[${ENTRY_ATTR}][data-active] { background: var(--dsw-specific-sidebar-nav-item-active); color: var(--dsw-alias-label-primary); font-weight:600; }
+html[${PENDING_ATTR}] [${ENTRY_ATTR}]::after { content:''; position:absolute; top:6px; right:10px; width:7px; height:7px; border-radius:50%; background:#e74c3c; }
+[data-dsh-frame][data-sidebar-collapsed] [${ENTRY_ATTR}] { justify-content:center; padding:0; width:100%; }
+[data-dsh-frame][data-sidebar-collapsed] [${ENTRY_ATTR}] .wb-label { display:none; }
+.wb-app { height:100%; display:flex; flex-direction:column; }
+.wb-h { flex:none; display:flex; align-items:center; gap:10px; padding:20px 22px 12px; border-bottom:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.10)); }
+.wb-title { font-size:17px; font-weight:600; letter-spacing:.02em; }
+.wb-tabs { display:flex; gap:4px; }
+.wb-tab { background:none; border:none; border-bottom:2px solid transparent; color:var(--dsw-alias-label-secondary); padding:8px 12px; cursor:pointer; font:inherit; font-weight:500; }
+.wb-tab.on { color:var(--dsw-alias-label-primary); border-bottom-color:#8fa8c8; }
+.wb-btn { border:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.16)); background:transparent; color:inherit; border-radius:8px; padding:6px 12px; cursor:pointer; font:inherit; }
+.wb-btn.primary { background: color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 16%, transparent); border:1px solid color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 35%, transparent); color:var(--dsw-alias-label-primary); }
+.wb-body { flex:1; min-height:0; display:flex; }
+.wb-nav { flex:0 0 58%; min-width:0; overflow:auto; padding:16px 18px; box-sizing:border-box; border-right:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.08)); }
+.wb-detail { flex:1; min-width:0; overflow:auto; padding:12px 14px; box-sizing:border-box; }
+.wb-stats { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin-bottom:10px; }
+.wb-stat { border:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.10)); background:var(--dsw-alias-bg-layer-1, rgba(255,255,255,.02)); border-radius:12px; padding:12px 14px; }
+.wb-stat b { font-size:20px; }
+.wb-stat span { display:block; color:var(--dsw-alias-label-secondary); font-size:12px; }
+.wb-card { border:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.12)); background: var(--dsw-alias-bg-layer-1, rgba(255,255,255,.02)); border-radius:14px; padding:16px; margin-bottom:12px; box-shadow:none; }
+.wb-card h4 { margin:0 0 8px; }
+.wb-list { border:1px solid var(--dsw-alias-border-l1, rgba(255,255,255,.12)); border-radius:10px; overflow:hidden; }
+.wb-row { display:flex; align-items:center; gap:8px; padding:10px 12px; border-bottom:1px solid var(--dsw-alias-border-l1, rgba(255,255,255,.08)); cursor:pointer; transition:background .12s ease; }
+.wb-row:last-child { border-bottom:none; }
+.wb-row:hover { background:rgba(143,168,200,.08); }
+.wb-row.selected { background:rgba(143,168,200,.12); box-shadow:inset 2px 0 0 #8fa8c8; }
+.wb-chip { border-radius:6px; padding:2px 7px; font-size:11px; white-space:nowrap; }
+.wb-cal-nav { display:flex; align-items:center; gap:8px; margin-bottom:10px; }
+.wb-week { display:grid; grid-template-columns:repeat(7,1fr); gap:6px; margin-bottom:10px; }
+.wb-day { border:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.10)); background:var(--dsw-alias-bg-layer-1, rgba(255,255,255,.02)); border-radius:12px; min-height:92px; padding:8px; cursor:pointer; transition:border-color .12s ease, background .12s ease; }
+.wb-day.today { border-color: color-mix(in srgb, #8fa8c8 45%, transparent); }
+.wb-day.selected { border-color:#8fa8c8; background:rgba(143,168,200,.12); }
+.wb-month { display:grid; grid-template-columns:repeat(7,1fr); gap:6px; margin-bottom:10px; }
+.wb-mday { min-height:52px; border:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.08)); background:var(--dsw-alias-bg-layer-1, rgba(255,255,255,.02)); border-radius:10px; padding:5px; cursor:pointer; color:var(--dsw-alias-label-secondary); }
+.wb-mday.other { opacity:.35; }
+.wb-mday.today { border-color: var(--dsw-alias-state-business-primary, #4f8ef7); }
+.wb-mday.selected { background:rgba(79,142,247,.15); }
+.wb-form { display:grid; grid-template-columns:1fr 1fr; gap:10px; border:1px solid var(--dsw-alias-border-l1, rgba(255,255,255,.12)); border-radius:10px; padding:12px; }
+.wb-form-panel { border:1px solid rgba(143,168,200,.65) !important; border-left:6px solid #8fa8c8 !important; border-radius:14px !important; padding:16px !important; background:color-mix(in srgb, #8fa8c8 8%, transparent) !important; box-shadow:0 10px 28px rgba(0,0,0,.15); margin-bottom:12px; }
+.wb-form-panel h4 { margin:0 0 10px; font-size:15px; color:var(--dsw-alias-label-primary); }
+.wb-btn.lg { padding:8px 16px; font-size:14px; font-weight:600; }
+.wb-form label { display:flex; flex-direction:column; gap:4px; font-size:12px; color:var(--dsw-alias-label-secondary); }
+.wb-form input, .wb-form select, .wb-form textarea { background: var(--dsw-alias-bg-base,#17171a); border:1px solid var(--dsw-alias-border-l1, rgba(255,255,255,.15)); color:inherit; border-radius:8px; padding:7px 10px; font:inherit; }
+.wb-form .full { grid-column:1 / -1; }
+.wb-empty { padding:24px; text-align:center; color:var(--dsw-alias-label-secondary); }
+.wb-banner { border:1px solid rgba(127,127,127,.35); border-left:6px solid #8fa8c8; border-radius:14px; padding:16px; margin:10px 14px 0; box-shadow:0 10px 28px rgba(0,0,0,.18); }
+.wb-banner.draft { border-color:rgba(143,168,200,.45); border-left-color:#8fa8c8; background:color-mix(in srgb, #8fa8c8 10%, transparent); }
+.wb-banner.review { border-color:rgba(143,168,200,.6); border-left-color:#8fa8c8; background:color-mix(in srgb, #8fa8c8 12%, transparent); }
+.wb-banner.completion { border-color:rgba(245,184,61,.55); border-left-color:#f5b83d; background:color-mix(in srgb, #f5b83d 10%, transparent); }
+.wb-banner.reminder { border-color:rgba(245,184,61,.5); border-left-color:#f5b83d; background:color-mix(in srgb, #f5b83d 9%, transparent); }
+.wb-banner.error { border-color:rgba(231,76,60,.55); border-left-color:#e74c3c; background:color-mix(in srgb, #e74c3c 10%, transparent); }
+.wb-banner.notice { border-color:rgba(143,168,200,.5); border-left-color:#8fa8c8; background:color-mix(in srgb, #8fa8c8 8%, transparent); }
+.wb-banner h4 { margin:0 0 8px; font-size:15px; }
+`
+
+interface Dict { kind: string; code: string; name: string; config: Record<string, unknown> }
+interface Task {
+  id: string
+  parentId: string | null
+  title: string
+  description: string
+  typeCode: string
+  statusCode: string
+  priorityCode: string
+  aiPolicyCode: string
+  dueAt: string | null
+  allDay: boolean
+  estimatedMinutes: number | null
+  source: string
+  workspacePath: string | null
+  archived: boolean
+  extra: Record<string, unknown>
+  createdAt: string
+  updatedAt: string
+  completedAt: string | null
+  cancelledAt: string | null
+}
+interface Bootstrap { dictionaries: Dict[]; stats: { overdue: number; todayDue: number; doing: number; total: number } }
+interface TaskDetail { task: Task; children: Task[]; sessions: Array<Record<string, unknown>>; reminders: Array<{ id: string; taskId: string; offsetMinutes: number; methodCode: string; firedAt: string | null }>; events: Array<Record<string, unknown>>; reviews: Array<Record<string, unknown>> }
+interface DraftView { id: string; kindCode: string; statusCode: string; payload: Record<string, unknown> }
+
+interface SessionDriver {
+  sessionId: string
+  prompt(content: Array<{ type: 'text'; text: string }>, mode: 'queue'): Promise<{ ok?: boolean; error?: unknown }>
+  rename(title: string): Promise<unknown>
+}
+interface WorkbenchRuntime {
+  sessions: {
+    binding(id: string): { session: SessionDriver } | undefined
+    open(id: string): void
+  }
+  workspaces: {
+    list: { getSnapshot(): { items: readonly { workspaceId: string }[]; recentWorkspaceId?: string } }
+    connectWorkspace(workspaceId: string): Promise<string>
+    create?(input: { path: string }): Promise<{ workspaceId?: string }>
+  }
+}
+
+const api = async <T,>(path: string, init?: RequestInit): Promise<T> => {
+  const res = await fetch(path, init)
+  const body = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`)
+  return body as T
+}
+
+const folderForText = (text: string): string => {
+  const cleaned = text.trim().replace(/[\\/:*?"<>|]/g, '').replace(/\s+/g, ' ').slice(0, 24).trim()
+  return cleaned === '' ? '未命名任务' : cleaned
+}
+const fmtTime = (iso: string): string => {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+const sameDay = (a: Date, b: Date): boolean => a.toDateString() === b.toDateString()
+const startOfDay = (d: Date): Date => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x }
+const startOfWeek = (d: Date): Date => { const x = startOfDay(d); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return x }
+
+function Badge({ dict, code }: { dict: Dict[]; code: string }): JSX.Element {
+  const entry = dict.find((d) => d.code === code)
+  const color = String(entry?.config.color ?? '#8a9aa8')
+  return <span className="wb-chip" style={{ background: `color-mix(in srgb, ${color} 14%, transparent)`, color, border: `1px solid color-mix(in srgb, ${color} 45%, transparent)`, fontWeight: 600 }}>{entry?.name ?? code}</span>
+}
+
+function renderInline(text: string): (string | JSX.Element)[] {
+  const parts: (string | JSX.Element)[] = []
+  const regex = /(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\([^)]*\))/g
+  let last = 0
+  for (const match of text.matchAll(regex)) {
+    const idx = match.index
+    if (idx > last) parts.push(text.slice(last, idx))
+    const token = match[0]
+    if (token.startsWith('**')) parts.push(<strong key={idx}>{token.slice(2, -2)}</strong>)
+    else if (token.startsWith('`')) parts.push(<code key={idx} style={{ background: 'rgba(127,127,127,.14)', padding: '0 4px', borderRadius: 4 }}>{token.slice(1, -1)}</code>)
+    else {
+      const m = /^\[([^\]]+)\]\(([^)]*)\)$/.exec(token)
+      if (m !== null) parts.push(<a key={idx} href={m[2]} style={{ color: 'var(--dsw-alias-state-business-primary,#8fa8c8)' }}>{m[1]}</a>)
+      else parts.push(token)
+    }
+    last = idx + token.length
+  }
+  if (last < text.length) parts.push(text.slice(last))
+  return parts
+}
+
+function MarkdownText({ text }: { text: string }): JSX.Element {
+  const lines = text.split('\n')
+  const blocks: JSX.Element[] = []
+  let list: string[] = []
+  let code: string[] = []
+  let key = 0
+  const flushList = () => {
+    if (list.length === 0) return
+    blocks.push(<ul key={key++} style={{ margin: '4px 0 4px 18px', padding: 0 }}>{list.map((item, i) => <li key={i} style={{ margin: '2px 0' }}>{renderInline(item)}</li>)}</ul>)
+    list = []
+  }
+  const flushCode = () => {
+    if (code.length === 0) return
+    blocks.push(<pre key={key++} style={{ background: 'rgba(127,127,127,.10)', padding: 8, borderRadius: 8, overflow: 'auto', fontSize: 12 }}>{code.join('\n')}</pre>)
+    code = []
+  }
+  for (const line of lines) {
+    if (line.startsWith('```')) { flushList(); if (code.length > 0) flushCode(); else code = []; continue }
+    if (code.length > 0) { code.push(line); continue }
+    if (/^###\s/.test(line)) { flushList(); blocks.push(<h5 key={key++} style={{ margin: '8px 0 4px' }}>{renderInline(line.replace(/^###\s*/, ''))}</h5>); continue }
+    if (/^##\s/.test(line)) { flushList(); blocks.push(<h4 key={key++} style={{ margin: '10px 0 4px' }}>{renderInline(line.replace(/^##\s*/, ''))}</h4>); continue }
+    if (/^#\s/.test(line)) { flushList(); blocks.push(<h3 key={key++} style={{ margin: '12px 0 4px' }}>{renderInline(line.replace(/^#\s*/, ''))}</h3>); continue }
+    if (/^[-*]\s/.test(line)) { flushCode(); list.push(line.replace(/^[-*]\s*/, '')); continue }
+    if (line.trim() === '') { flushList(); flushCode(); continue }
+    flushList(); flushCode()
+    blocks.push(<p key={key++} style={{ margin: '4px 0' }}>{renderInline(line)}</p>)
+  }
+  flushList(); flushCode()
+  return <div style={{ lineHeight: 1.7, fontSize: 13 }}>{blocks}</div>
+}
+
+interface TaskTreeNode { task: Task; children: TaskTreeNode[] }
+
+function filterTaskTree(roots: TaskTreeNode[], keep: (task: Task) => boolean): TaskTreeNode[] {
+  const walk = (nodes: TaskTreeNode[]): TaskTreeNode[] => {
+    const out: TaskTreeNode[] = []
+    for (const node of nodes) {
+      const children = walk(node.children)
+      if (keep(node.task) || children.length > 0) out.push({ task: node.task, children })
+    }
+    return out
+  }
+  return walk(roots)
+}
+
+function countTaskTree(roots: TaskTreeNode[]): number {
+  return roots.reduce((sum, node) => sum + 1 + countTaskTree(node.children), 0)
+}
+function buildTaskTree(tasks: Task[]): TaskTreeNode[] {
+  const byParent = new Map<string | null, Task[]>()
+  for (const task of tasks) {
+    const list = byParent.get(task.parentId) ?? []
+    list.push(task)
+    byParent.set(task.parentId, list)
+  }
+  const walk = (id: string | null): TaskTreeNode[] => (byParent.get(id) ?? [])
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+    .map((task) => ({ task, children: walk(task.id) }))
+  return walk(null)
+}
+
+function TaskTreeRows({ roots, depth, expanded, toggle, label, dicts, onOpen, selectedId }: {
+  roots: TaskTreeNode[]; depth: number; expanded: Set<string>; toggle: (id: string) => void
+  label: (kind: string, code: string) => string; dicts: Dict[]; onOpen: (task: Task) => void; selectedId?: string
+}): JSX.Element {
+  return (
+    <>
+      {roots.map((node) => (
+        <div key={node.task.id}>
+          <div className={`wb-row ${selectedId === node.task.id ? 'selected' : ''}`} style={{ paddingLeft: 8 + depth * 16 }}>
+            <button type="button" className="wb-btn" style={{ padding: '2px 6px', border: 'none' }} onClick={(e) => { e.stopPropagation(); toggle(node.task.id) }}>
+              {node.children.length > 0 ? (expanded.has(node.task.id) ? '▼' : '▶') : '·'}
+            </button>
+            <TaskRow task={node.task} label={label} dicts={dicts} onOpen={onOpen} />
+          </div>
+          {node.children.length > 0 && expanded.has(node.task.id) && (
+            <TaskTreeRows roots={node.children} depth={depth + 1} expanded={expanded} toggle={toggle} label={label} dicts={dicts} onOpen={onOpen} selectedId={selectedId} />
+          )}
+        </div>
+      ))}
+    </>
+  )
+}
+
+function TaskRow({ task, label, dicts, onOpen, selected }: { task: Task; label: (kind: string, code: string) => string; dicts: Dict[]; onOpen: (task: Task) => void; selected?: boolean }): JSX.Element {
+  const due = task.dueAt === null ? null : new Date(task.dueAt)
+  const now = new Date()
+  const dueText = task.statusCode === 'done'
+    ? (task.dueAt !== null ? `${fmtTime(task.dueAt)}（已完成）` : '已完成')
+    : task.statusCode === 'cancelled'
+      ? '已取消'
+      : due === null
+        ? '无截止'
+        : Number.isNaN(due.getTime())
+          ? fmtTime(task.dueAt!)
+          : due.toDateString() === now.toDateString()
+            ? `今天 ${fmtTime(task.dueAt!)}`
+            : due.getTime() < now.getTime()
+              ? `逾期 ${fmtTime(task.dueAt!)}`
+              : fmtTime(task.dueAt!)
+  return (
+    <div className={`wb-row ${selected === true ? 'selected' : ''}`} style={{ flex: 1, minWidth: 0 }} onClick={() => onOpen(task)}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontWeight: 600 }}>{task.title}</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap', marginTop: 3 }}>
+          <Badge dict={dicts.filter((d) => d.kind === 'type')} code={task.typeCode} />
+          <Badge dict={dicts.filter((d) => d.kind === 'priority')} code={task.priorityCode} />
+          <Badge dict={dicts.filter((d) => d.kind === 'status')} code={task.statusCode} />
+          <span style={{ fontSize: 12, color: '#999' }}>{dueText}</span>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function DraftBanner({ draft, onDone, runtime }: { draft: DraftView; onDone: () => void; runtime: WorkbenchRuntime }): JSX.Element {
+  const subtasks = Array.isArray(draft.payload.subtasks) ? draft.payload.subtasks as Array<{ title?: string }> : []
+  const [busy, setBusy] = useState(false)
+  const act = async (path: string): Promise<void> => {
+    setBusy(true)
+    try { await api(path, { method: 'POST' }); onDone() } finally { setBusy(false) }
+  }
+  if (draft.kindCode === 'review') {
+    const summary = String(draft.payload.summaryMd ?? '')
+    const sessionId = typeof draft.payload.sessionId === 'string' ? draft.payload.sessionId : ''
+    return (
+      <div className="wb-banner review">
+        <h4>📝 复盘草稿待确认</h4>
+        <div style={{ maxHeight: 220, overflow: 'auto' }}><MarkdownText text={summary} /></div>
+        <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+          <button className="wb-btn primary" disabled={busy} onClick={() => void act(`/api/workbench/drafts/${draft.id}/confirm`)}>确认写回任务</button>
+          <button className="wb-btn" disabled={busy} onClick={() => void act(`/api/workbench/drafts/${draft.id}/abandon`)}>放弃</button>
+          {sessionId !== '' && <button className="wb-btn" onClick={() => { document.documentElement.removeAttribute(ACTIVE_ATTR); runtime.sessions.open(sessionId) }}>回到复盘会话</button>}
+        </div>
+      </div>
+    )
+  }
+  if (draft.kindCode === 'completion') {
+    const summary = String(draft.payload.summary ?? '')
+    const sessionId = typeof draft.payload.sessionId === 'string' ? draft.payload.sessionId : ''
+    return (
+      <div className="wb-banner completion">
+        <h4>✅ 执行完成，待你验收</h4>
+        <div style={{ fontSize: 13 }}><b>{String(draft.payload.taskId ?? '')}</b></div>
+        <div style={{ fontSize: 12, color: '#999', whiteSpace: 'pre-wrap' }}>{summary}</div>
+        <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+          <button className="wb-btn primary" disabled={busy} onClick={() => void act(`/api/workbench/drafts/${draft.id}/confirm`)}>验收通过（标记完成）</button>
+          <button className="wb-btn" disabled={busy} onClick={() => void act(`/api/workbench/drafts/${draft.id}/abandon`)}>驳回</button>
+          {sessionId !== '' && <button className="wb-btn" onClick={() => { document.documentElement.removeAttribute(ACTIVE_ATTR); runtime.sessions.open(sessionId) }}>回到执行会话</button>}
+        </div>
+        <div style={{ fontSize: 12, color: '#999', marginTop: 6 }}>驳回后请回到执行会话继续修改，AI 可再次提交验收申请。</div>
+      </div>
+    )
+  }
+  return (
+    <div className="wb-banner draft">
+      <h4>{draft.kindCode === 'subtask_plan' ? `待确认：子任务提案（${subtasks.length}）` : '待确认：任务草稿'}</h4>
+      {draft.kindCode === 'task'
+        ? <div style={{ fontSize: 13 }}><b>{String(draft.payload.title ?? '')}</b> · {String(draft.payload.typeCode ?? '')} · {String(draft.payload.priorityCode ?? '')}</div>
+        : <div style={{ fontSize: 12, color: '#999' }}>{subtasks.slice(0, 8).map((t, i) => <div key={i}>• {t.title ?? '(未命名)'}</div>)}</div>}
+      <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+        <button className="wb-btn primary" disabled={busy} onClick={() => void act(`/api/workbench/drafts/${draft.id}/confirm`)}>确认入册</button>
+        <button className="wb-btn" disabled={busy} onClick={() => void act(`/api/workbench/drafts/${draft.id}/abandon`)}>放弃</button>
+      </div>
+    </div>
+  )
+}
+
+function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
+  const [view, setView] = useState<'today' | 'calendar' | 'list'>('today')
+  const [bootstrap, setBootstrap] = useState<Bootstrap | null>(null)
+  const [tasks, setTasks] = useState<Task[]>([])
+  const [selected, setSelected] = useState<TaskDetail | null>(null)
+  const [showForm, setShowForm] = useState(false)
+  const [showQuick, setShowQuick] = useState(false)
+  const [quickText, setQuickText] = useState('')
+  const [pendingDraft, setPendingDraft] = useState<DraftView | null>(null)
+  const [reminders, setReminders] = useState<Array<{ reminderId: string; taskId: string; title: string; dueAt: string }>>([])
+  const [error, setError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
+  const [settings, setSettings] = useState<{ defaultWorkspace: string; autoCreateTypeFolders: boolean }>({ defaultWorkspace: '', autoCreateTypeFolders: true })
+  const [showSettings, setShowSettings] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const selectedRef = useRef<string | null>(null)
+
+  const dicts = useMemo(() => bootstrap?.dictionaries ?? [], [bootstrap])
+  const dictOf = useCallback((kind: string) => dicts.filter((d) => d.kind === kind), [dicts])
+  const label = useCallback((kind: string, code: string) => dicts.find((d) => d.kind === kind && d.code === code)?.name ?? code, [dicts])
+
+  const refresh = useCallback(async () => {
+    const [boot, list] = await Promise.all([api<Bootstrap>('/api/workbench/bootstrap'), api<{ tasks: Task[] }>('/api/workbench/tasks')])
+    setBootstrap(boot); setTasks(list.tasks)
+    if (selectedRef.current !== null) {
+      try {
+        const [detail, ev, rv] = await Promise.all([
+          api<TaskDetail>(`/api/workbench/tasks/${selectedRef.current}`),
+          api<{ events: Array<Record<string, unknown>> }>(`/api/workbench/tasks/${selectedRef.current}/events`).catch(() => ({ events: [] })),
+          api<{ reviews: Array<Record<string, unknown>> }>(`/api/workbench/tasks/${selectedRef.current}/reviews`).catch(() => ({ reviews: [] })),
+        ])
+        setSelected({ ...detail, events: ev.events, reviews: rv.reviews })
+      } catch { setSelected(null); selectedRef.current = null }
+    }
+  }, [])
+
+  useEffect(() => { void refresh().catch((e: unknown) => setError(e instanceof Error ? e.message : String(e))) }, [refresh])
+  useEffect(() => { void api<{ settings: { defaultWorkspace: string; autoCreateTypeFolders: boolean } }>('/api/workbench/settings').then((r) => setSettings(r.settings)).catch(() => undefined) }, [])
+
+  useEffect(() => {
+    let alive = true
+    const tick = async () => {
+      try {
+        const res = await api<{ draft: DraftView | null }>('/api/workbench/drafts')
+        if (alive) setPendingDraft(res.draft)
+        const r = await api<{ reminders: Array<{ reminderId: string; taskId: string; title: string; dueAt: string }> }>('/api/workbench/reminders/due')
+        if (alive) setReminders(r.reminders)
+      } catch { /* 轮询失败下轮重试 */ }
+    }
+    void tick()
+    const timer = setInterval(() => void tick(), 5000)
+    const refreshTimer = setInterval(() => { void refresh().catch(() => undefined) }, 15000)
+    return () => { alive = false; clearInterval(timer); clearInterval(refreshTimer) }
+  }, [refresh])
+
+  useEffect(() => {
+    if (pendingDraft !== null) document.documentElement.setAttribute(PENDING_ATTR, '')
+    else document.documentElement.removeAttribute(PENDING_ATTR)
+    return () => document.documentElement.removeAttribute(PENDING_ATTR)
+  }, [pendingDraft])
+
+  const openTask = (task: Task): void => {
+    selectedRef.current = task.id
+    void Promise.all([
+      api<TaskDetail>(`/api/workbench/tasks/${task.id}`),
+      api<{ events: Array<Record<string, unknown>> }>(`/api/workbench/tasks/${task.id}/events`).catch(() => ({ events: [] })),
+      api<{ reviews: Array<Record<string, unknown>> }>(`/api/workbench/tasks/${task.id}/reviews`).catch(() => ({ reviews: [] })),
+    ]).then(([detail, ev, rv]) => setSelected({ ...detail, events: ev.events, reviews: rv.reviews })).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
+  }
+  const patchTask = async (id: string, patch: Record<string, unknown>): Promise<void> => {
+    await api(`/api/workbench/tasks/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) })
+    await refresh()
+  }
+  const fireReminder = async (reminderId: string): Promise<void> => {
+    await api(`/api/workbench/reminders/${reminderId}/fire`, { method: 'POST' })
+    setReminders((list) => list.filter((r) => r.reminderId !== reminderId))
+  }
+
+  const startAISession = async (mode: 'clarify' | 'consult' | 'breakdown' | 'execute' | 'review', task: Task | null, text: string, previousSessions: Array<Record<string, unknown>> = []): Promise<void> => {
+    if (mode === 'clarify' && text.trim() === '') return
+    setBusy(true); setError(null)
+    try {
+      const ws = runtime.workspaces.list.getSnapshot()
+      let workspaceId = ws.recentWorkspaceId ?? ws.items[0]?.workspaceId
+      const joinPath = (base: string, folder: string): string => `${base.replace(/[\\/]+$/, '')}\\${folder}`
+      let desired = ''
+      if (task !== null) {
+        desired = task.workspacePath ?? ''
+        if (desired === '' && settings.defaultWorkspace !== '' && settings.autoCreateTypeFolders) {
+          desired = joinPath(settings.defaultWorkspace, folderForText(task.title))
+        }
+      } else if (mode === 'clarify' && settings.defaultWorkspace !== '' && settings.autoCreateTypeFolders) {
+        desired = joinPath(settings.defaultWorkspace, folderForText(text || '需求澄清'))
+      }
+      if (desired !== '') {
+        try {
+          await api('/api/workbench/workspaces/ensure', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ path: desired }) })
+          const created = await runtime.workspaces.create?.({ path: desired })
+          if (typeof created?.workspaceId === 'string' && created.workspaceId !== '') workspaceId = created.workspaceId
+          // 任务没有显式工作区时，把解析出的任务文件夹回写，保证后续会话都进同一文件夹
+          if (task !== null && task.workspacePath === null && desired !== '') {
+            void api(`/api/workbench/tasks/${task.id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ workspacePath: desired }) }).catch(() => undefined)
+          }
+        } catch { /* 目录创建/注册失败则回退当前工作区 */ }
+      }
+      if (workspaceId === undefined) throw new Error('没有可用工作区，请先在 DSH 中打开一个工作区')
+      const id = await runtime.workspaces.connectWorkspace(workspaceId)
+      const binding = runtime.sessions.binding(id)
+      if (binding === undefined) throw new Error('会话绑定未就绪，请稍后重试')
+      await binding.session.rename(mode === 'clarify' ? `澄清：${text.slice(0, 24)}` : mode === 'consult' ? `协助：${task?.title.slice(0, 24)}` : mode === 'breakdown' ? `拆解：${task?.title.slice(0, 24)}` : mode === 'review' ? `复盘：${task?.title.slice(0, 24)}` : `执行：${task?.title.slice(0, 24)}`).catch(() => undefined)
+      const prompt = mode === 'clarify'
+        ? `你是“个人工作台”的任务澄清助手。请按 workbench-intake 规范执行。\n\n用户想创建的任务是：\n「${text}」\n\n当前时间：${new Date().toISOString()}\n默认 AI 工作区：${settings.defaultWorkspace || '未设置'}\n\n请先澄清必要信息（一次一个主题，最多5轮）。如果用户对该任务的 AI 会话有指定工作区，请询问具体路径，并在调用 workbench_submit_task 时传入 workspace_path；否则留空使用默认工作区。信息足够后调用 workbench_submit_task 提交结构化任务草稿。不要执行任务本身。`
+        : mode === 'consult'
+          ? `你是“个人工作台”的任务协助助手。请针对下面这个任务提供咨询、拆解或复盘建议（咨询模式不执行）。\n\n任务 id：${task?.id}\n任务标题：${task?.title}\n任务描述：${task?.description || '（无）'}\n类型：${task?.typeCode} 优先级：${task?.priorityCode} 状态：${task?.statusCode}\n截止：${task?.dueAt ?? '无'}\n\n请先理解任务，再给出建议；如果信息不足，可以一次问一个问题。\n\n重要：如果用户要求把结论/补充信息保存回任务，请调用 workbench_update_task(task_id="${task?.id ?? ''}", description="...") 更新原任务；绝对不要调用 workbench_submit_task 新建任务。`
+          : mode === 'breakdown'
+            ? `你是“个人工作台”的任务拆解助手。请分析下面这个任务，并调用 workbench_propose_subtasks 提交子任务提案。\n\n父任务 id：${task?.id}\n任务标题：${task?.title}\n任务描述：${task?.description || '（无）'}\n类型：${task?.typeCode} 优先级：${task?.priorityCode} 截止：${task?.dueAt ?? '无'}\n\n粒度规则：每层 2-6 个、最大深度 3 层、叶子 15-240 分钟且有可验证完成标准；子任务的 type_code/priority_code 默认继承父任务；若任务太小，设置 no_breakdown_needed=true。只提交提案，不要执行。如果用户对提案提出修改意见，请带上上一次工具返回的 draft_id 再次调用 workbench_propose_subtasks 更新同一份提案。`
+            : mode === 'review'
+              ? `你是“个人工作台”的任务复盘助手。请对下面这个已完成任务做复盘：\n\n任务 id：${task?.id}\n任务标题：${task?.title}\n任务描述：${task?.description || '（无）'}\n类型：${task?.typeCode} 优先级：${task?.priorityCode}\n\n请从“做得好 / 做得不好 / 下次改进”三个角度输出 Markdown，并调用 workbench_submit_review(task_id="${task?.id ?? ''}", summary_md="...", lessons=[{"title":"...","content":"..."}])。`
+              : `你是“个人工作台”的任务执行助手。请直接完成下面这个任务，不要反复确认已知信息。\n\n任务 id：${task?.id}\n任务标题：${task?.title}\n任务描述：${task?.description || '（无）'}\n类型：${task?.typeCode} 优先级：${task?.priorityCode}\n截止：${task?.dueAt ?? '无'}\n${previousSessions.length > 0 ? `\n该任务此前已有执行会话：${previousSessions.map((s) => String(s.session_id ?? '')).filter((x) => x !== '').join('、')}\n若这些会话有未完成上下文，请先向用户索取上一会话的总结/未完成事项再继续，不要重复已完成工作。` : ''}\n\n完成后调用 workbench_request_completion(task_id="${task?.id ?? ''}", summary="2-4句完成总结")，等待用户在个人工作台验收；在用户验收通过前，任务不算完成，不要声称已经完成。若任务无法完成，如实说明原因，不要提交验收。`
+      if (mode === 'execute') {
+        if (task === null) throw new Error('执行模式需要选择一个任务')
+        if (task.statusCode === 'done' || task.statusCode === 'cancelled') throw new Error('该任务已完成或已取消，不能再次执行')
+        if (task.aiPolicyCode !== 'execute') throw new Error('该任务未开启“可执行”，请先在任务详情中把 AI 策略改为“可执行”')
+      }
+      if (mode === 'clarify') setShowQuick(false)
+      const result = await binding.session.prompt([{ type: 'text', text: prompt }], 'queue')
+      if (result.ok === false) throw new Error(result.error !== undefined ? String(result.error) : '发送失败')
+      if (task !== null && mode !== 'clarify') {
+        await api(`/api/workbench/tasks/${task.id}/sessions`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sessionId: id, roleCode: mode }) }).catch(() => undefined)
+      }
+      document.documentElement.removeAttribute(ACTIVE_ATTR)
+      runtime.sessions.open(id)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally { setBusy(false) }
+  }
+
+  const createTask = async (event: React.FormEvent<HTMLFormElement>): Promise<void> => {
+    event.preventDefault()
+    const form = new FormData(event.currentTarget)
+    const title = String(form.get('title') ?? '').trim()
+    if (title === '') return
+    const due = String(form.get('due') ?? '')
+    await api('/api/workbench/tasks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title, description: String(form.get('description') ?? ''), typeCode: String(form.get('type') ?? ''), priorityCode: String(form.get('priority') ?? ''), statusCode: String(form.get('status') ?? 'todo'), workspacePath: String(form.get('workspacePath') ?? '').trim() || null, dueAt: due === '' ? null : new Date(due).toISOString() }) })
+    setShowForm(false); await refresh()
+  }
+  const createSubtask = async (parent: Task, event: React.FormEvent<HTMLFormElement>): Promise<void> => {
+    event.preventDefault()
+    const form = new FormData(event.currentTarget)
+    const title = String(form.get('title') ?? '').trim()
+    if (title === '') return
+    const due = String(form.get('due') ?? '')
+    await api('/api/workbench/tasks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title, typeCode: String(form.get('type') ?? parent.typeCode), priorityCode: String(form.get('priority') ?? parent.priorityCode), statusCode: 'todo', parentId: parent.id, dueAt: due === '' ? null : new Date(due).toISOString() }) })
+    await refresh()
+  }
+
+  // 今日/日历/列表三棵树：默认全部收起
+  const [todayExpanded, setTodayExpanded] = useState<Set<string>>(new Set())
+  const [calendarExpanded, setCalendarExpanded] = useState<Set<string>>(new Set())
+
+  // 树展开状态（列表树记住用户展开）
+  const [archivedTasks, setArchivedTasks] = useState<Task[]>([])
+  const [archivedMode, setArchivedMode] = useState(false)
+  const [expanded, setExpanded] = useState<Set<string>>(() => {
+    try { return new Set(JSON.parse(localStorage.getItem('dsh.workbench.treeExpanded') ?? '[]') as string[]) } catch { return new Set() }
+  })
+  useEffect(() => {
+    try { localStorage.setItem('dsh.workbench.treeExpanded', JSON.stringify([...expanded])) } catch { /* ignore */ }
+  }, [expanded])
+  const toggleExpanded = (id: string): void => setExpanded((prev) => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next })
+  const toggleTodayExpanded = (id: string): void => setTodayExpanded((prev) => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next })
+  const toggleCalendarExpanded = (id: string): void => setCalendarExpanded((prev) => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next })
+  const collapseAll = (): void => { setExpanded(new Set()); setTodayExpanded(new Set()); setCalendarExpanded(new Set()) }
+
+  const now = new Date()
+  const todayStart = startOfDay(now)
+  const todayEnd = new Date(todayStart); todayEnd.setDate(todayEnd.getDate() + 1)
+  const openTasks = tasks.filter((t) => !['done', 'cancelled'].includes(t.statusCode))
+  const openTree = useMemo(() => buildTaskTree(openTasks), [tasks])
+  const overdue = openTasks.filter((t) => t.dueAt !== null && Date.parse(t.dueAt) < todayStart.getTime())
+  const todayDue = openTasks.filter((t) => t.dueAt !== null && Date.parse(t.dueAt) >= todayStart.getTime() && Date.parse(t.dueAt) < todayEnd.getTime())
+  const active = openTasks.filter((t) => t.statusCode === 'doing' || t.statusCode === 'blocked')
+
+  // 周/月日历
+  const [cursor, setCursor] = useState<Date>(startOfWeek(now))
+  const [calMode, setCalMode] = useState<'week' | 'month'>('week')
+  const [picked, setPicked] = useState<Date>(todayStart)
+  const [dayTab, setDayTab] = useState<'plan' | 'done'>('plan')
+  const weekDays = Array.from({ length: 7 }, (_, i) => { const d = new Date(cursor); d.setDate(d.getDate() + i); return d })
+  const moveWeek = (delta: number): void => { const d = new Date(cursor); d.setDate(d.getDate() + delta * 7); setCursor(startOfWeek(d)) }
+  const monthGrid = (() => {
+    const first = new Date(cursor.getFullYear(), cursor.getMonth(), 1)
+    const start = startOfWeek(first)
+    return Array.from({ length: 42 }, (_, i) => { const d = new Date(start); d.setDate(d.getDate() + i); return d })
+  })()
+  const moveMonth = (delta: number): void => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() + delta, 1))
+  const noDueOpen = tasks.filter((t) => t.dueAt === null && t.statusCode !== 'done' && t.statusCode !== 'cancelled')
+  const planKeep = (t: Task): boolean => (t.dueAt !== null && sameDay(new Date(t.dueAt), picked) && t.statusCode !== 'cancelled') || (sameDay(picked, now) && noDueOpen.some((x) => x.id === t.id))
+  const doneKeep = (t: Task): boolean => t.completedAt !== null && sameDay(new Date(t.completedAt), picked)
+  const pickedPlanTree = useMemo(() => filterTaskTree(buildTaskTree(tasks), planKeep), [tasks, picked]) // eslint 语义同 tasks
+  const pickedDoneTree = useMemo(() => filterTaskTree(buildTaskTree(tasks), doneKeep), [tasks, picked])
+
+  return (
+    <div className="wb-app">
+      <div className="wb-h">
+        <div className="wb-title">🗂️ 个人工作台</div>
+        <div className="wb-tabs">
+          <button className={`wb-tab ${view === 'today' ? 'on' : ''}`} onClick={() => setView('today')}>今日</button>
+          <button className={`wb-tab ${view === 'calendar' ? 'on' : ''}`} onClick={() => setView('calendar')}>日历</button>
+          <button className={`wb-tab ${view === 'list' ? 'on' : ''}`} onClick={() => setView('list')}>列表</button>
+        </div>
+        <div style={{ flex: 1 }} />
+        <button className="wb-btn primary" onClick={() => setShowQuick((v) => !v)} disabled={busy}>✨ 快速录入</button>
+        <button className="wb-btn" onClick={() => setShowForm((v) => !v)}>+ 新建</button>
+        <button className="wb-btn" onClick={() => setShowSettings((v) => !v)}>⚙ 设置</button>
+        <button className="wb-btn" onClick={collapseAll}>收起全部</button>
+        <button className="wb-btn" onClick={() => document.documentElement.removeAttribute(ACTIVE_ATTR)}>返回对话</button>
+      </div>
+
+      {error !== null && <div className="wb-banner error"><h4>⚠️ 出错了</h4>{error} <button className="wb-btn" onClick={() => setError(null)}>关闭</button></div>}
+      {notice !== null && <div className="wb-banner notice"><h4>ℹ️ 提示</h4>{notice} <button className="wb-btn" onClick={() => setNotice(null)}>关闭</button></div>}
+      {reminders.length > 0 && (
+        <div className="wb-banner reminder">
+          <h4>🔔 到期提醒（{reminders.length}）</h4>
+          {reminders.map((r) => <div key={r.reminderId} style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 4 }}><span style={{ flex: 1 }}>{r.title} · {fmtTime(r.dueAt)}</span><button className="wb-btn" onClick={() => void fireReminder(r.reminderId)}>知道了</button></div>)}
+        </div>
+      )}
+      {pendingDraft !== null && <DraftBanner draft={pendingDraft} runtime={runtime} onDone={() => { setPendingDraft(null); void refresh() }} />}
+
+      <div className="wb-body">
+        <div className="wb-nav">
+          {showSettings && (
+            <div className="wb-form-panel">
+              <h4>⚙ 工作台设置</h4>
+              <label className="full">默认 AI 会话工作区（任务未指定时使用）
+                <input value={settings.defaultWorkspace} onChange={(e) => setSettings((prev) => ({ ...prev, defaultWorkspace: e.target.value }))} placeholder="例如 D:\Code\AI-Workspace" />
+              </label>
+              <label className="full" style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <input type="checkbox" checked={settings.autoCreateTypeFolders} onChange={(e) => setSettings((prev) => ({ ...prev, autoCreateTypeFolders: e.target.checked }))} />
+                自动为每个任务创建独立文件夹（用任务名命名）
+              </label>
+              <div className="full" style={{ display: 'flex', gap: 8 }}>
+                <button className="wb-btn primary lg" onClick={() => void api('/api/workbench/settings', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(settings) }).then(() => { setNotice('设置已保存'); setShowSettings(false) }).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))}>💾 保存设置</button>
+                <button className="wb-btn" onClick={() => setShowSettings(false)}>取消</button>
+              </div>
+            </div>
+          )}
+
+          {showQuick && (
+            <div className="wb-form-panel">
+              <h4>✨ 快速录入 <span style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)' }}>（将跳转官方会话区进行需求澄清）</span></h4>
+              <textarea rows={3} style={{ width: '100%', minHeight: 76, background: 'var(--dsw-alias-bg-base,#17171a)', border: '1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.18))', color: 'inherit', borderRadius: 10, padding: 10, boxSizing: 'border-box', fontSize: 14 }} value={quickText} onChange={(e) => setQuickText(e.target.value)} placeholder="一句话描述任务，例如：周五10:30接待重要客户" />
+              <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                <button className="wb-btn primary lg" disabled={busy || quickText.trim() === ''} onClick={() => void startAISession('clarify', null, quickText)}>🚀 创建澄清会话</button>
+                <button className="wb-btn" onClick={() => setShowQuick(false)}>取消</button>
+              </div>
+            </div>
+          )}
+
+          {showForm && (
+            <form className="wb-form wb-form-panel" onSubmit={(e) => void createTask(e)}>
+              <h4 className="full" style={{ margin: 0 }}>📝 新建任务</h4>
+              <label className="full">标题<input name="title" required placeholder="要做什么？" /></label>
+              <label>类型<select name="type" defaultValue="client_meeting">{dictOf('type').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
+              <label>优先级<select name="priority" defaultValue="p2">{dictOf('priority').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
+              <label>状态<select name="status" defaultValue="todo">{dictOf('status').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
+              <label>截止时间<input name="due" type="datetime-local" /></label>
+              <label>AI 会话工作区（可选，留空用默认）<input name="workspacePath" placeholder={settings.defaultWorkspace || '默认工作区未设置'} /></label>
+              <label className="full">描述<textarea name="description" rows={2} placeholder="背景 / 目标 / 验收标准（Markdown）" /></label>
+              <div className="full" style={{ display: 'flex', gap: 8 }}><button className="wb-btn primary lg" type="submit">💾 保存任务</button><button className="wb-btn" type="button" onClick={() => setShowForm(false)}>取消</button></div>
+            </form>
+          )}
+
+          {view === 'today' && (
+            <>
+              <div className="wb-stats">
+                <div className="wb-stat"><b>{bootstrap?.stats.overdue ?? 0}</b><span>逾期</span></div>
+                <div className="wb-stat"><b>{bootstrap?.stats.todayDue ?? 0}</b><span>今天到期</span></div>
+                <div className="wb-stat"><b>{bootstrap?.stats.doing ?? 0}</b><span>进行中</span></div>
+                <div className="wb-stat"><b>{bootstrap?.stats.total ?? 0}</b><span>总数</span></div>
+              </div>
+              <div className="wb-list">
+                <TaskTreeRows roots={openTree} depth={0} expanded={todayExpanded} toggle={toggleTodayExpanded} label={label} dicts={dicts} onOpen={openTask} selectedId={selected?.task.id} />
+                {openTasks.length === 0 && <div className="wb-empty">今天没有需要关注的任务</div>}
+              </div>
+            </>
+          )}
+
+          {view === 'calendar' && (
+            <>
+              <div className="wb-cal-nav">
+                <button className="wb-btn" onClick={() => (calMode === 'week' ? moveWeek(-1) : moveMonth(-1))}>◀</button>
+                <button className="wb-btn" onClick={() => (calMode === 'week' ? setCursor(startOfWeek(now)) : setCursor(new Date(now.getFullYear(), now.getMonth(), 1)))}>今天</button>
+                <button className="wb-btn" onClick={() => (calMode === 'week' ? moveWeek(1) : moveMonth(1))}>▶</button>
+                <div style={{ flex: 1, textAlign: 'center', fontWeight: 600 }}>
+                  {calMode === 'week' ? `${cursor.getFullYear()}/${cursor.getMonth() + 1}/${cursor.getDate()} 周` : `${cursor.getFullYear()}年${cursor.getMonth() + 1}月`}
+                </div>
+                <button className={`wb-tab ${calMode === 'week' ? 'on' : ''}`} onClick={() => setCalMode('week')}>周</button>
+                <button className={`wb-tab ${calMode === 'month' ? 'on' : ''}`} onClick={() => setCalMode('month')}>月</button>
+              </div>
+
+              {calMode === 'week' && (
+                <div className="wb-week">
+                  {weekDays.map((d) => {
+                    const n = tasks.filter((t) => t.dueAt !== null && sameDay(new Date(t.dueAt), d) && t.statusCode !== 'cancelled').length
+                    return (
+                      <div key={d.toISOString()} className={`wb-day ${sameDay(d, now) ? 'today' : ''} ${sameDay(d, picked) ? 'selected' : ''}`} onClick={() => setPicked(startOfDay(d))}>
+                        <div style={{ fontSize: 12, color: '#999' }}>{d.getMonth() + 1}/{d.getDate()}</div>
+                        {n > 0 && <div className="wb-chip" style={{ background: '#4f8ef7', marginTop: 4 }}>{n} 个任务</div>}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+              {calMode === 'month' && (
+                <div className="wb-month">
+                  {monthGrid.map((d) => (
+                    <div key={d.toISOString()} className={`wb-mday ${d.getMonth() !== cursor.getMonth() ? 'other' : ''} ${sameDay(d, now) ? 'today' : ''} ${sameDay(d, picked) ? 'selected' : ''}`} onClick={() => setPicked(startOfDay(d))}>
+                      <div style={{ fontSize: 12 }}>{d.getDate()}</div>
+                      {tasks.some((t) => t.dueAt !== null && sameDay(new Date(t.dueAt), d)) && <div className="wb-chip" style={{ background: '#4f8ef7', marginTop: 2 }}>•</div>}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+                <button className={`wb-tab ${dayTab === 'plan' ? 'on' : ''}`} onClick={() => setDayTab('plan')}>计划（{countTaskTree(pickedPlanTree)}）</button>
+                <button className={`wb-tab ${dayTab === 'done' ? 'on' : ''}`} onClick={() => setDayTab('done')}>已完成（{countTaskTree(pickedDoneTree)}）</button>
+              </div>
+              {dayTab === 'plan' && sameDay(picked, now) && noDueOpen.length > 0 && (
+                <div style={{ fontSize: 12, color: '#999', padding: '4px 2px' }}>另有 {noDueOpen.length} 个进行中任务未设置截止时间，暂列今天；点击父任务 ▶ 展开子任务</div>
+              )}
+              <div className="wb-list">
+                <TaskTreeRows roots={dayTab === 'plan' ? pickedPlanTree : pickedDoneTree} depth={0} expanded={calendarExpanded} toggle={toggleCalendarExpanded} label={label} dicts={dicts} onOpen={openTask} selectedId={selected?.task.id} />
+                {(dayTab === 'plan' ? pickedPlanTree : pickedDoneTree).length === 0 && <div className="wb-empty">{picked.getMonth() + 1}/{picked.getDate()} 没有{dayTab === 'plan' ? '计划任务' : '完成记录'}</div>}
+              </div>
+            </>
+          )}
+
+          {view === 'list' && (
+            <>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+                <button className="wb-btn" onClick={() => {
+                  const next = !archivedMode
+                  setArchivedMode(next)
+                  if (next) { void api<{ tasks: Task[] }>('/api/workbench/tasks?archived=true').then((r) => setArchivedTasks(r.tasks)).catch(() => undefined) }
+                }}>{archivedMode ? '返回任务' : '查看归档'}</button>
+              </div>
+              <div className="wb-list">
+                {archivedMode
+                  ? archivedTasks.map((t) => <TaskRow key={t.id} task={t} label={label} dicts={dicts} onOpen={openTask} selected={selected?.task.id === t.id} />)
+                  : <TaskTreeRows roots={buildTaskTree(tasks)} depth={0} expanded={expanded} toggle={toggleExpanded} label={label} dicts={dicts} onOpen={openTask} selectedId={selected?.task.id} />}
+                {archivedMode && archivedTasks.length === 0 && <div className="wb-empty">没有归档任务</div>}
+                {!archivedMode && tasks.length === 0 && <div className="wb-empty">还没有任务，点“快速录入”或“新建”开始</div>}
+              </div>
+            </>
+          )}
+        </div>
+
+        <div className="wb-detail">
+          {selected === null
+            ? <div className="wb-empty">← 从左侧选择一个任务查看详情<br /><span style={{ fontSize: 12 }}>AI 澄清/咨询/拆解会跳转到官方会话区，完成后回这里确认草稿</span></div>
+            : (
+              <>
+                <div className="wb-card">
+                  <h4>{selected.task.title}</h4>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
+                    <Badge dict={dictOf('type')} code={selected.task.typeCode} />
+                    <Badge dict={dictOf('priority')} code={selected.task.priorityCode} />
+                    <Badge dict={dictOf('status')} code={selected.task.statusCode} />
+                  </div>
+                  <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>截止：{selected.task.dueAt === null ? '无' : fmtTime(selected.task.dueAt)}</div>
+                  <div style={{ fontSize: 12, color: '#999', marginBottom: 8 }}>AI 工作区：{selected.task.workspacePath ?? (settings.defaultWorkspace || '默认工作区未设置')}</div>
+                  <MarkdownText text={selected.task.description || '（无描述）'} />
+                  <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
+                    {selected.task.archived ? (
+                      <button className="wb-btn primary" onClick={() => { void api(`/api/workbench/tasks/${selected.task.id}/restore`, { method: 'POST' }).then(() => { setNotice('任务已恢复'); setArchivedMode(false); void refresh() }).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e))) }}>恢复任务</button>
+                    ) : (
+                      <>
+                        <select style={{ background: 'var(--dsw-alias-bg-base,#17171a)', color: 'inherit', border: '1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.15))', borderRadius: 8, padding: '6px 8px' }} value={selected.task.statusCode} onChange={(e) => void patchTask(selected.task.id, { statusCode: e.target.value })}>
+                          {dictOf('status').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}
+                        </select>
+                        <select style={{ background: 'var(--dsw-alias-bg-base,#17171a)', color: 'inherit', border: '1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.15))', borderRadius: 8, padding: '6px 8px' }} value={selected.task.aiPolicyCode} onChange={(e) => void patchTask(selected.task.id, { aiPolicyCode: e.target.value })}>
+                          {dictOf('ai_policy').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}
+                        </select>
+                        {selected.children.length === 0
+                          ? selected.task.statusCode === 'done' || selected.task.statusCode === 'cancelled'
+                            ? <button className="wb-btn" disabled={busy} onClick={() => {
+                                const existing = selected.sessions.find((x) => x.role_code === 'review')
+                                if (existing !== undefined && typeof existing.session_id === 'string' && existing.session_id !== '') {
+                                  document.documentElement.removeAttribute(ACTIVE_ATTR)
+                                  runtime.sessions.open(existing.session_id)
+                                } else {
+                                  void startAISession('review', selected.task, selected.task.title)
+                                }
+                              }}>{selected.sessions.some((x) => x.role_code === 'review') ? '进入复盘会话' : 'AI 复盘'}</button>
+                            : <button className="wb-btn primary" disabled={busy || selected.task.aiPolicyCode !== 'execute'} title={selected.task.aiPolicyCode !== 'execute' ? '请先开启“可执行”' : selected.sessions.some((x) => x.role_code === 'execute') ? '新建执行会话并携带此前会话提示' : '开始执行'} onClick={() => void startAISession('execute', selected.task, selected.task.title, selected.sessions.filter((x) => x.role_code === 'execute'))}>AI 执行{selected.sessions.some((x) => x.role_code === 'execute') ? '（新会话续作）' : ''}{selected.task.aiPolicyCode !== 'execute' ? '（需可执行）' : ''}</button>
+                          : <span style={{ fontSize: 12, color: '#999', alignSelf: 'center' }}>该任务有子任务，请展开子任务执行叶子任务</span>}
+                        <button className="wb-btn" disabled={busy} onClick={() => void startAISession('consult', selected.task, selected.task.title)}>AI 协助</button>
+                        <button className="wb-btn" disabled={busy} onClick={() => void startAISession('breakdown', selected.task, selected.task.title)}>AI 拆解</button>
+                        <button className="wb-btn" onClick={() => setShowForm(true)}>+ 子任务</button>
+                        <button className="wb-btn" onClick={() => { if (window.confirm('归档后任务会从工作台列表隐藏，但数据和关联会话仍保留；确认归档？')) { const id = selected.task.id; setTasks((list) => list.filter((t) => t.id !== id)); void api(`/api/workbench/tasks/${id}/archive`, { method: 'POST' }).then(() => { setSelected(null); selectedRef.current = null; setNotice('任务已归档（软删除）。以后版本会提供归档区查看。'); void refresh() }).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e))) } }}>归档</button>
+                      </>
+                    )}
+                  </div>
+                  <div style={{ fontSize: 12, color: '#999', marginTop: 6 }}>
+                    {selected.children.length === 0 && selected.task.aiPolicyCode === 'execute' && selected.task.statusCode !== 'done' && selected.task.statusCode !== 'cancelled' ? '执行会话完成后，AI 会提交验收申请，由你验收后标记完成。' : ''}
+                  </div>
+                </div>
+                <div className="wb-card">
+                  <h4>子任务（{selected.children.length}）</h4>
+                  {selected.children.map((c) => <div key={c.id} style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 4 }}><Badge dict={dictOf('status')} code={c.statusCode} /> <span onClick={() => openTask(c)} style={{ cursor: 'pointer' }}>{c.title}</span></div>)}
+                  {selected.children.length === 0 && <div style={{ color: '#999', fontSize: 12 }}>无</div>}
+                </div>
+                <div className="wb-card">
+                  <h4>提醒（{selected.reminders.length}）</h4>
+                  {selected.reminders.map((r) => <div key={r.id} style={{ fontSize: 12, color: '#999' }}>提前 {r.offsetMinutes} 分钟 · {r.firedAt === null ? '未触发' : '已触发'}</div>)}
+                </div>
+                <div className="wb-card">
+                  <h4>关联会话（{selected.sessions.length}）</h4>
+                  {selected.sessions.map((s) => {
+                    const sid = typeof s.session_id === 'string' ? s.session_id : ''
+                    return <div key={String(s.session_id ?? s.role_code)} style={{ fontSize: 12, color: 'var(--dsw-alias-state-business-primary,#8fa8c8)', cursor: 'pointer', marginBottom: 4 }} onClick={() => { if (sid !== '') { document.documentElement.removeAttribute(ACTIVE_ATTR); runtime.sessions.open(sid) } }}>#{String(s.role_code ?? '')} · {sid}（点击打开）</div>
+                  })}
+                </div>
+                <div className="wb-card">
+                  <h4>复盘记录（{selected.reviews?.length ?? 0}）</h4>
+                  {(selected.reviews ?? []).map((rv, i) => <div key={String(rv.id ?? i)} style={{ marginBottom: 8 }}><MarkdownText text={String(rv.summary_md ?? '')} /></div>)}
+                  {(selected.reviews?.length ?? 0) === 0 && <div style={{ fontSize: 12, color: '#999' }}>暂无复盘；已完成任务可用“AI 复盘”。</div>}
+                </div>
+                <div className="wb-card">
+                  <h4>变更历史（{selected.events?.length ?? 0}）</h4>
+                  {(selected.events ?? []).slice(0, 12).map((ev, i) => (
+                    <div key={String(ev.id ?? i)} style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>
+                      {String(ev.at ?? '').slice(0, 16).replace('T', ' ')} · {String(ev.event_code ?? '')} · {String(ev.actor ?? '')}{typeof ev.note === 'string' && ev.note !== '' ? ` · ${ev.note}` : ''}
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function ensureStyle(): void {
+  if (document.querySelector('style[data-dsh-workbench-style]') !== null) return
+  const style = document.createElement('style')
+  style.dataset.dshWorkbenchStyle = ''
+  style.textContent = CSS
+  document.head.appendChild(style)
+}
+function sidebarRoot(): HTMLElement | undefined {
+  const column = document.querySelector<HTMLElement>('[data-pane="sidebar"], [class*="sidebarCol"]')
+  if (column === null) return undefined
+  return column.querySelector<HTMLElement>('[class*="logoRow"]')?.parentElement ?? (column.firstElementChild as HTMLElement | undefined)
+}
+function newSessionButton(root: HTMLElement): HTMLButtonElement | undefined {
+  const nested = root.querySelector<HTMLButtonElement>('button[class*="newSession"]')
+  if (nested !== null) return nested
+  return Array.from(root.children).find((child): child is HTMLButtonElement => child.tagName === 'BUTTON')
+}
+function conversationColumn(): HTMLElement | undefined {
+  return document.querySelector<HTMLElement>('[data-pane="conversation"], [class*="centerCol"]') ?? undefined
+}
+
+export const name = 'workbench-client'
+export const inject = ['sessions', 'workspaces']
+
+export function apply(ctx: unknown): () => void {
+  const runtime = ctx as WorkbenchRuntime
+  let open = false
+  ensureStyle()
+  const setOpen = (value: boolean): void => {
+    open = value
+    if (open) {
+      for (const attr of SIBLING_ATTRS) document.documentElement.removeAttribute(attr)
+      document.documentElement.setAttribute(ACTIVE_ATTR, '')
+      document.dispatchEvent(new CustomEvent(ACTIVATE_EVENT, { detail: PANEL_NAME }))
+    } else document.documentElement.removeAttribute(ACTIVE_ATTR)
+  }
+  const entry = document.createElement('button')
+  entry.type = 'button'
+  entry.setAttribute(ENTRY_ATTR, '')
+  entry.innerHTML = '<span aria-hidden="true">🗂️</span><span class="wb-label">工作台</span>'
+  entry.addEventListener('click', () => { setOpen(!open) })
+  const syncEntry = (): void => { if (open) entry.dataset.active = 'true'; else delete entry.dataset.active }
+  const entryObserver = new MutationObserver(syncEntry)
+  entryObserver.observe(document.documentElement, { attributes: true, attributeFilter: [ACTIVE_ATTR] })
+  syncEntry()
+
+  const view = document.createElement('div')
+  view.setAttribute(VIEW_ATTR, '')
+  const root: Root = createRoot(view)
+  root.render(<WorkbenchApp runtime={runtime} />)
+
+  let rootEl: HTMLElement | undefined
+  let placed = false
+  let column: HTMLElement | undefined
+  const placeEntry = (): void => {
+    if (rootEl !== undefined && !rootEl.isConnected) { rootEl = undefined; placed = false }
+    if (placed) { if (document.body.contains(entry)) return; placed = false }
+    rootEl ??= sidebarRoot()
+    if (rootEl === undefined) return
+    const button = newSessionButton(rootEl)
+    if (button === undefined) return
+    if (entry.parentElement !== rootEl) {
+      const row = button.closest('[class*="logoRow"]')
+      const base = row !== null && row.parentElement === rootEl ? row : button
+      const family = Array.from(rootEl.children).filter((el): el is HTMLElement => el instanceof HTMLElement && el.matches('[data-dsh-taskboard-entry], [data-dsh-ssh-entry]'))
+      const anchor = family.length > 0 ? family[0] : base.nextElementSibling
+      rootEl.insertBefore(entry, anchor)
+    }
+    placed = true
+  }
+  const placeView = (): void => { column ??= conversationColumn(); if (column !== undefined && !column.contains(view)) column.appendChild(view) }
+  const watcher = new MutationObserver(() => { placeEntry(); placeView() })
+  watcher.observe(document.body, { childList: true, subtree: true })
+  placeEntry(); placeView()
+
+  const onOtherActivate = (event: Event): void => { if ((event as CustomEvent).detail !== PANEL_NAME && open) setOpen(false) }
+  const onClickSidebarRow = (event: MouseEvent): void => {
+    if (!open) return
+    const target = event.target as HTMLElement | null
+    if (target === null) return
+    if (target.closest('[class*="sessionRow"], [class*="projectRow"], [class*="searchResultRow"], [class*="searchResultWorkspace"], [class*="newSession"]') !== null) setOpen(false)
+  }
+  document.addEventListener(ACTIVATE_EVENT, onOtherActivate)
+  document.addEventListener('click', onClickSidebarRow, true)
+
+  return () => {
+    watcher.disconnect(); entryObserver.disconnect()
+    document.removeEventListener(ACTIVATE_EVENT, onOtherActivate)
+    document.removeEventListener('click', onClickSidebarRow, true)
+    entry.remove(); root.unmount(); view.remove()
+    document.documentElement.removeAttribute(ACTIVE_ATTR)
+  }
+}

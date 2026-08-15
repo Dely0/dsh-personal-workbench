@@ -1,0 +1,78 @@
+{
+  "name": "dsh-workbench",
+  "version": "0.5.2",
+  "description": "DSH 个人工作台：日历 + 任务列表 + AI 澄清/咨询 + 本地知识沉淀（V1 骨架）",
+  "type": "module",
+  "main": "./lib/index.js",
+  "types": "./lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "types": "./lib/types/client/index.d.ts",
+      "default": "./lib/client.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md",
+    "screenshot"
+  ],
+  "license": "MIT",
+  "private": false,
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [],
+      "platform": "web"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-host-webserver": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-system-prompt": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-tools": "^0.1.0-rc.6"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "tsdown": "0.22.2",
+    "typescript": "~5.7.2",
+    "@deepseek-ai/dsh-llm": "^0.1.0-rc.6",
+    "react-dom": "^18.3.1",
+    "@types/react": "^18.3.1",
+    "@types/react-dom": "^18.3.1"
+  },
+  "packageManager": "pnpm@11.7.0",
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0",
+    "pnpm": ">=11.7.0 <12"
+  },
+  "scripts": {
+    "link:dsh": "bash scripts/link-dsh-dev.sh",
+    "build": "rm -rf lib && tsc -p tsconfig.build.json && tsdown",
+    "typecheck": "tsc --noEmit",
+    "check": "tsc --noEmit && rm -rf lib && tsc -p tsconfig.build.json && tsdown",
+    "test": "pnpm build && node --test test/db.test.mjs test/tools.test.mjs"
+  },
+  "dependencies": {
+    "react": "^18.3.1"
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "workbench",
+    "task-management",
+    "calendar",
+    "ai-agent",
+    "plugin"
+  ],
+  "author": "Du Penglai"
+}
