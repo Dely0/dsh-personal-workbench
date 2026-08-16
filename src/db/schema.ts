@@ -4,7 +4,7 @@
  */
 import type { DatabaseSync } from 'node:sqlite'
 
-export const SCHEMA_VERSION = 7
+export const SCHEMA_VERSION = 8
 
 export interface Migration {
   version: number
@@ -232,6 +232,43 @@ export const MIGRATIONS: Migration[] = [
         ) STRICT;
         CREATE INDEX idx_knowledge_kind ON knowledge_entries(kind_code, updated_at DESC);
         CREATE INDEX idx_knowledge_source ON knowledge_entries(source_task_id);
+      `)
+    },
+  },
+  {
+    version: 8,
+    name: 'ideas-and-clusters',
+    up(db) {
+      db.exec(`
+        CREATE TABLE ideas (
+          id               TEXT PRIMARY KEY,
+          title            TEXT NOT NULL,
+          content_md       TEXT NOT NULL DEFAULT '',
+          kind_code        TEXT NOT NULL DEFAULT 'spark',
+          tags_json        TEXT NOT NULL DEFAULT '[]',
+          source_session_id TEXT,
+          created_at       TEXT NOT NULL,
+          updated_at       TEXT NOT NULL
+        ) STRICT;
+        CREATE INDEX idx_ideas_kind ON ideas(kind_code, updated_at DESC);
+
+        CREATE TABLE idea_clusters (
+          id         TEXT PRIMARY KEY,
+          title      TEXT NOT NULL,
+          summary_md TEXT NOT NULL DEFAULT '',
+          tags_json  TEXT NOT NULL DEFAULT '[]',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        ) STRICT;
+
+        CREATE TABLE idea_links (
+          cluster_id TEXT NOT NULL REFERENCES idea_clusters(id) ON DELETE CASCADE,
+          idea_id    TEXT NOT NULL REFERENCES ideas(id) ON DELETE CASCADE,
+          note       TEXT,
+          created_at TEXT NOT NULL,
+          PRIMARY KEY (cluster_id, idea_id)
+        ) STRICT;
+        CREATE INDEX idx_idea_links_idea ON idea_links(idea_id);
       `)
     },
   },

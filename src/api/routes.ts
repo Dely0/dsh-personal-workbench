@@ -6,12 +6,12 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import type { DatabaseSync } from 'node:sqlite'
 import {
-  abandonDraft, addReminder, archiveTask, confirmDailyPlanDraft, confirmKnowledgeDraft, confirmReportDraft, confirmSubtaskPlanDraft, confirmTaskDraft,
-  createKnowledge, createTaskReview,
-  createDraft, createTask, deleteDailyPlan, deleteKnowledge, deleteTaskReport, ensureRecurringInstances, fireReminder, getAiSession, getDailyPlan, getDictionary, getDraft, getDraftBySession,
-  getKnowledge, getLatestPendingDraft, getTask, getTaskReport, linkTaskSession, listArchivedTasks, listChildren,
-  listDictionaries, listDueReminders, listKnowledge, listReminders, listTaskEvents, listTaskReports, listTaskReviews,
-  listTaskSessions, listTasks, localDateString, registerAiSession, restoreTask, updateKnowledge, updateTask, type ReportPeriodCode, type TaskInput,
+  abandonDraft, addReminder, archiveTask, confirmDailyPlanDraft, confirmIdeaClusterDraft, confirmIdeaTaskDraft, confirmKnowledgeDraft, confirmReportDraft, confirmSubtaskPlanDraft, confirmTaskDraft,
+  createIdea, createIdeaCluster, createKnowledge, createTaskReview,
+  createDraft, createTask, deleteDailyPlan, deleteIdea, deleteIdeaCluster, deleteKnowledge, deleteTaskReport, ensureRecurringInstances, fireReminder, getAiSession, getDailyPlan, getDictionary, getDraft, getDraftBySession,
+  getIdea, getIdeaCluster, getKnowledge, getLatestPendingDraft, getTask, getTaskReport, linkTaskSession, listArchivedTasks, listChildren,
+  listDictionaries, listDueReminders, listIdeas, listIdeaClusters, listIdeaClustersForIdea, listKnowledge, listReminders, listTaskEvents, listTaskReports, listTaskReviews,
+  listTaskSessions, listTasks, localDateString, registerAiSession, restoreTask, updateIdea, updateKnowledge, updateTask, type ReportPeriodCode, type TaskInput,
 } from '../db/repo.js'
 
 const TASKS_PREFIX = '/api/workbench/tasks'
@@ -21,6 +21,8 @@ const PLANS_PREFIX = '/api/workbench/plans'
 const REPORTS_PREFIX = '/api/workbench/reports'
 const AI_SESSIONS_PREFIX = '/api/workbench/ai-sessions'
 const KNOWLEDGE_PREFIX = '/api/workbench/knowledge'
+const IDEAS_PREFIX = '/api/workbench/ideas'
+const IDEA_CLUSTERS_PREFIX = '/api/workbench/idea-clusters'
 
 function isLoopbackRequest(req: IncomingMessage): boolean {
   const address = req.socket.remoteAddress
@@ -442,6 +444,12 @@ export function makeRoutes(db: DatabaseSync): WebRoute[] {
             if (draft.kindCode === 'knowledge') {
               return writeJson(res, 200, { ok: true, knowledge: confirmKnowledgeDraft(db, id) })
             }
+            if (draft.kindCode === 'idea_cluster') {
+              return writeJson(res, 200, { ok: true, clusters: confirmIdeaClusterDraft(db, id) })
+            }
+            if (draft.kindCode === 'idea_tasks') {
+              return writeJson(res, 200, { ok: true, tasks: confirmIdeaTaskDraft(db, id).map(publicTask) })
+            }
             if (draft.kindCode === 'review') {
               const taskId = typeof draft.payload.taskId === 'string' ? draft.payload.taskId : undefined
               const summaryMd = typeof draft.payload.summaryMd === 'string' ? draft.payload.summaryMd : ''
@@ -491,6 +499,86 @@ export function makeRoutes(db: DatabaseSync): WebRoute[] {
         if (segments.length === 2 && segments[1] === 'fire' && method === 'POST') {
           fireReminder(db, segments[0])
           return writeJson(res, 200, { ok: true })
+        }
+        return writeJson(res, 404, { error: 'not found' })
+      },
+    },
+    // ------------------------------------------------------------------ ideas
+    {
+      kind: 'prefix',
+      path: IDEAS_PREFIX,
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) return writeJson(res, 403, { error: 'forbidden: loopback-only' })
+        const url = new URL(req.url ?? '/', 'http://localhost')
+        const segments = pathSegments(url, IDEAS_PREFIX)
+        const method = req.method ?? 'GET'
+        const body = ['POST', 'PATCH'].includes(method) ? await readJsonBody(req) : undefined
+        if (segments.length === 0) {
+          if (method === 'GET') {
+            const q = url.searchParams.get('q') ?? undefined
+            const kindCode = url.searchParams.get('kind_code') ?? undefined
+            if (kindCode !== undefined && getDictionary(db, 'idea_kind', kindCode) === undefined) return writeJson(res, 400, { error: 'unknown idea_kind' })
+            return writeJson(res, 200, { ok: true, ideas: listIdeas(db, { q, kindCode }) })
+          }
+          if (method === 'POST') {
+            if (body === undefined) return writeJson(res, 400, { error: 'invalid JSON body' })
+            const title = typeof body.title === 'string' ? body.title.trim() : ''
+            if (title === '') return writeJson(res, 400, { error: 'title is required' })
+            const kindCode = typeof body.kindCode === 'string' ? body.kindCode : 'spark'
+            requireCode(db, 'idea_kind', kindCode, 'kindCode')
+            const tags = Array.isArray(body.tags) ? body.tags.filter((tag): tag is string => typeof tag === 'string').slice(0, 20) : []
+            return writeJson(res, 201, { ok: true, idea: createIdea(db, { title, contentMd: typeof body.contentMd === 'string' ? body.contentMd : '', kindCode, tags, sourceSessionId: typeof body.sourceSessionId === 'string' ? body.sourceSessionId : null }) })
+          }
+          return writeJson(res, 405, { error: 'method not allowed' })
+        }
+        const id = segments[0]
+        if (method === 'GET' && segments.length === 1) {
+          const idea = getIdea(db, id)
+          return writeJson(res, idea === undefined ? 404 : 200, idea === undefined ? { error: 'idea not found' } : { ok: true, idea, clusters: listIdeaClustersForIdea(db, id) })
+        }
+        if (method === 'PATCH' && segments.length === 1) {
+          if (body === undefined) return writeJson(res, 400, { error: 'invalid JSON body' })
+          const patch: Parameters<typeof updateIdea>[2] = {}
+          if (typeof body.title === 'string') patch.title = body.title.trim()
+          if (typeof body.contentMd === 'string') patch.contentMd = body.contentMd
+          if (typeof body.kindCode === 'string') { requireCode(db, 'idea_kind', body.kindCode, 'kindCode'); patch.kindCode = body.kindCode }
+          if (Array.isArray(body.tags)) patch.tags = body.tags.filter((tag): tag is string => typeof tag === 'string').slice(0, 20)
+          const idea = updateIdea(db, id, patch)
+          if (idea === undefined) return writeJson(res, 404, { error: 'idea not found' })
+          return writeJson(res, 200, { ok: true, idea })
+        }
+        if (method === 'DELETE' && segments.length === 1) {
+          return writeJson(res, 200, { ok: true, deleted: deleteIdea(db, id) })
+        }
+        return writeJson(res, 404, { error: 'not found' })
+      },
+    },
+    // ------------------------------------------------------------------ idea clusters
+    {
+      kind: 'prefix',
+      path: IDEA_CLUSTERS_PREFIX,
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) return writeJson(res, 403, { error: 'forbidden: loopback-only' })
+        const url = new URL(req.url ?? '/', 'http://localhost')
+        const segments = pathSegments(url, IDEA_CLUSTERS_PREFIX)
+        const method = req.method ?? 'GET'
+        const body = method === 'POST' ? await readJsonBody(req) : undefined
+        if (segments.length === 0 && method === 'GET') {
+          return writeJson(res, 200, { ok: true, clusters: listIdeaClusters(db) })
+        }
+        if (segments.length === 0 && method === 'POST') {
+          if (body === undefined) return writeJson(res, 400, { error: 'invalid JSON body' })
+          const title = typeof body.title === 'string' ? body.title.trim() : ''
+          if (title === '') return writeJson(res, 400, { error: 'title is required' })
+          const ideaIds = Array.isArray(body.ideaIds) ? body.ideaIds.filter((id): id is string => typeof id === 'string') : []
+          return writeJson(res, 201, { ok: true, cluster: createIdeaCluster(db, { title, summaryMd: typeof body.summaryMd === 'string' ? body.summaryMd : '', tags: Array.isArray(body.tags) ? body.tags.filter((tag): tag is string => typeof tag === 'string') : [], ideaIds }) })
+        }
+        if (segments.length === 1 && method === 'GET') {
+          const cluster = getIdeaCluster(db, segments[0])
+          return writeJson(res, cluster === undefined ? 404 : 200, cluster === undefined ? { error: 'cluster not found' } : { ok: true, cluster })
+        }
+        if (segments.length === 1 && method === 'DELETE') {
+          return writeJson(res, 200, { ok: true, deleted: deleteIdeaCluster(db, segments[0]) })
         }
         return writeJson(res, 404, { error: 'not found' })
       },
@@ -667,7 +755,7 @@ export function makeRoutes(db: DatabaseSync): WebRoute[] {
         writeJson(res, 200, {
           ok: true,
           name: 'dsh-workbench',
-          version: '1.0.1',
+          version: '1.1.0',
           db: {
             schemaVersion: versionRow?.value ?? 'unknown',
             taskCount: listTasks(db, { includeArchived: true }).length,

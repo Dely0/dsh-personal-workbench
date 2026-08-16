@@ -5,8 +5,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openWorkbenchDb } from '../lib/db/database.js'
 import { seedDictionaries } from '../lib/db/seed.js'
-import { proposeDailyPlanTool, submitKnowledgeTool, submitReportTool, submitTaskTool, updateTaskTool, requestCompletionTool } from '../lib/tools.js'
-import { createTask, getTask, getDraftBySession, getPendingDailyPlanDraft, getPendingDraftForTask, getPendingReportDraft, updateTask } from '../lib/db/repo.js'
+import { proposeDailyPlanTool, proposeIdeaClustersTool, submitIdeaTasksTool, submitKnowledgeTool, submitReportTool, submitTaskTool, updateTaskTool, requestCompletionTool } from '../lib/tools.js'
+import { createIdea, createTask, getTask, getDraftBySession, getPendingDailyPlanDraft, getPendingDraftForSession, getPendingDraftForTask, getPendingReportDraft, updateTask } from '../lib/db/repo.js'
 
 test('agent tools write pending drafts and update tasks', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-workbench-tools-'))
@@ -90,6 +90,17 @@ test('agent tools write pending drafts and update tasks', async () => {
       { title: '经验：先验证再开发 v2', content_md: '# 结论 v2', kind_code: 'lesson', tags: ['流程'] },
       { agent: { session: { id: 'sess-know' } } },
     ), /知识草稿已保存/)
+
+    const idea1 = createIdea(db, { title: '点子A', kindCode: 'spark', tags: ['x'] })
+    const idea2 = createIdea(db, { title: '点子B', kindCode: 'plugin', tags: ['x'] })
+    const clusterTool = proposeIdeaClustersTool(db)
+    const cOut = await clusterTool.execute({ clusters: [{ title: 'X 方向', summary: '相关', idea_ids: [idea1.id, idea2.id] }] }, { agent: { session: { id: 'sess-cluster' } } })
+    assert.match(cOut, /点子王提案已保存/)
+    assert.ok(getPendingDraftForSession(db, 'sess-cluster', 'idea_cluster'))
+    const taskTool = submitIdeaTasksTool(db)
+    const tOut = await taskTool.execute({ source_idea_ids: [idea1.id], tasks: [{ title: '落地A', type_code: 'code_impl', priority_code: 'p1' }], summary: '结论' }, { agent: { session: { id: 'sess-idea-task' } } })
+    assert.match(tOut, /点子落地任务提案已保存/)
+    assert.ok(getPendingDraftForSession(db, 'sess-idea-task', 'idea_tasks'))
     db.close()
   } finally {
     rmSync(dir, { recursive: true, force: true })

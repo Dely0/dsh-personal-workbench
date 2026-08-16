@@ -139,6 +139,8 @@ interface DailyPlanItemView { taskId: string; order: number; title: string; note
 interface DailyPlanView { id: string; planDate: string; summary: string; items: DailyPlanItemView[]; sourceCode: string; sessionId: string | null; createdAt: string; updatedAt: string }
 interface TaskReportView { id: string; periodCode: 'day' | 'week'; periodStart: string; title: string; summaryMd: string; stats: Record<string, unknown>; sessionId: string | null; createdAt: string; updatedAt: string }
 interface KnowledgeEntry { id: string; kindCode: string; title: string; contentMd: string; tags: string[]; sourceTaskId: string | null; sourceSessionId: string | null; createdAt: string; updatedAt: string }
+interface Idea { id: string; title: string; contentMd: string; kindCode: string; tags: string[]; sourceSessionId: string | null; createdAt: string; updatedAt: string }
+interface IdeaClusterView { id: string; title: string; summaryMd: string; tags: string[]; ideas: Idea[]; createdAt: string; updatedAt: string }
 interface Bootstrap { dictionaries: Dict[]; stats: { overdue: number; todayDue: number; doing: number; total: number }; todayPlan?: DailyPlanView | null }
 interface TaskDetail { task: Task; children: Task[]; sessions: Array<Record<string, unknown>>; reminders: Array<{ id: string; taskId: string; offsetMinutes: number; methodCode: string; firedAt: string | null }>; events: Array<Record<string, unknown>>; reviews: Array<Record<string, unknown>> }
 interface DraftView { id: string; kindCode: string; statusCode: string; sessionId: string | null; payload: Record<string, unknown> }
@@ -208,6 +210,7 @@ function Icon({ name, size = 16 }: { name: string; size?: number }): JSX.Element
     case 'subtask': return <svg {...common}><path d="M8 2v12M2 8h12" /></svg>
     case 'archive': return <svg {...common}><rect x="2.5" y="3" width="11" height="3.5" rx="1" /><path d="M4 6.5h8v6H4v-6zM6.5 9h3" /></svg>
     case 'book': return <svg {...common}><path d="M3 2.5h6.5v11H3zM9.5 2.5H13v11H9.5z" /><path d="M3 2.5v11M13 2.5v11" /></svg>
+    case 'idea': return <svg {...common}><path d="M8 2a4 4 0 0 0-1 7.8V12h2V9.8A4 4 0 0 0 8 2z" /><path d="M6.5 14h3" /></svg>
     case 'chevron': return <svg {...common}><path d="M6 3l5 5-5 5" /></svg>
     default: return <svg {...common}><circle cx="8" cy="8" r="5" /></svg>
   }
@@ -418,6 +421,46 @@ function DraftBanner({ draft, onDone, runtime, closePanel, kindName }: { draft: 
     setBusy(true)
     try { await api(path, { method: 'POST' }); onDone() } finally { setBusy(false) }
   }
+  if (draft.kindCode === 'idea_cluster') {
+    const clusters = Array.isArray(draft.payload.clusters) ? draft.payload.clusters as Array<{ title?: string; summary?: string; idea_titles?: string[] }> : []
+    const sessionId = typeof draft.sessionId === 'string' && draft.sessionId !== '' ? draft.sessionId : ''
+    return (
+      <div className="wb-banner review">
+        <h4>🧠 点子王提案待确认（{clusters.length}）</h4>
+        {clusters.map((cluster, i) => (
+          <div key={i} style={{ marginBottom: 8 }}>
+            <b>{cluster.title ?? `点子王 ${i + 1}`}</b>
+            {cluster.summary !== undefined && cluster.summary !== '' && <div style={{ fontSize: 12, color: '#999' }}>{cluster.summary}</div>}
+            <div style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)' }}>{(cluster.idea_titles ?? []).map((title) => `• ${title}`).join('  ')}</div>
+          </div>
+        ))}
+        <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+          <button className="wb-btn primary" disabled={busy} onClick={() => void act(`/api/workbench/drafts/${draft.id}/confirm`)}>确认生成点子王</button>
+          <button className="wb-btn" disabled={busy} onClick={() => void act(`/api/workbench/drafts/${draft.id}/abandon`)}>放弃</button>
+          {sessionId !== '' && <button className="wb-btn" onClick={() => { closePanel(); runtime.sessions.open(sessionId) }}>回到关联会话</button>}
+        </div>
+      </div>
+    )
+  }
+  if (draft.kindCode === 'idea_tasks') {
+    const tasks = Array.isArray(draft.payload.tasks) ? draft.payload.tasks as Array<{ title?: string; description?: string }> : []
+    const summary = String(draft.payload.summary ?? '')
+    const sessionId = typeof draft.sessionId === 'string' && draft.sessionId !== '' ? draft.sessionId : ''
+    return (
+      <div className="wb-banner completion">
+        <h4>🚀 点子落地任务提案（{tasks.length}）</h4>
+        {summary !== '' && <div style={{ fontSize: 13, marginBottom: 6 }}>{summary}</div>}
+        <ol style={{ margin: '4px 0 8px 20px', padding: 0, fontSize: 14, lineHeight: 1.7 }}>
+          {tasks.map((task, i) => <li key={i} style={{ margin: '3px 0' }}><b>{task.title ?? '(未命名任务)'}</b>{task.description !== undefined && task.description !== '' ? <span style={{ color: '#999' }}> — {String(task.description).slice(0, 60)}</span> : null}</li>)}
+        </ol>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button className="wb-btn primary" disabled={busy} onClick={() => void act(`/api/workbench/drafts/${draft.id}/confirm`)}>确认转为任务</button>
+          <button className="wb-btn" disabled={busy} onClick={() => void act(`/api/workbench/drafts/${draft.id}/abandon`)}>放弃</button>
+          {sessionId !== '' && <button className="wb-btn" onClick={() => { closePanel(); runtime.sessions.open(sessionId) }}>回到头脑风暴会话</button>}
+        </div>
+      </div>
+    )
+  }
   if (draft.kindCode === 'knowledge') {
     const title = String(draft.payload.title ?? '')
     const contentMd = String(draft.payload.contentMd ?? '')
@@ -520,7 +563,7 @@ function DraftBanner({ draft, onDone, runtime, closePanel, kindName }: { draft: 
 }
 
 function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; closePanel: () => void }): JSX.Element {
-  const [view, setView] = useState<'today' | 'calendar' | 'list' | 'knowledge'>('today')
+  const [view, setView] = useState<'today' | 'calendar' | 'list' | 'knowledge' | 'ideas'>('today')
   const [bootstrap, setBootstrap] = useState<Bootstrap | null>(null)
   const [tasks, setTasks] = useState<Task[]>([])
   const [selected, setSelected] = useState<TaskDetail | null>(null)
@@ -549,6 +592,17 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   const [knowledgeDraft, setKnowledgeDraft] = useState<{ title: string; contentMd: string; kindCode: string; tags: string; sourceTaskId: string } | null>(null)
   const [knowledgeEditId, setKnowledgeEditId] = useState<string | null>(null)
   const [knowledgeRefreshKey, setKnowledgeRefreshKey] = useState(0)
+  const [ideas, setIdeas] = useState<Idea[]>([])
+  const [ideaClusters, setIdeaClusters] = useState<IdeaClusterView[]>([])
+  const [ideaTab, setIdeaTab] = useState<'ideas' | 'clusters'>('ideas')
+  const [ideaQuery, setIdeaQuery] = useState('')
+  const [ideaKind, setIdeaKind] = useState('')
+  const [selectedIdeaIds, setSelectedIdeaIds] = useState<Set<string>>(new Set())
+  const [selectedIdea, setSelectedIdea] = useState<Idea | null>(null)
+  const [selectedCluster, setSelectedCluster] = useState<IdeaClusterView | null>(null)
+  const [ideaForm, setIdeaForm] = useState<{ title: string; contentMd: string; kindCode: string; tags: string } | null>(null)
+  const [ideaEditId, setIdeaEditId] = useState<string | null>(null)
+  const [ideaRefreshKey, setIdeaRefreshKey] = useState(0)
   const [reportRefreshKey, setReportRefreshKey] = useState(0)
   const [todayPlanSession, setTodayPlanSession] = useState<{ sessionId: string } | null>(null)
   const [busy, setBusy] = useState(false)
@@ -583,6 +637,20 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   useEffect(() => {
     if (view === 'knowledge') void loadKnowledge().catch(() => undefined)
   }, [view, loadKnowledge, knowledgeRefreshKey])
+  const loadIdeas = useCallback(async () => {
+    const params = new URLSearchParams()
+    if (ideaQuery.trim() !== '') params.set('q', ideaQuery.trim())
+    if (ideaKind !== '') params.set('kind_code', ideaKind)
+    const qs = params.toString()
+    const [ideasRes, clustersRes] = await Promise.all([
+      api<{ ideas: Idea[] }>(`/api/workbench/ideas${qs === '' ? '' : `?${qs}`}`),
+      api<{ clusters: IdeaClusterView[] }>('/api/workbench/idea-clusters'),
+    ])
+    setIdeas(ideasRes.ideas); setIdeaClusters(clustersRes.clusters)
+  }, [ideaQuery, ideaKind])
+  useEffect(() => {
+    if (view === 'ideas') void loadIdeas().catch(() => undefined)
+  }, [view, loadIdeas, ideaRefreshKey])
   useEffect(() => { void refresh().catch((e: unknown) => setError(e instanceof Error ? e.message : String(e))) }, [refresh])
   useEffect(() => { void api<{ settings: { defaultWorkspace: string; autoCreateTypeFolders: boolean; desktopNotify: boolean } }>('/api/workbench/settings').then((r) => setSettings(r.settings)).catch(() => undefined) }, [])
 
@@ -653,15 +721,17 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
     }
   }
 
-  const startAISession = async (mode: 'clarify' | 'consult' | 'breakdown' | 'execute' | 'review' | 'plan' | 'report', task: Task | null, text: string, previousSessions: Array<Record<string, unknown>> = []): Promise<void> => {
+  const startAISession = async (mode: 'clarify' | 'consult' | 'breakdown' | 'execute' | 'review' | 'plan' | 'report' | 'idea_association' | 'idea_brainstorm', task: Task | null, text: string, previousSessions: Array<Record<string, unknown>> = []): Promise<void> => {
     if (mode === 'clarify' && text.trim() === '') return
     const planAnchor = mode === 'plan' ? (/^\d{4}-\d{2}-\d{2}$/.test(text) ? text : localDateString()) : ''
     setBusy(true); setError(null)
     try {
-      // 复用型会话：每日计划 / 日报 / 周报，每个 scope+anchor 只有一个会话。
-      if (mode === 'plan' || mode === 'report') {
+      // 复用型会话：计划/报告/点子关联/点子头脑风暴，每个 scope+anchor 只有一个会话。
+      if (mode === 'plan' || mode === 'report' || mode === 'idea_association' || mode === 'idea_brainstorm') {
         const [scopeCode, anchor] = mode === 'plan'
           ? ['daily_plan', planAnchor]
+          : mode === 'idea_association' ? ['idea_association', text]
+          : mode === 'idea_brainstorm' ? ['idea_brainstorm', text]
           : text.startsWith('week:') ? ['week_report', text.slice(5)] : ['day_report', text.slice(4)]
         const existing = await api<{ session: { sessionId: string } | null }>(`/api/workbench/ai-sessions?scope_code=${scopeCode}&anchor=${anchor}`)
         if (existing.session !== null) {
@@ -707,7 +777,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
       const id = await runtime.workspaces.connectWorkspace(workspaceId)
       const binding = runtime.sessions.binding(id)
       if (binding === undefined) throw new Error('会话绑定未就绪，请稍后重试')
-      await binding.session.rename(mode === 'report' ? `${text.startsWith('week:') ? '周报' : '日报'}：${text.split(':')[1] ?? ''}` : mode === 'plan' ? `AI 计划：${planAnchor.slice(5)}` : mode === 'clarify' ? `澄清：${text.slice(0, 24)}` : mode === 'consult' ? `协助：${task?.title.slice(0, 24)}` : mode === 'breakdown' ? `拆解：${task?.title.slice(0, 24)}` : mode === 'review' ? `复盘：${task?.title.slice(0, 24)}` : `执行：${task?.title.slice(0, 24)}`).catch(() => undefined)
+      await binding.session.rename(mode === 'idea_association' ? '点子关联' : mode === 'idea_brainstorm' ? '点子头脑风暴' : mode === 'report' ? `${text.startsWith('week:') ? '周报' : '日报'}：${text.split(':')[1] ?? ''}` : mode === 'plan' ? `AI 计划：${planAnchor.slice(5)}` : mode === 'clarify' ? `澄清：${text.slice(0, 24)}` : mode === 'consult' ? `协助：${task?.title.slice(0, 24)}` : mode === 'breakdown' ? `拆解：${task?.title.slice(0, 24)}` : mode === 'review' ? `复盘：${task?.title.slice(0, 24)}` : `执行：${task?.title.slice(0, 24)}`).catch(() => undefined)
       let reportContextText = ''
       if (mode === 'report') {
         const [periodCode, periodStart] = text.split(':')
@@ -725,8 +795,29 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
       const planTaskLines = planCandidates
         .map((t, i) => `${i + 1}. [${t.id}] ${t.title} | 优先级 ${t.priorityCode} | 状态 ${t.statusCode} | 截止 ${t.dueAt ?? '无'} | 预计耗时 ${t.estimatedMinutes ?? '未知'} 分钟 | 父任务 ${t.parentId ?? '无'}`)
         .join('\n')
+      let ideaPrompt = ''
+      if (mode === 'idea_association') {
+        const selected = ideas.filter((idea) => text.split(',').includes(idea.id))
+        const lines = selected.map((idea, i) => `${i + 1}. [${idea.id}] ${idea.title} | 类型 ${idea.kindCode} | 标签 ${idea.tags.join(',') || '无'}\n   ${idea.contentMd || '（无内容）'}`).join('\n')
+        ideaPrompt = `你是“个人工作台”的点子关联助手。请分析下面的点子，把它们按主题关联成若干个“点子王”（每组 2 个点子以上，点子尽量不重复跨组；若只能成一组也可以）。\n\n候选点子：\n${lines}\n\n请调用 workbench_propose_idea_clusters：\n- clusters: [{title, summary, idea_ids, notes?}]\n- title 简洁有主题感（例如“AI 语音方向”）；summary 1-2 句说明关联逻辑\n- 只提交提案草稿，不要创建或修改点子本身。`
+      }
+      if (mode === 'idea_brainstorm') {
+        let sourceIdeas: Idea[] = []
+        let sourceClusterId: string | null = null
+        if (text.startsWith('cluster:')) {
+          sourceClusterId = text.slice(8)
+          const clusterRes = await api<{ cluster: IdeaClusterView | null }>(`/api/workbench/idea-clusters/${sourceClusterId}`)
+          sourceIdeas = clusterRes.cluster?.ideas ?? []
+        } else {
+          sourceIdeas = ideas.filter((idea) => text.slice(5).split(',').includes(idea.id))
+        }
+        const lines = sourceIdeas.map((idea, i) => `${i + 1}. [${idea.id}] ${idea.title} | 类型 ${idea.kindCode} | 标签 ${idea.tags.join(',') || '无'}\n   ${idea.contentMd || '（无内容）'}`).join('\n')
+        ideaPrompt = `你是“个人工作台”的点子落地顾问。请和用户一起把下面${sourceClusterId !== null ? '点子王' : '点子'}头脑风暴成可落地的行动方案。\n\n${sourceClusterId !== null ? `点子王 id：${sourceClusterId}\n` : ''}相关点子：\n${lines}\n\n流程：\n1. 先和用户讨论目标、可行性、第一步（一次问 1-2 个关键问题）\n2. 有结论后调用 workbench_submit_idea_tasks：\n   - source_idea_ids${sourceClusterId !== null ? ' 留空' : '= 讨论的点子 id 数组'}\n   - source_cluster_id${sourceClusterId !== null ? `="${sourceClusterId}"` : ' 留空'}\n   - tasks: 任务数组 {title, description, type_code, priority_code, due_at?, estimated_minutes?, children?}\n   - summary: 1-3 句头脑风暴小结\n3. 只提交提案草稿，不要直接创建任务。`
+      }
       const planPrompt = `你是“个人工作台”的 AI 计划助手。请为 ${planAnchor}（${'日一二三四五六'[new Date(`${planAnchor}T00:00:00`).getDay()]}）安排执行顺序。\n\n今天：${localDateString()}；当前时间：${new Date().toISOString()}\n\n候选任务（该日期及之前到期、仍未完成的任务${planAnchor === localDateString() ? '；今天额外包含无截止时间的进行中任务' : ''}，最多 30 条）：\n${planTaskLines || '（无候选任务）'}\n\n请综合考虑：优先级（p0 紧急 > p1 高 > p2 普通 > p3 低）、是否已逾期、截止时间、状态（doing/blocked 优先推进）、预计耗时、父子关系与可能的依赖。如果信息不足，可以先问用户 1-2 个关键问题（例如：当天可投入多少小时、哪些必须当天完成）。\n\n然后调用 workbench_propose_daily_plan：\n- plan_date="${planAnchor}"\n- summary：1-3 句排序思路\n- items：扁平顺序数组（1 号最重要），每项 {task_id, order, note}；note 写清为什么排这里或建议时间块\n- 同一父子链上不要同时出现父任务和它下面的子任务；如需排子任务，只排可执行的叶子，并在 note 中说明属于哪个父任务\n- 只提交计划草稿，不要修改任何任务字段，不要执行任务。`
-      const prompt = mode === 'report'
+      const prompt = mode === 'idea_association' || mode === 'idea_brainstorm'
+        ? ideaPrompt
+        : mode === 'report'
         ? `你是“个人工作台”的日报/周报助手。请根据下面 JSON 数据生成一份 Markdown 报告，然后调用 workbench_submit_report。\n\n报告周期：${text.split(':')[0]}（period_start=${text.split(':')[1] ?? ''}）\n数据：\n${reportContextText}\n\n要求：\n- 结构：今日/本周概览 → 已完成 → 进行中/风险 → 明日/下周建议\n- 只依据给定数据，不要编造；数据不足时如实说明\n- title 简洁；summary_md 用 Markdown；stats 可附 {completed, created} 等数字\n- 只提交草稿，不要修改任务，不要执行任务。`
         : mode === 'plan'
         ? planPrompt
@@ -753,6 +844,9 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
       if (mode === 'report') {
         const [periodCode, periodStart] = text.split(':')
         await api('/api/workbench/ai-sessions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ scopeCode: periodCode === 'week' ? 'week_report' : 'day_report', anchor: periodStart, sessionId: id, workspace: workspaceId }) })
+      }
+      if (mode === 'idea_association' || mode === 'idea_brainstorm') {
+        await api('/api/workbench/ai-sessions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ scopeCode: mode, anchor: text, sessionId: id, workspace: workspaceId }) })
       }
       if (task !== null && mode !== 'clarify') {
         await api(`/api/workbench/tasks/${task.id}/sessions`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sessionId: id, roleCode: mode }) }).catch(() => undefined)
@@ -876,6 +970,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
           <button className={`wb-seg ${view === 'calendar' ? 'on' : ''}`} onClick={() => setView('calendar')}><Icon name="calendar" />日历</button>
           <button className={`wb-seg ${view === 'list' ? 'on' : ''}`} onClick={() => setView('list')}><Icon name="list" />任务</button>
           <button className={`wb-seg ${view === 'knowledge' ? 'on' : ''}`} onClick={() => setView('knowledge')}><Icon name="book" />知识库</button>
+          <button className={`wb-seg ${view === 'ideas' ? 'on' : ''}`} onClick={() => setView('ideas')}><Icon name="idea" />点子</button>
         </div>
         <div style={{ flex: 1 }} />
         <button className="wb-btn primary" onClick={() => setShowQuick((v) => !v)} disabled={busy}><Icon name="sparkles" />快速录入</button>
@@ -893,7 +988,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
           {reminders.map((r) => <div key={r.reminderId} style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 4 }}><span style={{ flex: 1 }}>{r.title} · {fmtTime(r.dueAt)}</span><button className="wb-btn" onClick={() => void fireReminder(r.reminderId)}>知道了</button></div>)}
         </div>
       )}
-      {pendingDraft !== null && <DraftBanner draft={pendingDraft} runtime={runtime} closePanel={closePanel} kindName={(kind, code) => dicts.find((d) => d.kind === kind && d.code === code)?.name ?? code} onDone={() => { setPendingDraft(null); setReportRefreshKey((v) => v + 1); setKnowledgeRefreshKey((v) => v + 1); void refresh() }} />}
+      {pendingDraft !== null && <DraftBanner draft={pendingDraft} runtime={runtime} closePanel={closePanel} kindName={(kind, code) => dicts.find((d) => d.kind === kind && d.code === code)?.name ?? code} onDone={() => { setPendingDraft(null); setReportRefreshKey((v) => v + 1); setKnowledgeRefreshKey((v) => v + 1); setIdeaRefreshKey((v) => v + 1); void refresh() }} />}
 
       <div className="wb-body">
         <div className="wb-nav">
@@ -1141,6 +1236,60 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
             </>
           )}
 
+          {view === 'ideas' && (
+            <>
+              <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
+                <button className={`wb-seg ${ideaTab === 'ideas' ? 'on' : ''}`} onClick={() => { setIdeaTab('ideas'); setSelectedCluster(null) }}>点子（{ideas.length}）</button>
+                <button className={`wb-seg ${ideaTab === 'clusters' ? 'on' : ''}`} onClick={() => { setIdeaTab('clusters'); setSelectedIdea(null) }}>点子王（{ideaClusters.length}）</button>
+                {ideaTab === 'ideas' && <button className="wb-btn primary" onClick={() => { setIdeaEditId(null); setIdeaForm({ title: '', contentMd: '', kindCode: 'spark', tags: '' }); setSelectedIdea(null) }}><Icon name="plus" />记个点子</button>}
+              </div>
+              {ideaTab === 'ideas' ? (
+                <>
+                  <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
+                    <input style={{ flex: 1, minWidth: 120, background: 'var(--dsw-alias-bg-base,#17171a)', border: '1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.15))', color: 'inherit', borderRadius: 8, padding: '7px 10px' }} placeholder="搜索点子" value={ideaQuery} onChange={(e) => setIdeaQuery(e.target.value)} />
+                    <select style={{ background: 'var(--dsw-alias-bg-base,#17171a)', border: '1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.15))', color: 'inherit', borderRadius: 8, padding: '7px 10px' }} value={ideaKind} onChange={(e) => setIdeaKind(e.target.value)}>
+                      <option value="">全部类型</option>
+                      {dictOf('idea_kind').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}
+                    </select>
+                  </div>
+                  <div style={{ display: 'flex', gap: 8, marginBottom: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                    {selectedIdeaIds.size >= 2 && <button className="wb-btn primary" disabled={busy} onClick={() => void startAISession('idea_association', null, [...selectedIdeaIds].sort().join(','))}>AI 找关联</button>}
+                    {selectedIdeaIds.size >= 1 && <button className="wb-btn" disabled={busy} onClick={() => void startAISession('idea_brainstorm', null, `idea:${[...selectedIdeaIds].sort().join(',')}`)}>AI 头脑风暴</button>}
+                    <span style={{ fontSize: 12, color: '#999' }}>已选 {selectedIdeaIds.size} 个点子（勾选卡片）</span>
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(170px, 1fr))', gap: 8 }}>
+                    {ideas.map((idea) => (
+                      <div key={idea.id} className={`wb-card ${selectedIdea?.id === idea.id ? 'selected' : ''}`} style={{ marginBottom: 0, padding: 12, cursor: 'pointer' }} onClick={() => { setSelectedCluster(null); setSelectedIdea(idea) }}>
+                        <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 6 }}>
+                          <input type="checkbox" checked={selectedIdeaIds.has(idea.id)} onClick={(e) => e.stopPropagation()} onChange={(e) => setSelectedIdeaIds((prev) => { const next = new Set(prev); if (e.target.checked) next.add(idea.id); else next.delete(idea.id); return next })} />
+                          <b style={{ flex: 1 }}>{idea.title}</b>
+                        </div>
+                        <div style={{ fontSize: 12, color: '#999', minHeight: 32 }}>{idea.contentMd.replace(/[#*`>]/g, '').slice(0, 60) || '（无内容）'}</div>
+                        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 6, alignItems: 'center' }}>
+                          <Badge dict={dictOf('idea_kind')} code={idea.kindCode} />
+                          {idea.tags.slice(0, 4).map((tag) => <span key={tag} style={{ fontSize: 11, color: '#999' }}>#{tag}</span>)}
+                        </div>
+                      </div>
+                    ))}
+                    {ideas.length === 0 && <div className="wb-empty" style={{ gridColumn: '1 / -1' }}>还没有点子，点“记个点子”把灵感存下来</div>}
+                  </div>
+                </>
+              ) : (
+                <div className="wb-list">
+                  {ideaClusters.map((cluster) => (
+                    <div key={cluster.id} className={`wb-row ${selectedCluster?.id === cluster.id ? 'selected' : ''}`} onClick={() => { setSelectedIdea(null); setSelectedCluster(cluster) }}>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontWeight: 600 }}>👑 {cluster.title} <span style={{ fontSize: 12, color: '#999' }}>（{cluster.ideas.length} 个点子）</span></div>
+                        <div style={{ fontSize: 12, color: '#999' }}>{cluster.summaryMd || cluster.ideas.map((idea) => idea.title).join(' / ')}</div>
+                      </div>
+                    </div>
+                  ))}
+                  {ideaClusters.length === 0 && <div className="wb-empty">还没有点子王。选中至少 2 个点子后点“AI 找关联”。</div>}
+                </div>
+              )}
+            </>
+          )}
+
           {view === 'list' && (
             <>
               <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
@@ -1162,7 +1311,59 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
         </div>
 
         <div className="wb-detail">
-          {view === 'knowledge'
+          {view === 'ideas'
+            ? ideaForm !== null
+              ? (
+                <form className="wb-form" onSubmit={(e) => {
+                  e.preventDefault()
+                  if (ideaForm.title.trim() === '') return
+                  const tags = ideaForm.tags.split(/[,#，\s]+/).map((tag) => tag.trim()).filter((tag) => tag !== '').slice(0, 20)
+                  const isEdit = ideaEditId !== null
+                  void api(isEdit ? `/api/workbench/ideas/${ideaEditId}` : '/api/workbench/ideas', { method: isEdit ? 'PATCH' : 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: ideaForm.title.trim(), contentMd: ideaForm.contentMd, kindCode: ideaForm.kindCode, tags }) })
+                    .then(() => { setIdeaForm(null); setIdeaEditId(null); setIdeaRefreshKey((v) => v + 1); setNotice(isEdit ? '点子已更新' : '点子已保存') })
+                    .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)))
+                }}>
+                  <h4 className="full" style={{ margin: 0 }}>{ideaEditId === null ? '记个点子' : '编辑点子'}</h4>
+                  <label className="full">标题<input value={ideaForm.title} onChange={(e) => setIdeaForm((prev) => prev === null ? prev : { ...prev, title: e.target.value })} placeholder="一句话说清这个点子" /></label>
+                  <label>类型<select value={ideaForm.kindCode} onChange={(e) => setIdeaForm((prev) => prev === null ? prev : { ...prev, kindCode: e.target.value })}>{dictOf('idea_kind').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
+                  <label>标签<input value={ideaForm.tags} onChange={(e) => setIdeaForm((prev) => prev === null ? prev : { ...prev, tags: e.target.value })} placeholder="逗号/空格分隔，如 AI, 语音" /></label>
+                  <label className="full">内容（可选，Markdown）<textarea rows={10} value={ideaForm.contentMd} onChange={(e) => setIdeaForm((prev) => prev === null ? prev : { ...prev, contentMd: e.target.value })} /></label>
+                  <div className="full" style={{ display: 'flex', gap: 8 }}><button className="wb-btn primary" type="submit"><Icon name="check" />保存</button><button className="wb-btn" type="button" onClick={() => { setIdeaForm(null); setIdeaEditId(null) }}>取消</button></div>
+                </form>
+              )
+              : selectedCluster !== null
+                ? (
+                  <div className="wb-card">
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <h4 style={{ flex: 1, margin: 0 }}>👑 {selectedCluster.title}</h4>
+                      <button className="wb-btn primary" disabled={busy} onClick={() => void startAISession('idea_brainstorm', null, `cluster:${selectedCluster.id}`)}>AI 头脑风暴</button>
+                      <button className="wb-btn" onClick={() => { if (window.confirm('删除这个点子王？（不会删除点子）')) { void api(`/api/workbench/idea-clusters/${selectedCluster.id}`, { method: 'DELETE' }).then(() => { setSelectedCluster(null); setIdeaRefreshKey((v) => v + 1); setNotice('点子王已删除') }).catch((err: unknown) => setError(err instanceof Error ? err.message : String(err))) } }}><Icon name="trash" />删除</button>
+                    </div>
+                    <MarkdownText text={selectedCluster.summaryMd || '（暂无总结）'} />
+                    <div style={{ marginTop: 10 }}>
+                      <b>包含点子（{selectedCluster.ideas.length}）</b>
+                      {selectedCluster.ideas.map((idea) => <div key={idea.id} className="wb-row" onClick={() => { setSelectedCluster(null); setSelectedIdea(idea) }} style={{ cursor: 'pointer', marginTop: 4 }}><span style={{ flex: 1 }}>{idea.title}</span><Badge dict={dictOf('idea_kind')} code={idea.kindCode} /></div>)}
+                    </div>
+                  </div>
+                )
+                : selectedIdea !== null
+                  ? (
+                    <div className="wb-card">
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <h4 style={{ flex: 1, margin: 0 }}>{selectedIdea.title}</h4>
+                        <button className="wb-btn primary" disabled={busy} onClick={() => void startAISession('idea_brainstorm', null, `idea:${selectedIdea.id}`)}>AI 头脑风暴</button>
+                        <button className="wb-btn" onClick={() => { setIdeaEditId(selectedIdea.id); setIdeaForm({ title: selectedIdea.title, contentMd: selectedIdea.contentMd, kindCode: selectedIdea.kindCode, tags: selectedIdea.tags.join(', ') }) }}><Icon name="edit" />编辑</button>
+                        <button className="wb-btn" onClick={() => { if (window.confirm('删除这个点子？')) { void api(`/api/workbench/ideas/${selectedIdea.id}`, { method: 'DELETE' }).then(() => { setSelectedIdea(null); setIdeaRefreshKey((v) => v + 1); setNotice('已删除') }).catch((err: unknown) => setError(err instanceof Error ? err.message : String(err))) } }}><Icon name="trash" />删除</button>
+                      </div>
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', margin: '8px 0' }}>
+                        <Badge dict={dictOf('idea_kind')} code={selectedIdea.kindCode} />
+                        {selectedIdea.tags.map((tag) => <span key={tag} style={{ fontSize: 12, color: '#999' }}>#{tag}</span>)}
+                      </div>
+                      <MarkdownText text={selectedIdea.contentMd || '（暂无内容）'} />
+                    </div>
+                  )
+                  : <div className="wb-empty">← 从左侧选择一个点子/点子王，或点“记个点子”</div>
+            : view === 'knowledge'
             ? knowledgeDraft !== null
               ? (
                 <form className="wb-form" onSubmit={(e) => {

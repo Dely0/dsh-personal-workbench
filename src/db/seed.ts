@@ -56,12 +56,21 @@ export const DICTIONARY_SEEDS: DictionarySeed[] = [
   { kind: 'draft_kind', code: 'daily_plan', name: '今日计划', sortOrder: 50, config: {} },
   { kind: 'draft_kind', code: 'report', name: '日报/周报', sortOrder: 60, config: {} },
   { kind: 'draft_kind', code: 'knowledge', name: '知识条目', sortOrder: 70, config: {} },
+  { kind: 'draft_kind', code: 'idea_cluster', name: '点子王提案', sortOrder: 80, config: {} },
+  { kind: 'draft_kind', code: 'idea_tasks', name: '点子落地任务', sortOrder: 90, config: {} },
 
   // 知识库分类
   { kind: 'knowledge_kind', code: 'note', name: '笔记', sortOrder: 10, config: {} },
   { kind: 'knowledge_kind', code: 'lesson', name: '经验教训', sortOrder: 20, config: {} },
   { kind: 'knowledge_kind', code: 'decision', name: '决策记录', sortOrder: 30, config: {} },
   { kind: 'knowledge_kind', code: 'snippet', name: '片段/模板', sortOrder: 40, config: {} },
+
+  // 点子类型
+  { kind: 'idea_kind', code: 'project', name: '项目点子', sortOrder: 10, config: {} },
+  { kind: 'idea_kind', code: 'skill', name: '技能点子', sortOrder: 20, config: {} },
+  { kind: 'idea_kind', code: 'plugin', name: '插件点子', sortOrder: 30, config: {} },
+  { kind: 'idea_kind', code: 'spark', name: '突发奇想', sortOrder: 40, config: {} },
+  { kind: 'idea_kind', code: 'random', name: '莫名其妙的点子', sortOrder: 50, config: {} },
 
   // 重复规则
   { kind: 'recurrence', code: 'none', name: '不重复', sortOrder: 10, config: {} },
@@ -73,6 +82,8 @@ export const DICTIONARY_SEEDS: DictionarySeed[] = [
   { kind: 'ai_session_scope', code: 'daily_plan', name: '今日计划会话', sortOrder: 10, config: {} },
   { kind: 'ai_session_scope', code: 'day_report', name: '日报会话', sortOrder: 20, config: {} },
   { kind: 'ai_session_scope', code: 'week_report', name: '周报会话', sortOrder: 30, config: {} },
+  { kind: 'ai_session_scope', code: 'idea_association', name: '点子关联会话', sortOrder: 40, config: {} },
+  { kind: 'ai_session_scope', code: 'idea_brainstorm', name: '点子头脑风暴会话', sortOrder: 50, config: {} },
   { kind: 'draft_status', code: 'pending', name: '待确认', sortOrder: 10, config: {} },
   { kind: 'draft_status', code: 'confirmed', name: '已确认', sortOrder: 20, config: {} },
   { kind: 'draft_status', code: 'abandoned', name: '已放弃', sortOrder: 30, config: {} },

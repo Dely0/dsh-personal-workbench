@@ -11,6 +11,7 @@ import {
   getTaskReport, listTaskReports, deleteTaskReport,
   getAiSession, registerAiSession, listReminders, ensureRecurringInstances,
   createKnowledge, listKnowledge, getKnowledge, deleteKnowledge, confirmKnowledgeDraft,
+  createIdea, listIdeas, createIdeaCluster, getIdeaCluster, confirmIdeaClusterDraft, confirmIdeaTaskDraft,
   getDraftBySession, listTaskSessions, linkTaskSession, localDateString,
 } from '../lib/db/repo.js'
 
@@ -91,6 +92,19 @@ test('db migrations, dictionaries and task tree', () => {
     assert.equal(getKnowledge(db, kConfirmed.id).tags[0], 'AI')
     assert.equal(deleteKnowledge(db, k1.id), true)
     assert.equal(getKnowledge(db, k1.id), undefined)
+
+    // ideas & clusters
+    const i1 = createIdea(db, { title: 'TTS 语音输出', kindCode: 'plugin', tags: ['TTS'] })
+    const i2 = createIdea(db, { title: '语音备忘录', kindCode: 'skill', tags: ['语音'] })
+    assert.equal(listIdeas(db, { q: '语音' }).length, 2)
+    const clusterDraft = createDraft(db, { kindCode: 'idea_cluster', sessionId: 's-cluster', payload: { clusters: [{ title: '语音方向', summary: '两个语音点子', idea_ids: [i1.id, i2.id] }] } })
+    const clusters = confirmIdeaClusterDraft(db, clusterDraft.id)
+    assert.equal(clusters.length, 1)
+    assert.equal(getIdeaCluster(db, clusters[0].id).ideas.length, 2)
+    const taskDraft = createDraft(db, { kindCode: 'idea_tasks', sessionId: 's-idea-task', payload: { sourceIdeaIds: [i1.id], tasks: [{ title: '验证 TTS 方案', type_code: 'code_impl', priority_code: 'p1' }] } })
+    const tasks = confirmIdeaTaskDraft(db, taskDraft.id)
+    assert.equal(tasks.length, 1)
+    assert.deepEqual(tasks[0].extra.sourceIdeaIds, [i1.id])
     db.close()
   } finally {
     rmSync(dir, { recursive: true, force: true })
