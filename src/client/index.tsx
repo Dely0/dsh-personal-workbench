@@ -353,11 +353,11 @@ function TaskTreeRows({ roots, depth, expanded, toggle, dicts, onOpen, selectedI
     <>
       {roots.map((node) => (
         <div key={node.task.id}>
-          <div className={`wb-row ${selectedId === node.task.id ? 'selected' : ''}`} style={{ paddingLeft: 8 + depth * 16 }}>
-            <button type="button" className="wb-btn" style={{ padding: '2px 6px', border: 'none' }} onClick={(e) => { e.stopPropagation(); toggle(node.task.id) }}>
+          <div className={`wb-row ${selectedId === node.task.id ? 'selected' : ''}`} style={{ paddingLeft: 8 + depth * 16 }} onClick={() => onOpen(node.task)}>
+            <button type="button" className="wb-btn" style={{ padding: '2px 6px', border: 'none', flex: 'none' }} onClick={(e) => { e.stopPropagation(); toggle(node.task.id) }}>
               {node.children.length > 0 ? (expanded.has(node.task.id) ? '▼' : '▶') : '·'}
             </button>
-            <TaskRow task={node.task} dicts={dicts} onOpen={onOpen} />
+            <TaskRow task={node.task} dicts={dicts} onOpen={onOpen} bare />
           </div>
           {node.children.length > 0 && expanded.has(node.task.id) && (
             <TaskTreeRows roots={node.children} depth={depth + 1} expanded={expanded} toggle={toggle} dicts={dicts} onOpen={onOpen} selectedId={selectedId} />
@@ -368,7 +368,7 @@ function TaskTreeRows({ roots, depth, expanded, toggle, dicts, onOpen, selectedI
   )
 }
 
-function TaskRow({ task, dicts, onOpen, selected }: { task: Task; dicts: Dict[]; onOpen: (task: Task) => void; selected?: boolean }): JSX.Element {
+function TaskRow({ task, dicts, onOpen, selected, bare = false }: { task: Task; dicts: Dict[]; onOpen: (task: Task) => void; selected?: boolean; bare?: boolean }): JSX.Element {
   const due = task.dueAt === null ? null : new Date(task.dueAt)
   const now = new Date()
   const dueText = task.statusCode === 'done'
@@ -384,8 +384,8 @@ function TaskRow({ task, dicts, onOpen, selected }: { task: Task; dicts: Dict[];
             : due.getTime() < now.getTime()
               ? `逾期 ${fmtTime(task.dueAt!)}`
               : fmtTime(task.dueAt!)
-  return (
-    <div className={`wb-row ${selected === true ? 'selected' : ''}`} style={{ flex: 1, minWidth: 0 }} onClick={() => onOpen(task)}>
+  const content = (
+    <>
       <div className="wb-row-title" style={{ fontWeight: 600 }}>{task.title}</div>
       <div className="wb-row-meta">
         <Badge dict={dicts.filter((d) => d.kind === 'type')} code={task.typeCode} />
@@ -393,6 +393,12 @@ function TaskRow({ task, dicts, onOpen, selected }: { task: Task; dicts: Dict[];
         <Badge dict={dicts.filter((d) => d.kind === 'status')} code={task.statusCode} />
         <span className="wb-due">{dueText}</span>
       </div>
+    </>
+  )
+  if (bare) return <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8 }}>{content}</div>
+  return (
+    <div className={`wb-row ${selected === true ? 'selected' : ''}`} style={{ flex: 1, minWidth: 0 }} onClick={() => onOpen(task)}>
+      {content}
     </div>
   )
 }
