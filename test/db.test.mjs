@@ -86,10 +86,12 @@ test('db migrations, dictionaries and task tree', () => {
     const k1 = createKnowledge(db, { title: 'edge-tts 方案', kindCode: 'lesson', contentMd: '# 结论\n免费可用', tags: ['TTS', '踩坑'] })
     assert.equal(listKnowledge(db, { q: 'edge' }).length, 1)
     assert.equal(listKnowledge(db, { kindCode: 'lesson' }).length, 1)
-    const kDraft = createDraft(db, { kindCode: 'knowledge', sessionId: 's-know', payload: { title: 'AI 提交的经验', contentMd: '# 内容', kindCode: 'note', tags: ['AI'] } })
+    const kDraft = createDraft(db, { kindCode: 'knowledge', sessionId: 's-know', payload: { title: 'AI 提交的经验', contentMd: '# 内容', kindCode: 'note', tags: ['AI'], sourceReviewId: 'review-1' } })
     const kConfirmed = confirmKnowledgeDraft(db, kDraft.id)
     assert.equal(kConfirmed.title, 'AI 提交的经验')
     assert.equal(getKnowledge(db, kConfirmed.id).tags[0], 'AI')
+    assert.equal(getKnowledge(db, kConfirmed.id).sourceReviewId, 'review-1')
+    assert.equal(listKnowledge(db, { sourceReviewId: 'review-1' }).length, 1)
     assert.equal(deleteKnowledge(db, k1.id), true)
     assert.equal(getKnowledge(db, k1.id), undefined)
 

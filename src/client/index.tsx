@@ -140,7 +140,7 @@ interface Task {
 interface DailyPlanItemView { taskId: string; order: number; title: string; note: string }
 interface DailyPlanView { id: string; planDate: string; summary: string; items: DailyPlanItemView[]; sourceCode: string; sessionId: string | null; createdAt: string; updatedAt: string }
 interface TaskReportView { id: string; periodCode: 'day' | 'week'; periodStart: string; title: string; summaryMd: string; stats: Record<string, unknown>; sessionId: string | null; createdAt: string; updatedAt: string }
-interface KnowledgeEntry { id: string; kindCode: string; title: string; contentMd: string; tags: string[]; sourceTaskId: string | null; sourceSessionId: string | null; createdAt: string; updatedAt: string }
+interface KnowledgeEntry { id: string; kindCode: string; title: string; contentMd: string; tags: string[]; sourceTaskId: string | null; sourceSessionId: string | null; sourceReviewId: string | null; createdAt: string; updatedAt: string }
 interface Idea { id: string; title: string; contentMd: string; kindCode: string; tags: string[]; sourceSessionId: string | null; createdAt: string; updatedAt: string }
 interface IdeaClusterView { id: string; title: string; summaryMd: string; tags: string[]; ideas: Idea[]; createdAt: string; updatedAt: string }
 interface Bootstrap { dictionaries: Dict[]; stats: { overdue: number; todayDue: number; doing: number; total: number }; todayPlan?: DailyPlanView | null }
@@ -591,9 +591,10 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   const [knowledgeQuery, setKnowledgeQuery] = useState('')
   const [knowledgeKind, setKnowledgeKind] = useState<string>('')
   const [selectedKnowledge, setSelectedKnowledge] = useState<KnowledgeEntry | null>(null)
-  const [knowledgeDraft, setKnowledgeDraft] = useState<{ title: string; contentMd: string; kindCode: string; tags: string; sourceTaskId: string } | null>(null)
+  const [knowledgeDraft, setKnowledgeDraft] = useState<{ title: string; contentMd: string; kindCode: string; tags: string; sourceTaskId: string; sourceReviewId: string } | null>(null)
   const [knowledgeEditId, setKnowledgeEditId] = useState<string | null>(null)
   const [knowledgeRefreshKey, setKnowledgeRefreshKey] = useState(0)
+  const [taskKnowledge, setTaskKnowledge] = useState<KnowledgeEntry[]>([])
   const [ideas, setIdeas] = useState<Idea[]>([])
   const [ideaClusters, setIdeaClusters] = useState<IdeaClusterView[]>([])
   const [ideaTab, setIdeaTab] = useState<'ideas' | 'clusters'>('ideas')
@@ -622,6 +623,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
           api<TaskDetail>(`/api/workbench/tasks/${selectedRef.current}`),
           api<{ events: Array<Record<string, unknown>> }>(`/api/workbench/tasks/${selectedRef.current}/events`).catch(() => ({ events: [] })),
           api<{ reviews: Array<Record<string, unknown>> }>(`/api/workbench/tasks/${selectedRef.current}/reviews`).catch(() => ({ reviews: [] })),
+          loadTaskKnowledge(selectedRef.current).catch(() => setTaskKnowledge([])),
         ])
         setSelected({ ...detail, events: ev.events, reviews: rv.reviews })
       } catch { setSelected(null); selectedRef.current = null }
@@ -695,12 +697,27 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
     return () => document.documentElement.removeAttribute(PENDING_ATTR)
   }, [pendingDraft])
 
+  const loadTaskKnowledge = async (taskId: string): Promise<void> => {
+    const res = await api<{ entries: KnowledgeEntry[] }>(`/api/workbench/knowledge?source_task_id=${encodeURIComponent(taskId)}`)
+    setTaskKnowledge(res.entries)
+  }
   const openTask = (task: Task): void => {
     selectedRef.current = task.id
     void Promise.all([
       api<TaskDetail>(`/api/workbench/tasks/${task.id}`),
       api<{ events: Array<Record<string, unknown>> }>(`/api/workbench/tasks/${task.id}/events`).catch(() => ({ events: [] })),
       api<{ reviews: Array<Record<string, unknown>> }>(`/api/workbench/tasks/${task.id}/reviews`).catch(() => ({ reviews: [] })),
+      loadTaskKnowledge(task.id).catch(() => setTaskKnowledge([])),
+    ]).then(([detail, ev, rv]) => setSelected({ ...detail, events: ev.events, reviews: rv.reviews })).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
+  }
+  const openTaskById = (taskId: string): void => {
+    setView('list')
+    selectedRef.current = taskId
+    void Promise.all([
+      api<TaskDetail>(`/api/workbench/tasks/${taskId}`),
+      api<{ events: Array<Record<string, unknown>> }>(`/api/workbench/tasks/${taskId}/events`).catch(() => ({ events: [] })),
+      api<{ reviews: Array<Record<string, unknown>> }>(`/api/workbench/tasks/${taskId}/reviews`).catch(() => ({ reviews: [] })),
+      loadTaskKnowledge(taskId).catch(() => setTaskKnowledge([])),
     ]).then(([detail, ev, rv]) => setSelected({ ...detail, events: ev.events, reviews: rv.reviews })).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
   }
   const patchTask = async (id: string, patch: Record<string, unknown>): Promise<void> => {
@@ -1218,7 +1235,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                   <option value="">全部分类</option>
                   {dictOf('knowledge_kind').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}
                 </select>
-                <button className="wb-btn primary" onClick={() => { setKnowledgeEditId(null); setKnowledgeDraft({ title: '', contentMd: '', kindCode: 'note', tags: '', sourceTaskId: '' }) }}><Icon name="plus" />新建</button>
+                <button className="wb-btn primary" onClick={() => { setKnowledgeEditId(null); setKnowledgeDraft({ title: '', contentMd: '', kindCode: 'note', tags: '', sourceTaskId: '', sourceReviewId: '' }) }}><Icon name="plus" />新建</button>
               </div>
               <div className="wb-list">
                 {knowledgeEntries.map((entry) => (
@@ -1373,7 +1390,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                   if (knowledgeDraft.title.trim() === '') return
                   const tags = knowledgeDraft.tags.split(/[,#，\s]+/).map((tag) => tag.trim()).filter((tag) => tag !== '').slice(0, 20)
                   const isEdit = knowledgeEditId !== null
-                  const payload = { title: knowledgeDraft.title.trim(), contentMd: knowledgeDraft.contentMd, kindCode: knowledgeDraft.kindCode, tags, sourceTaskId: knowledgeDraft.sourceTaskId.trim() === '' ? null : knowledgeDraft.sourceTaskId.trim() }
+                  const payload = { title: knowledgeDraft.title.trim(), contentMd: knowledgeDraft.contentMd, kindCode: knowledgeDraft.kindCode, tags, sourceTaskId: knowledgeDraft.sourceTaskId.trim() === '' ? null : knowledgeDraft.sourceTaskId.trim(), sourceReviewId: knowledgeDraft.sourceReviewId.trim() === '' ? null : knowledgeDraft.sourceReviewId.trim() }
                   void api(isEdit ? `/api/workbench/knowledge/${knowledgeEditId}` : '/api/workbench/knowledge', { method: isEdit ? 'PATCH' : 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) })
                     .then(() => { setKnowledgeDraft(null); setKnowledgeEditId(null); setKnowledgeRefreshKey((v) => v + 1); setNotice(isEdit ? '知识条目已更新' : '知识条目已创建') })
                     .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)))
@@ -1392,13 +1409,21 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                   <div className="wb-card">
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                       <h4 style={{ flex: 1, margin: 0 }}>{selectedKnowledge.title}</h4>
-                      <button className="wb-btn" onClick={() => { setKnowledgeEditId(selectedKnowledge.id); setKnowledgeDraft({ title: selectedKnowledge.title, contentMd: selectedKnowledge.contentMd, kindCode: selectedKnowledge.kindCode, tags: selectedKnowledge.tags.join(', '), sourceTaskId: selectedKnowledge.sourceTaskId ?? '' }) }}><Icon name="edit" />编辑</button>
+                      <button className="wb-btn" onClick={() => { setKnowledgeEditId(selectedKnowledge.id); setKnowledgeDraft({ title: selectedKnowledge.title, contentMd: selectedKnowledge.contentMd, kindCode: selectedKnowledge.kindCode, tags: selectedKnowledge.tags.join(', '), sourceTaskId: selectedKnowledge.sourceTaskId ?? '', sourceReviewId: selectedKnowledge.sourceReviewId ?? '' }) }}><Icon name="edit" />编辑</button>
                       <button className="wb-btn" onClick={() => { if (window.confirm('删除这条知识？')) { void api(`/api/workbench/knowledge/${selectedKnowledge.id}`, { method: 'DELETE' }).then(() => { setSelectedKnowledge(null); setKnowledgeRefreshKey((v) => v + 1); setNotice('已删除') }).catch((err: unknown) => setError(err instanceof Error ? err.message : String(err))) } }}><Icon name="trash" />删除</button>
                     </div>
                     <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', margin: '8px 0' }}>
                       <Badge dict={dictOf('knowledge_kind')} code={selectedKnowledge.kindCode} />
                       {selectedKnowledge.tags.map((tag) => <span key={tag} style={{ fontSize: 12, color: '#999' }}>#{tag}</span>)}
                     </div>
+                    {selectedKnowledge.sourceTaskId !== null && (
+                      <div style={{ margin: '8px 0', fontSize: 13 }}>
+                        🔗 关联任务：
+                        <button className="wb-btn" onClick={() => openTaskById(selectedKnowledge.sourceTaskId!)}>
+                          {tasks.find((t) => t.id === selectedKnowledge.sourceTaskId)?.title ?? selectedKnowledge.sourceTaskId}
+                        </button>
+                      </div>
+                    )}
                     <MarkdownText text={selectedKnowledge.contentMd} />
                   </div>
                 )
@@ -1555,12 +1580,18 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                 </div>
                 <div className="wb-card">
                   <h4>复盘记录（{selected.reviews?.length ?? 0}）</h4>
-                  {(selected.reviews ?? []).map((rv, i) => (
-                    <div key={String(rv.id ?? i)} style={{ marginBottom: 10, paddingBottom: 10, borderBottom: '1px solid var(--wb-border-soft)' }}>
-                      <MarkdownText text={String(rv.summary_md ?? '')} />
-                      <button className="wb-btn" style={{ marginTop: 6 }} onClick={() => { setKnowledgeEditId(null); setKnowledgeDraft({ title: `复盘：${selected.task.title}`, contentMd: String(rv.summary_md ?? ''), kindCode: 'lesson', tags: '复盘', sourceTaskId: selected.task.id }); setSelectedKnowledge(null); setView('knowledge') }}><Icon name="book" />沉淀为经验</button>
-                    </div>
-                  ))}
+                  {(selected.reviews ?? []).map((rv, i) => {
+                    const reviewId = String(rv.id ?? '')
+                    const existingKnowledge = taskKnowledge.find((entry) => entry.sourceReviewId === reviewId)
+                    return (
+                      <div key={String(rv.id ?? i)} style={{ marginBottom: 10, paddingBottom: 10, borderBottom: '1px solid var(--wb-border-soft)' }}>
+                        <MarkdownText text={String(rv.summary_md ?? '')} />
+                        {existingKnowledge !== undefined
+                          ? <button className="wb-btn" style={{ marginTop: 6 }} onClick={() => { setKnowledgeDraft(null); setKnowledgeEditId(null); setSelectedKnowledge(existingKnowledge); setView('knowledge') }}><Icon name="book" />✅ 已沉淀，打开知识条目</button>
+                          : <button className="wb-btn" style={{ marginTop: 6 }} onClick={() => { setKnowledgeEditId(null); setKnowledgeDraft({ title: `复盘：${selected.task.title}`, contentMd: String(rv.summary_md ?? ''), kindCode: 'lesson', tags: '复盘', sourceTaskId: selected.task.id, sourceReviewId: reviewId }); setSelectedKnowledge(null); setView('knowledge') }}><Icon name="book" />💡 沉淀为经验</button>}
+                      </div>
+                    )
+                  })}
                   {(selected.reviews?.length ?? 0) === 0 && <div style={{ fontSize: 12, color: '#999' }}>暂无复盘；已完成任务可用“AI 复盘”。</div>}
                 </div>
                 <div className="wb-card">

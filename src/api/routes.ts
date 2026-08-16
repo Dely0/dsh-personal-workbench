@@ -597,8 +597,10 @@ export function makeRoutes(db: DatabaseSync): WebRoute[] {
           if (method === 'GET') {
             const q = url.searchParams.get('q') ?? undefined
             const kindCode = url.searchParams.get('kind_code') ?? undefined
+            const sourceTaskId = url.searchParams.get('source_task_id') ?? undefined
+            const sourceReviewId = url.searchParams.get('source_review_id') ?? undefined
             if (kindCode !== undefined && getDictionary(db, 'knowledge_kind', kindCode) === undefined) return writeJson(res, 400, { error: 'unknown knowledge_kind' })
-            return writeJson(res, 200, { ok: true, entries: listKnowledge(db, { q, kindCode }) })
+            return writeJson(res, 200, { ok: true, entries: listKnowledge(db, { q, kindCode, sourceTaskId, sourceReviewId }) })
           }
           if (method === 'POST') {
             if (body === undefined) return writeJson(res, 400, { error: 'invalid JSON body' })
@@ -615,6 +617,7 @@ export function makeRoutes(db: DatabaseSync): WebRoute[] {
                 tags,
                 sourceTaskId: typeof body.sourceTaskId === 'string' ? body.sourceTaskId : null,
                 sourceSessionId: typeof body.sourceSessionId === 'string' ? body.sourceSessionId : null,
+                sourceReviewId: typeof body.sourceReviewId === 'string' ? body.sourceReviewId : null,
               })
               return writeJson(res, 201, { ok: true, knowledge: entry })
             } catch (error) {
@@ -636,6 +639,7 @@ export function makeRoutes(db: DatabaseSync): WebRoute[] {
           if (typeof body.kindCode === 'string') { requireCode(db, 'knowledge_kind', body.kindCode, 'kindCode'); patch.kindCode = body.kindCode }
           if (Array.isArray(body.tags)) patch.tags = body.tags.filter((tag): tag is string => typeof tag === 'string').slice(0, 20)
           if ('sourceTaskId' in body) patch.sourceTaskId = typeof body.sourceTaskId === 'string' ? body.sourceTaskId : null
+          if ('sourceReviewId' in body) patch.sourceReviewId = typeof body.sourceReviewId === 'string' ? body.sourceReviewId : null
           const entry = updateKnowledge(db, id, patch)
           if (entry === undefined) return writeJson(res, 404, { error: 'knowledge not found' })
           return writeJson(res, 200, { ok: true, knowledge: entry })
@@ -756,7 +760,7 @@ export function makeRoutes(db: DatabaseSync): WebRoute[] {
         writeJson(res, 200, {
           ok: true,
           name: 'dsh-workbench',
-          version: '1.1.1',
+          version: '1.1.2',
           db: {
             schemaVersion: versionRow?.value ?? 'unknown',
             taskCount: listTasks(db, { includeArchived: true }).length,

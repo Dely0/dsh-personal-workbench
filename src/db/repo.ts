@@ -1148,6 +1148,7 @@ export interface KnowledgeInput {
   tags?: string[]
   sourceTaskId?: string | null
   sourceSessionId?: string | null
+  sourceReviewId?: string | null
 }
 
 export interface KnowledgeRow {
@@ -1158,6 +1159,7 @@ export interface KnowledgeRow {
   tags: string[]
   sourceTaskId: string | null
   sourceSessionId: string | null
+  sourceReviewId: string | null
   createdAt: string
   updatedAt: string
 }
@@ -1170,6 +1172,7 @@ interface RawKnowledgeRow {
   tags_json: string
   source_task_id: string | null
   source_session_id: string | null
+  source_review_id: string | null
   created_at: string
   updated_at: string
 }
@@ -1185,6 +1188,7 @@ function parseKnowledge(row: RawKnowledgeRow | undefined): KnowledgeRow | undefi
     tags: Array.isArray(tags) ? tags.filter((tag): tag is string => typeof tag === 'string') : [],
     sourceTaskId: row.source_task_id,
     sourceSessionId: row.source_session_id,
+    sourceReviewId: row.source_review_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }
@@ -1193,9 +1197,9 @@ function parseKnowledge(row: RawKnowledgeRow | undefined): KnowledgeRow | undefi
 export function createKnowledge(db: DatabaseSync, input: KnowledgeInput, at = nowIso()): KnowledgeRow {
   const id = randomUUID()
   db.prepare(`
-    INSERT INTO knowledge_entries (id, kind_code, title, content_md, tags_json, source_task_id, source_session_id, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(id, input.kindCode ?? 'note', input.title, input.contentMd ?? '', JSON.stringify(input.tags ?? []), input.sourceTaskId ?? null, input.sourceSessionId ?? null, at, at)
+    INSERT INTO knowledge_entries (id, kind_code, title, content_md, tags_json, source_task_id, source_session_id, source_review_id, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(id, input.kindCode ?? 'note', input.title, input.contentMd ?? '', JSON.stringify(input.tags ?? []), input.sourceTaskId ?? null, input.sourceSessionId ?? null, input.sourceReviewId ?? null, at, at)
   return getKnowledge(db, id)!
 }
 
@@ -1203,10 +1207,12 @@ export function getKnowledge(db: DatabaseSync, id: string): KnowledgeRow | undef
   return parseKnowledge(db.prepare('SELECT * FROM knowledge_entries WHERE id = ?').get(id) as RawKnowledgeRow | undefined)
 }
 
-export function listKnowledge(db: DatabaseSync, opts: { q?: string; kindCode?: string; limit?: number } = {}): KnowledgeRow[] {
+export function listKnowledge(db: DatabaseSync, opts: { q?: string; kindCode?: string; sourceTaskId?: string; sourceReviewId?: string; limit?: number } = {}): KnowledgeRow[] {
   const conditions: string[] = []
   const params: Array<string | number> = []
   if (opts.kindCode !== undefined) { conditions.push('kind_code = ?'); params.push(opts.kindCode) }
+  if (opts.sourceTaskId !== undefined) { conditions.push('source_task_id = ?'); params.push(opts.sourceTaskId) }
+  if (opts.sourceReviewId !== undefined) { conditions.push('source_review_id = ?'); params.push(opts.sourceReviewId) }
   if (typeof opts.q === 'string' && opts.q.trim() !== '') {
     const like = `%${opts.q.trim()}%`
     conditions.push('(title LIKE ? OR content_md LIKE ? OR tags_json LIKE ?)')
@@ -1229,12 +1235,13 @@ export function updateKnowledge(db: DatabaseSync, id: string, patch: Partial<Kno
     tags: patch.tags ?? before.tags,
     sourceTaskId: patch.sourceTaskId === undefined ? before.sourceTaskId : patch.sourceTaskId,
     sourceSessionId: patch.sourceSessionId === undefined ? before.sourceSessionId : patch.sourceSessionId,
+    sourceReviewId: patch.sourceReviewId === undefined ? before.sourceReviewId : patch.sourceReviewId,
     updatedAt: at,
   }
   db.prepare(`
-    UPDATE knowledge_entries SET kind_code = ?, title = ?, content_md = ?, tags_json = ?, source_task_id = ?, source_session_id = ?, updated_at = ?
+    UPDATE knowledge_entries SET kind_code = ?, title = ?, content_md = ?, tags_json = ?, source_task_id = ?, source_session_id = ?, source_review_id = ?, updated_at = ?
     WHERE id = ?
-  `).run(next.kindCode, next.title, next.contentMd, JSON.stringify(next.tags), next.sourceTaskId, next.sourceSessionId, next.updatedAt, id)
+  `).run(next.kindCode, next.title, next.contentMd, JSON.stringify(next.tags), next.sourceTaskId, next.sourceSessionId, next.sourceReviewId, next.updatedAt, id)
   return next
 }
 
@@ -1245,7 +1252,7 @@ export function deleteKnowledge(db: DatabaseSync, id: string): boolean {
 export function confirmKnowledgeDraft(db: DatabaseSync, draftId: string, actor = 'user', at = nowIso()): KnowledgeRow | undefined {
   const draft = getDraft(db, draftId)
   if (draft === undefined || draft.kindCode !== 'knowledge') return undefined
-  const payload = draft.payload as { title?: string; contentMd?: string; kindCode?: string; tags?: string[]; sourceTaskId?: string; sourceSessionId?: string }
+  const payload = draft.payload as { title?: string; contentMd?: string; kindCode?: string; tags?: string[]; sourceTaskId?: string; sourceSessionId?: string; sourceReviewId?: string }
   const title = typeof payload.title === 'string' ? payload.title.trim() : ''
   if (title === '') throw new Error('knowledge requires a non-empty title')
   const contentMd = typeof payload.contentMd === 'string' ? payload.contentMd : ''
@@ -1259,6 +1266,7 @@ export function confirmKnowledgeDraft(db: DatabaseSync, draftId: string, actor =
       tags: Array.isArray(payload.tags) ? payload.tags : [],
       sourceTaskId: typeof payload.sourceTaskId === 'string' ? payload.sourceTaskId : null,
       sourceSessionId: typeof payload.sourceSessionId === 'string' ? payload.sourceSessionId : draft.sessionId,
+      sourceReviewId: typeof payload.sourceReviewId === 'string' ? payload.sourceReviewId : null,
     }, at)
     setDraftStatus(db, draftId, 'confirmed', at)
     db.exec('COMMIT')

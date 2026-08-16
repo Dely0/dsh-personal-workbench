@@ -4,7 +4,7 @@
  */
 import type { DatabaseSync } from 'node:sqlite'
 
-export const SCHEMA_VERSION = 8
+export const SCHEMA_VERSION = 9
 
 export interface Migration {
   version: number
@@ -270,6 +270,13 @@ export const MIGRATIONS: Migration[] = [
         ) STRICT;
         CREATE INDEX idx_idea_links_idea ON idea_links(idea_id);
       `)
+    },
+  },
+  {
+    version: 9,
+    name: 'knowledge-source-review',
+    up(db) {
+      db.exec('ALTER TABLE knowledge_entries ADD COLUMN source_review_id TEXT')
     },
   },
 ]

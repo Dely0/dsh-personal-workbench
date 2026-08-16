@@ -293,6 +293,7 @@ export function submitKnowledgeTool(db: DatabaseSync) {
       kind_code: { type: 'string', description: 'note=笔记，lesson=经验教训，decision=决策记录，snippet=片段/模板；默认 lesson' },
       tags: { type: 'json', description: '标签数组，如 ["TTS","踩坑"]' },
       source_task_id: { type: 'string', description: '关联任务 id（可选）' },
+      source_review_id: { type: 'string', description: '来源复盘记录 id（可选；同一复盘只允许沉淀一次）' },
     },
     output: {
       schema: { type: 'string' },
@@ -322,6 +323,7 @@ export function submitKnowledgeTool(db: DatabaseSync) {
         kindCode,
         tags,
         sourceTaskId: str(args.source_task_id) ?? null,
+        sourceReviewId: str(args.source_review_id) ?? null,
       }
       const draft = existing !== undefined
         ? updateDraft(db, existing.id, payload)
