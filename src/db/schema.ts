@@ -4,7 +4,7 @@
  */
 import type { DatabaseSync } from 'node:sqlite'
 
-export const SCHEMA_VERSION = 6
+export const SCHEMA_VERSION = 7
 
 export interface Migration {
   version: number
@@ -211,6 +211,27 @@ export const MIGRATIONS: Migration[] = [
         ALTER TABLE tasks ADD COLUMN recurrence_last_generated TEXT;
         CREATE INDEX idx_tasks_recurrence_master ON tasks(recurrence_master_id);
         CREATE INDEX idx_tasks_recurrence_code ON tasks(recurrence_code);
+      `)
+    },
+  },
+  {
+    version: 7,
+    name: 'knowledge-base',
+    up(db) {
+      db.exec(`
+        CREATE TABLE knowledge_entries (
+          id               TEXT PRIMARY KEY,
+          kind_code        TEXT NOT NULL DEFAULT 'note',
+          title            TEXT NOT NULL,
+          content_md       TEXT NOT NULL DEFAULT '',
+          tags_json        TEXT NOT NULL DEFAULT '[]',
+          source_task_id   TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+          source_session_id TEXT,
+          created_at       TEXT NOT NULL,
+          updated_at       TEXT NOT NULL
+        ) STRICT;
+        CREATE INDEX idx_knowledge_kind ON knowledge_entries(kind_code, updated_at DESC);
+        CREATE INDEX idx_knowledge_source ON knowledge_entries(source_task_id);
       `)
     },
   },

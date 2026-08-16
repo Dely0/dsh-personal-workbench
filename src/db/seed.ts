@@ -55,6 +55,13 @@ export const DICTIONARY_SEEDS: DictionarySeed[] = [
   { kind: 'draft_kind', code: 'review', name: '复盘确认', sortOrder: 40, config: {} },
   { kind: 'draft_kind', code: 'daily_plan', name: '今日计划', sortOrder: 50, config: {} },
   { kind: 'draft_kind', code: 'report', name: '日报/周报', sortOrder: 60, config: {} },
+  { kind: 'draft_kind', code: 'knowledge', name: '知识条目', sortOrder: 70, config: {} },
+
+  // 知识库分类
+  { kind: 'knowledge_kind', code: 'note', name: '笔记', sortOrder: 10, config: {} },
+  { kind: 'knowledge_kind', code: 'lesson', name: '经验教训', sortOrder: 20, config: {} },
+  { kind: 'knowledge_kind', code: 'decision', name: '决策记录', sortOrder: 30, config: {} },
+  { kind: 'knowledge_kind', code: 'snippet', name: '片段/模板', sortOrder: 40, config: {} },
 
   // 重复规则
   { kind: 'recurrence', code: 'none', name: '不重复', sortOrder: 10, config: {} },

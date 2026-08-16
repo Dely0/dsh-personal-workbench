@@ -5,7 +5,7 @@
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { DatabaseSync } from 'node:sqlite'
-import { createDraft, getDictionary, getDraft, getPendingDailyPlanDraft, getPendingDraftForTask, getPendingReportDraft, getTask, listChildren, localDateString, updateDraft, updateTask } from './db/repo.js'
+import { createDraft, getDictionary, getDraft, getPendingDailyPlanDraft, getPendingDraftForTask, getPendingKnowledgeDraft, getPendingReportDraft, getTask, listChildren, localDateString, updateDraft, updateTask } from './db/repo.js'
 
 function text(value: string): ContentBlock[] {
   return [{ type: 'text', text: value }]
@@ -178,6 +178,57 @@ export function proposeDailyPlanTool(db: DatabaseSync) {
         : createDraft(db, { kindCode: 'daily_plan', sessionId, payload })
       const preview = items.map((item, i) => `${i + 1}. ${item.title}${item.note !== '' ? `（${item.note}）` : ''}`).join('\n')
       return `今日计划提案已保存（id=${draft?.id}），等待用户在工作台确认。\n\n${preview}\n\n请用一句话告知用户可以检查计划草稿；不要声称排序已生效。`
+    },
+  })
+}
+
+export function submitKnowledgeTool(db: DatabaseSync) {
+  return defineTool({
+    name: 'workbench_submit_knowledge',
+    description:
+      '个人工作台知识库工具：把值得沉淀的经验教训、决策、笔记或可复用片段提交为知识条目草稿（pending），由用户在工作台确认后才入库。' +
+      'kind_code 可选 note/lesson/decision/snippet；tags 为字符串数组；source_task_id 可选，用于关联任务。同一会话重复提交会更新同一草稿。',
+    parameters: {
+      draft_id: { type: 'string', description: '已有知识草稿 id；修改后再次提交时传' },
+      title: { type: 'string', required: true, description: '知识标题，简洁可检索' },
+      content_md: { type: 'string', required: true, description: 'Markdown 正文：背景/结论/可复用做法' },
+      kind_code: { type: 'string', description: 'note=笔记，lesson=经验教训，decision=决策记录，snippet=片段/模板；默认 lesson' },
+      tags: { type: 'json', description: '标签数组，如 ["TTS","踩坑"]' },
+      source_task_id: { type: 'string', description: '关联任务 id（可选）' },
+    },
+    output: {
+      schema: { type: 'string' },
+      render: (_args, value: string) => text(value),
+    },
+    async execute(args: Record<string, unknown>, exec: { agent?: { session?: { id?: string } } }) {
+      const title = str(args.title)
+      if (title === undefined) return '错误：title 必填'
+      const contentMd = str(args.content_md)
+      if (contentMd === undefined) return '错误：content_md 必填'
+      const kindCode = str(args.kind_code) ?? 'lesson'
+      if (getDictionary(db, 'knowledge_kind', kindCode) === undefined) return `错误：kind_code 不是有效的 knowledge_kind: ${kindCode}`
+      if (typeof args.source_task_id === 'string' && args.source_task_id !== '' && getTask(db, args.source_task_id) === undefined) {
+        return `错误：source_task_id 任务不存在：${args.source_task_id}`
+      }
+      const tags = Array.isArray(args.tags) ? args.tags.filter((tag): tag is string => typeof tag === 'string').slice(0, 20) : []
+
+      const sessionId = exec.agent?.session?.id ?? null
+      const draftId = str(args.draft_id)
+      const existing = draftId === undefined ? getPendingKnowledgeDraft(db, sessionId) : getDraft(db, draftId)
+      if (draftId !== undefined && existing === undefined) return `错误：草稿 ${draftId} 不存在`
+      if (existing !== undefined && existing.statusCode !== 'pending') return `错误：草稿 ${draftId ?? existing.id} 状态为 ${existing.statusCode}，不能更新`
+
+      const payload = {
+        title,
+        contentMd,
+        kindCode,
+        tags,
+        sourceTaskId: str(args.source_task_id) ?? null,
+      }
+      const draft = existing !== undefined
+        ? updateDraft(db, existing.id, payload)
+        : createDraft(db, { kindCode: 'knowledge', sessionId, payload })
+      return `知识草稿已保存（id=${draft?.id}），等待用户在工作台确认后入库。请勿声称已存入知识库。`
     },
   })
 }

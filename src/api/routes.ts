@@ -6,12 +6,12 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import type { DatabaseSync } from 'node:sqlite'
 import {
-  abandonDraft, addReminder, archiveTask, confirmDailyPlanDraft, confirmReportDraft, confirmSubtaskPlanDraft, confirmTaskDraft,
-  createTaskReview,
-  createDraft, createTask, deleteDailyPlan, deleteTaskReport, ensureRecurringInstances, fireReminder, getAiSession, getDailyPlan, getDictionary, getDraft, getDraftBySession,
-  getLatestPendingDraft, getTask, getTaskReport, linkTaskSession, listArchivedTasks, listChildren,
-  listDictionaries, listDueReminders, listReminders, listTaskEvents, listTaskReports, listTaskReviews,
-  listTaskSessions, listTasks, localDateString, registerAiSession, restoreTask, updateTask, type ReportPeriodCode, type TaskInput,
+  abandonDraft, addReminder, archiveTask, confirmDailyPlanDraft, confirmKnowledgeDraft, confirmReportDraft, confirmSubtaskPlanDraft, confirmTaskDraft,
+  createKnowledge, createTaskReview,
+  createDraft, createTask, deleteDailyPlan, deleteKnowledge, deleteTaskReport, ensureRecurringInstances, fireReminder, getAiSession, getDailyPlan, getDictionary, getDraft, getDraftBySession,
+  getKnowledge, getLatestPendingDraft, getTask, getTaskReport, linkTaskSession, listArchivedTasks, listChildren,
+  listDictionaries, listDueReminders, listKnowledge, listReminders, listTaskEvents, listTaskReports, listTaskReviews,
+  listTaskSessions, listTasks, localDateString, registerAiSession, restoreTask, updateKnowledge, updateTask, type ReportPeriodCode, type TaskInput,
 } from '../db/repo.js'
 
 const TASKS_PREFIX = '/api/workbench/tasks'
@@ -20,6 +20,7 @@ const REMINDERS_PREFIX = '/api/workbench/reminders'
 const PLANS_PREFIX = '/api/workbench/plans'
 const REPORTS_PREFIX = '/api/workbench/reports'
 const AI_SESSIONS_PREFIX = '/api/workbench/ai-sessions'
+const KNOWLEDGE_PREFIX = '/api/workbench/knowledge'
 
 function isLoopbackRequest(req: IncomingMessage): boolean {
   const address = req.socket.remoteAddress
@@ -438,6 +439,9 @@ export function makeRoutes(db: DatabaseSync): WebRoute[] {
             if (draft.kindCode === 'report') {
               return writeJson(res, 200, { ok: true, report: confirmReportDraft(db, id) })
             }
+            if (draft.kindCode === 'knowledge') {
+              return writeJson(res, 200, { ok: true, knowledge: confirmKnowledgeDraft(db, id) })
+            }
             if (draft.kindCode === 'review') {
               const taskId = typeof draft.payload.taskId === 'string' ? draft.payload.taskId : undefined
               const summaryMd = typeof draft.payload.summaryMd === 'string' ? draft.payload.summaryMd : ''
@@ -487,6 +491,69 @@ export function makeRoutes(db: DatabaseSync): WebRoute[] {
         if (segments.length === 2 && segments[1] === 'fire' && method === 'POST') {
           fireReminder(db, segments[0])
           return writeJson(res, 200, { ok: true })
+        }
+        return writeJson(res, 404, { error: 'not found' })
+      },
+    },
+    // ------------------------------------------------------------------ knowledge
+    {
+      kind: 'prefix',
+      path: KNOWLEDGE_PREFIX,
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) return writeJson(res, 403, { error: 'forbidden: loopback-only' })
+        const url = new URL(req.url ?? '/', 'http://localhost')
+        const segments = pathSegments(url, KNOWLEDGE_PREFIX)
+        const method = req.method ?? 'GET'
+        const body = ['POST', 'PATCH'].includes(method) ? await readJsonBody(req) : undefined
+        if (segments.length === 0) {
+          if (method === 'GET') {
+            const q = url.searchParams.get('q') ?? undefined
+            const kindCode = url.searchParams.get('kind_code') ?? undefined
+            if (kindCode !== undefined && getDictionary(db, 'knowledge_kind', kindCode) === undefined) return writeJson(res, 400, { error: 'unknown knowledge_kind' })
+            return writeJson(res, 200, { ok: true, entries: listKnowledge(db, { q, kindCode }) })
+          }
+          if (method === 'POST') {
+            if (body === undefined) return writeJson(res, 400, { error: 'invalid JSON body' })
+            try {
+              const title = typeof body.title === 'string' ? body.title.trim() : ''
+              if (title === '') throw new Error('title is required')
+              const kindCode = typeof body.kindCode === 'string' ? body.kindCode : 'note'
+              requireCode(db, 'knowledge_kind', kindCode, 'kindCode')
+              const tags = Array.isArray(body.tags) ? body.tags.filter((tag): tag is string => typeof tag === 'string').slice(0, 20) : []
+              const entry = createKnowledge(db, {
+                kindCode,
+                title,
+                contentMd: typeof body.contentMd === 'string' ? body.contentMd : '',
+                tags,
+                sourceTaskId: typeof body.sourceTaskId === 'string' ? body.sourceTaskId : null,
+                sourceSessionId: typeof body.sourceSessionId === 'string' ? body.sourceSessionId : null,
+              })
+              return writeJson(res, 201, { ok: true, knowledge: entry })
+            } catch (error) {
+              return writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
+            }
+          }
+          return writeJson(res, 405, { error: 'method not allowed' })
+        }
+        const id = segments[0]
+        if (method === 'GET' && segments.length === 1) {
+          const entry = getKnowledge(db, id)
+          return writeJson(res, entry === undefined ? 404 : 200, entry === undefined ? { error: 'knowledge not found' } : { ok: true, knowledge: entry })
+        }
+        if (method === 'PATCH' && segments.length === 1) {
+          if (body === undefined) return writeJson(res, 400, { error: 'invalid JSON body' })
+          const patch: Parameters<typeof updateKnowledge>[2] = {}
+          if (typeof body.title === 'string') patch.title = body.title.trim()
+          if (typeof body.contentMd === 'string') patch.contentMd = body.contentMd
+          if (typeof body.kindCode === 'string') { requireCode(db, 'knowledge_kind', body.kindCode, 'kindCode'); patch.kindCode = body.kindCode }
+          if (Array.isArray(body.tags)) patch.tags = body.tags.filter((tag): tag is string => typeof tag === 'string').slice(0, 20)
+          if ('sourceTaskId' in body) patch.sourceTaskId = typeof body.sourceTaskId === 'string' ? body.sourceTaskId : null
+          const entry = updateKnowledge(db, id, patch)
+          if (entry === undefined) return writeJson(res, 404, { error: 'knowledge not found' })
+          return writeJson(res, 200, { ok: true, knowledge: entry })
+        }
+        if (method === 'DELETE' && segments.length === 1) {
+          return writeJson(res, 200, { ok: true, deleted: deleteKnowledge(db, id) })
         }
         return writeJson(res, 404, { error: 'not found' })
       },
@@ -600,7 +667,7 @@ export function makeRoutes(db: DatabaseSync): WebRoute[] {
         writeJson(res, 200, {
           ok: true,
           name: 'dsh-workbench',
-          version: '0.12.4',
+          version: '1.0.0',
           db: {
             schemaVersion: versionRow?.value ?? 'unknown',
             taskCount: listTasks(db, { includeArchived: true }).length,

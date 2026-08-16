@@ -138,6 +138,7 @@ interface Task {
 interface DailyPlanItemView { taskId: string; order: number; title: string; note: string }
 interface DailyPlanView { id: string; planDate: string; summary: string; items: DailyPlanItemView[]; sourceCode: string; sessionId: string | null; createdAt: string; updatedAt: string }
 interface TaskReportView { id: string; periodCode: 'day' | 'week'; periodStart: string; title: string; summaryMd: string; stats: Record<string, unknown>; sessionId: string | null; createdAt: string; updatedAt: string }
+interface KnowledgeEntry { id: string; kindCode: string; title: string; contentMd: string; tags: string[]; sourceTaskId: string | null; sourceSessionId: string | null; createdAt: string; updatedAt: string }
 interface Bootstrap { dictionaries: Dict[]; stats: { overdue: number; todayDue: number; doing: number; total: number }; todayPlan?: DailyPlanView | null }
 interface TaskDetail { task: Task; children: Task[]; sessions: Array<Record<string, unknown>>; reminders: Array<{ id: string; taskId: string; offsetMinutes: number; methodCode: string; firedAt: string | null }>; events: Array<Record<string, unknown>>; reviews: Array<Record<string, unknown>> }
 interface DraftView { id: string; kindCode: string; statusCode: string; sessionId: string | null; payload: Record<string, unknown> }
@@ -206,6 +207,7 @@ function Icon({ name, size = 16 }: { name: string; size?: number }): JSX.Element
     case 'breakdown': return <svg {...common}><path d="M3 4h4M3 8h4M3 12h4M9.5 4h3.5M9.5 8h3.5M9.5 12h3.5" /></svg>
     case 'subtask': return <svg {...common}><path d="M8 2v12M2 8h12" /></svg>
     case 'archive': return <svg {...common}><rect x="2.5" y="3" width="11" height="3.5" rx="1" /><path d="M4 6.5h8v6H4v-6zM6.5 9h3" /></svg>
+    case 'book': return <svg {...common}><path d="M3 2.5h6.5v11H3zM9.5 2.5H13v11H9.5z" /><path d="M3 2.5v11M13 2.5v11" /></svg>
     case 'chevron': return <svg {...common}><path d="M6 3l5 5-5 5" /></svg>
     default: return <svg {...common}><circle cx="8" cy="8" r="5" /></svg>
   }
@@ -407,12 +409,31 @@ function TaskRow({ task, dicts, onOpen, selected, bare = false }: { task: Task; 
   )
 }
 
-function DraftBanner({ draft, onDone, runtime, closePanel }: { draft: DraftView; onDone: () => void; runtime: WorkbenchRuntime; closePanel: () => void }): JSX.Element {
+function DraftBanner({ draft, onDone, runtime, closePanel, kindName }: { draft: DraftView; onDone: () => void; runtime: WorkbenchRuntime; closePanel: () => void; kindName: (kind: string, code: string) => string }): JSX.Element {
   const subtasks = Array.isArray(draft.payload.subtasks) ? draft.payload.subtasks as Array<{ title?: string }> : []
   const [busy, setBusy] = useState(false)
   const act = async (path: string): Promise<void> => {
     setBusy(true)
     try { await api(path, { method: 'POST' }); onDone() } finally { setBusy(false) }
+  }
+  if (draft.kindCode === 'knowledge') {
+    const title = String(draft.payload.title ?? '')
+    const contentMd = String(draft.payload.contentMd ?? '')
+    const tags = Array.isArray(draft.payload.tags) ? draft.payload.tags as string[] : []
+    const sessionId = typeof draft.sessionId === 'string' && draft.sessionId !== '' ? draft.sessionId : ''
+    return (
+      <div className="wb-banner review">
+        <h4>💡 知识条目待确认（{kindName('knowledge_kind', String(draft.payload.kindCode ?? 'lesson'))}）</h4>
+        <div style={{ fontWeight: 600, marginBottom: 4 }}>{title}</div>
+        {tags.length > 0 && <div style={{ fontSize: 12, color: '#999', marginBottom: 6 }}>{tags.map((tag) => `#${tag}`).join(' ')}</div>}
+        <div style={{ maxHeight: 240, overflow: 'auto' }}><MarkdownText text={contentMd} /></div>
+        <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+          <button className="wb-btn primary" disabled={busy} onClick={() => void act(`/api/workbench/drafts/${draft.id}/confirm`)}>确认入库</button>
+          <button className="wb-btn" disabled={busy} onClick={() => void act(`/api/workbench/drafts/${draft.id}/abandon`)}>放弃</button>
+          {sessionId !== '' && <button className="wb-btn" onClick={() => { closePanel(); runtime.sessions.open(sessionId) }}>回到会话</button>}
+        </div>
+      </div>
+    )
   }
   if (draft.kindCode === 'report') {
     const summaryMd = String(draft.payload.summaryMd ?? '')
@@ -497,7 +518,7 @@ function DraftBanner({ draft, onDone, runtime, closePanel }: { draft: DraftView;
 }
 
 function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; closePanel: () => void }): JSX.Element {
-  const [view, setView] = useState<'today' | 'calendar' | 'list'>('today')
+  const [view, setView] = useState<'today' | 'calendar' | 'list' | 'knowledge'>('today')
   const [bootstrap, setBootstrap] = useState<Bootstrap | null>(null)
   const [tasks, setTasks] = useState<Task[]>([])
   const [selected, setSelected] = useState<TaskDetail | null>(null)
@@ -519,6 +540,13 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   const [pickedPlan, setPickedPlan] = useState<DailyPlanView | null>(null)
   const [pickedPlanSession, setPickedPlanSession] = useState<{ sessionId: string } | null>(null)
   const [planRefreshKey, setPlanRefreshKey] = useState(0)
+  const [knowledgeEntries, setKnowledgeEntries] = useState<KnowledgeEntry[]>([])
+  const [knowledgeQuery, setKnowledgeQuery] = useState('')
+  const [knowledgeKind, setKnowledgeKind] = useState<string>('')
+  const [selectedKnowledge, setSelectedKnowledge] = useState<KnowledgeEntry | null>(null)
+  const [knowledgeDraft, setKnowledgeDraft] = useState<{ title: string; contentMd: string; kindCode: string; tags: string; sourceTaskId: string } | null>(null)
+  const [knowledgeEditId, setKnowledgeEditId] = useState<string | null>(null)
+  const [knowledgeRefreshKey, setKnowledgeRefreshKey] = useState(0)
   const [reportRefreshKey, setReportRefreshKey] = useState(0)
   const [todayPlanSession, setTodayPlanSession] = useState<{ sessionId: string } | null>(null)
   const [busy, setBusy] = useState(false)
@@ -542,6 +570,17 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
     }
   }, [])
 
+  const loadKnowledge = useCallback(async () => {
+    const params = new URLSearchParams()
+    if (knowledgeQuery.trim() !== '') params.set('q', knowledgeQuery.trim())
+    if (knowledgeKind !== '') params.set('kind_code', knowledgeKind)
+    const qs = params.toString()
+    const res = await api<{ entries: KnowledgeEntry[] }>(`/api/workbench/knowledge${qs === '' ? '' : `?${qs}`}`)
+    setKnowledgeEntries(res.entries)
+  }, [knowledgeQuery, knowledgeKind])
+  useEffect(() => {
+    if (view === 'knowledge') void loadKnowledge().catch(() => undefined)
+  }, [view, loadKnowledge, knowledgeRefreshKey])
   useEffect(() => { void refresh().catch((e: unknown) => setError(e instanceof Error ? e.message : String(e))) }, [refresh])
   useEffect(() => { void api<{ settings: { defaultWorkspace: string; autoCreateTypeFolders: boolean; desktopNotify: boolean } }>('/api/workbench/settings').then((r) => setSettings(r.settings)).catch(() => undefined) }, [])
 
@@ -834,6 +873,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
           <button className={`wb-seg ${view === 'today' ? 'on' : ''}`} onClick={() => setView('today')}><Icon name="today" />今日</button>
           <button className={`wb-seg ${view === 'calendar' ? 'on' : ''}`} onClick={() => setView('calendar')}><Icon name="calendar" />日历</button>
           <button className={`wb-seg ${view === 'list' ? 'on' : ''}`} onClick={() => setView('list')}><Icon name="list" />任务</button>
+          <button className={`wb-seg ${view === 'knowledge' ? 'on' : ''}`} onClick={() => setView('knowledge')}><Icon name="book" />知识库</button>
         </div>
         <div style={{ flex: 1 }} />
         <button className="wb-btn primary" onClick={() => setShowQuick((v) => !v)} disabled={busy}><Icon name="sparkles" />快速录入</button>
@@ -851,7 +891,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
           {reminders.map((r) => <div key={r.reminderId} style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 4 }}><span style={{ flex: 1 }}>{r.title} · {fmtTime(r.dueAt)}</span><button className="wb-btn" onClick={() => void fireReminder(r.reminderId)}>知道了</button></div>)}
         </div>
       )}
-      {pendingDraft !== null && <DraftBanner draft={pendingDraft} runtime={runtime} closePanel={closePanel} onDone={() => { setPendingDraft(null); setReportRefreshKey((v) => v + 1); void refresh() }} />}
+      {pendingDraft !== null && <DraftBanner draft={pendingDraft} runtime={runtime} closePanel={closePanel} kindName={(kind, code) => dicts.find((d) => d.kind === kind && d.code === code)?.name ?? code} onDone={() => { setPendingDraft(null); setReportRefreshKey((v) => v + 1); setKnowledgeRefreshKey((v) => v + 1); void refresh() }} />}
 
       <div className="wb-body">
         <div className="wb-nav">
@@ -1071,6 +1111,34 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
             </>
           )}
 
+          {view === 'knowledge' && (
+            <>
+              <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
+                <input style={{ flex: 1, minWidth: 140, background: 'var(--dsw-alias-bg-base,#17171a)', border: '1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.15))', color: 'inherit', borderRadius: 8, padding: '7px 10px' }} placeholder="搜索标题 / 内容 / 标签" value={knowledgeQuery} onChange={(e) => setKnowledgeQuery(e.target.value)} />
+                <select style={{ background: 'var(--dsw-alias-bg-base,#17171a)', border: '1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.15))', color: 'inherit', borderRadius: 8, padding: '7px 10px' }} value={knowledgeKind} onChange={(e) => setKnowledgeKind(e.target.value)}>
+                  <option value="">全部分类</option>
+                  {dictOf('knowledge_kind').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}
+                </select>
+                <button className="wb-btn primary" onClick={() => { setKnowledgeEditId(null); setKnowledgeDraft({ title: '', contentMd: '', kindCode: 'note', tags: '', sourceTaskId: '' }) }}><Icon name="plus" />新建</button>
+              </div>
+              <div className="wb-list">
+                {knowledgeEntries.map((entry) => (
+                  <div key={entry.id} className={`wb-row ${selectedKnowledge?.id === entry.id ? 'selected' : ''}`} onClick={() => { setKnowledgeEditId(null); setKnowledgeDraft(null); setSelectedKnowledge(entry) }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 600 }}>{entry.title}</div>
+                      <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', alignItems: 'center', marginTop: 3 }}>
+                        <Badge dict={dictOf('knowledge_kind')} code={entry.kindCode} />
+                        {entry.tags.map((tag) => <span key={tag} style={{ fontSize: 11, color: '#999' }}>#{tag}</span>)}
+                        <span style={{ fontSize: 11, color: '#999' }}>{new Date(entry.updatedAt).toLocaleString()}</span>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+                {knowledgeEntries.length === 0 && <div className="wb-empty">还没有知识条目，点“新建”或让 AI 在复盘后提交</div>}
+              </div>
+            </>
+          )}
+
           {view === 'list' && (
             <>
               <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
@@ -1092,7 +1160,45 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
         </div>
 
         <div className="wb-detail">
-          {selected === null
+          {view === 'knowledge'
+            ? knowledgeDraft !== null
+              ? (
+                <form className="wb-form" onSubmit={(e) => {
+                  e.preventDefault()
+                  if (knowledgeDraft.title.trim() === '') return
+                  const tags = knowledgeDraft.tags.split(/[,#，\s]+/).map((tag) => tag.trim()).filter((tag) => tag !== '').slice(0, 20)
+                  const isEdit = knowledgeEditId !== null
+                  const payload = { title: knowledgeDraft.title.trim(), contentMd: knowledgeDraft.contentMd, kindCode: knowledgeDraft.kindCode, tags, sourceTaskId: knowledgeDraft.sourceTaskId.trim() === '' ? null : knowledgeDraft.sourceTaskId.trim() }
+                  void api(isEdit ? `/api/workbench/knowledge/${knowledgeEditId}` : '/api/workbench/knowledge', { method: isEdit ? 'PATCH' : 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) })
+                    .then(() => { setKnowledgeDraft(null); setKnowledgeEditId(null); setKnowledgeRefreshKey((v) => v + 1); setNotice(isEdit ? '知识条目已更新' : '知识条目已创建') })
+                    .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)))
+                }}>
+                  <h4 className="full" style={{ margin: 0 }}>{knowledgeEditId === null ? '新建知识条目' : '编辑知识条目'}</h4>
+                  <label className="full">标题<input value={knowledgeDraft.title} onChange={(e) => setKnowledgeDraft((prev) => prev === null ? prev : { ...prev, title: e.target.value })} placeholder="可检索的标题" /></label>
+                  <label>分类<select value={knowledgeDraft.kindCode} onChange={(e) => setKnowledgeDraft((prev) => prev === null ? prev : { ...prev, kindCode: e.target.value })}>{dictOf('knowledge_kind').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
+                  <label>标签<input value={knowledgeDraft.tags} onChange={(e) => setKnowledgeDraft((prev) => prev === null ? prev : { ...prev, tags: e.target.value })} placeholder="用逗号/空格分隔，如 TTS, 踩坑" /></label>
+                  <label className="full">关联任务 id（可选）<input value={knowledgeDraft.sourceTaskId} onChange={(e) => setKnowledgeDraft((prev) => prev === null ? prev : { ...prev, sourceTaskId: e.target.value })} placeholder="留空表示不关联" /></label>
+                  <label className="full">正文（Markdown）<textarea rows={12} value={knowledgeDraft.contentMd} onChange={(e) => setKnowledgeDraft((prev) => prev === null ? prev : { ...prev, contentMd: e.target.value })} /></label>
+                  <div className="full" style={{ display: 'flex', gap: 8 }}><button className="wb-btn primary" type="submit"><Icon name="check" />保存</button><button className="wb-btn" type="button" onClick={() => { setKnowledgeDraft(null); setKnowledgeEditId(null) }}>取消</button></div>
+                </form>
+              )
+              : selectedKnowledge !== null
+                ? (
+                  <div className="wb-card">
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <h4 style={{ flex: 1, margin: 0 }}>{selectedKnowledge.title}</h4>
+                      <button className="wb-btn" onClick={() => { setKnowledgeEditId(selectedKnowledge.id); setKnowledgeDraft({ title: selectedKnowledge.title, contentMd: selectedKnowledge.contentMd, kindCode: selectedKnowledge.kindCode, tags: selectedKnowledge.tags.join(', '), sourceTaskId: selectedKnowledge.sourceTaskId ?? '' }) }}><Icon name="edit" />编辑</button>
+                      <button className="wb-btn" onClick={() => { if (window.confirm('删除这条知识？')) { void api(`/api/workbench/knowledge/${selectedKnowledge.id}`, { method: 'DELETE' }).then(() => { setSelectedKnowledge(null); setKnowledgeRefreshKey((v) => v + 1); setNotice('已删除') }).catch((err: unknown) => setError(err instanceof Error ? err.message : String(err))) } }}><Icon name="trash" />删除</button>
+                    </div>
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', margin: '8px 0' }}>
+                      <Badge dict={dictOf('knowledge_kind')} code={selectedKnowledge.kindCode} />
+                      {selectedKnowledge.tags.map((tag) => <span key={tag} style={{ fontSize: 12, color: '#999' }}>#{tag}</span>)}
+                    </div>
+                    <MarkdownText text={selectedKnowledge.contentMd} />
+                  </div>
+                )
+                : <div className="wb-empty">← 从左侧选择或新建知识条目</div>
+            : selected === null
             ? <div className="wb-empty">← 从左侧选择一个任务查看详情<br /><span style={{ fontSize: 12 }}>AI 澄清/咨询/拆解会跳转到官方会话区，完成后回这里确认草稿</span></div>
             : (
               <>
@@ -1244,7 +1350,12 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                 </div>
                 <div className="wb-card">
                   <h4>复盘记录（{selected.reviews?.length ?? 0}）</h4>
-                  {(selected.reviews ?? []).map((rv, i) => <div key={String(rv.id ?? i)} style={{ marginBottom: 8 }}><MarkdownText text={String(rv.summary_md ?? '')} /></div>)}
+                  {(selected.reviews ?? []).map((rv, i) => (
+                    <div key={String(rv.id ?? i)} style={{ marginBottom: 10, paddingBottom: 10, borderBottom: '1px solid var(--wb-border-soft)' }}>
+                      <MarkdownText text={String(rv.summary_md ?? '')} />
+                      <button className="wb-btn" style={{ marginTop: 6 }} onClick={() => { setKnowledgeEditId(null); setKnowledgeDraft({ title: `复盘：${selected.task.title}`, contentMd: String(rv.summary_md ?? ''), kindCode: 'lesson', tags: '复盘', sourceTaskId: selected.task.id }); setSelectedKnowledge(null); setView('knowledge') }}><Icon name="book" />沉淀为经验</button>
+                    </div>
+                  ))}
                   {(selected.reviews?.length ?? 0) === 0 && <div style={{ fontSize: 12, color: '#999' }}>暂无复盘；已完成任务可用“AI 复盘”。</div>}
                 </div>
                 <div className="wb-card">

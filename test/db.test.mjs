@@ -10,6 +10,7 @@ import {
   createDraft, confirmTaskDraft, confirmDailyPlanDraft, confirmReportDraft, getDailyPlan, deleteDailyPlan,
   getTaskReport, listTaskReports, deleteTaskReport,
   getAiSession, registerAiSession, listReminders, ensureRecurringInstances,
+  createKnowledge, listKnowledge, getKnowledge, deleteKnowledge, confirmKnowledgeDraft,
   getDraftBySession, listTaskSessions, linkTaskSession, localDateString,
 } from '../lib/db/repo.js'
 
@@ -79,6 +80,17 @@ test('db migrations, dictionaries and task tree', () => {
     assert.equal(listChildren(db, recurring.id).length, 2)
     assert.equal(ensureRecurringInstances(db, '2026-08-17'), 0)
     assert.equal(getTask(db, recurring.id).recurrenceLastGenerated, '2026-08-17')
+
+    // knowledge base: create / search / draft confirm / delete
+    const k1 = createKnowledge(db, { title: 'edge-tts 方案', kindCode: 'lesson', contentMd: '# 结论\n免费可用', tags: ['TTS', '踩坑'] })
+    assert.equal(listKnowledge(db, { q: 'edge' }).length, 1)
+    assert.equal(listKnowledge(db, { kindCode: 'lesson' }).length, 1)
+    const kDraft = createDraft(db, { kindCode: 'knowledge', sessionId: 's-know', payload: { title: 'AI 提交的经验', contentMd: '# 内容', kindCode: 'note', tags: ['AI'] } })
+    const kConfirmed = confirmKnowledgeDraft(db, kDraft.id)
+    assert.equal(kConfirmed.title, 'AI 提交的经验')
+    assert.equal(getKnowledge(db, kConfirmed.id).tags[0], 'AI')
+    assert.equal(deleteKnowledge(db, k1.id), true)
+    assert.equal(getKnowledge(db, k1.id), undefined)
     db.close()
   } finally {
     rmSync(dir, { recursive: true, force: true })

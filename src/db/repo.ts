@@ -1136,3 +1136,145 @@ export function ensureRecurringInstances(db: DatabaseSync, today = localDateStri
   }
   return created
 }
+
+// ---------------------------------------------------------------------------
+// knowledge base（V2.5：个人知识库 / 错题集）
+// ---------------------------------------------------------------------------
+
+export interface KnowledgeInput {
+  kindCode?: string
+  title: string
+  contentMd?: string
+  tags?: string[]
+  sourceTaskId?: string | null
+  sourceSessionId?: string | null
+}
+
+export interface KnowledgeRow {
+  id: string
+  kindCode: string
+  title: string
+  contentMd: string
+  tags: string[]
+  sourceTaskId: string | null
+  sourceSessionId: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+interface RawKnowledgeRow {
+  id: string
+  kind_code: string
+  title: string
+  content_md: string
+  tags_json: string
+  source_task_id: string | null
+  source_session_id: string | null
+  created_at: string
+  updated_at: string
+}
+
+function parseKnowledge(row: RawKnowledgeRow | undefined): KnowledgeRow | undefined {
+  if (row === undefined) return undefined
+  const tags: unknown = JSON.parse(row.tags_json)
+  return {
+    id: row.id,
+    kindCode: row.kind_code,
+    title: row.title,
+    contentMd: row.content_md,
+    tags: Array.isArray(tags) ? tags.filter((tag): tag is string => typeof tag === 'string') : [],
+    sourceTaskId: row.source_task_id,
+    sourceSessionId: row.source_session_id,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }
+}
+
+export function createKnowledge(db: DatabaseSync, input: KnowledgeInput, at = nowIso()): KnowledgeRow {
+  const id = randomUUID()
+  db.prepare(`
+    INSERT INTO knowledge_entries (id, kind_code, title, content_md, tags_json, source_task_id, source_session_id, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(id, input.kindCode ?? 'note', input.title, input.contentMd ?? '', JSON.stringify(input.tags ?? []), input.sourceTaskId ?? null, input.sourceSessionId ?? null, at, at)
+  return getKnowledge(db, id)!
+}
+
+export function getKnowledge(db: DatabaseSync, id: string): KnowledgeRow | undefined {
+  return parseKnowledge(db.prepare('SELECT * FROM knowledge_entries WHERE id = ?').get(id) as RawKnowledgeRow | undefined)
+}
+
+export function listKnowledge(db: DatabaseSync, opts: { q?: string; kindCode?: string; limit?: number } = {}): KnowledgeRow[] {
+  const conditions: string[] = []
+  const params: Array<string | number> = []
+  if (opts.kindCode !== undefined) { conditions.push('kind_code = ?'); params.push(opts.kindCode) }
+  if (typeof opts.q === 'string' && opts.q.trim() !== '') {
+    const like = `%${opts.q.trim()}%`
+    conditions.push('(title LIKE ? OR content_md LIKE ? OR tags_json LIKE ?)')
+    params.push(like, like, like)
+  }
+  const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
+  const limit = Math.max(1, Math.min(opts.limit ?? 200, 500))
+  const rows = db.prepare(`SELECT * FROM knowledge_entries ${where} ORDER BY updated_at DESC, created_at DESC LIMIT ?`).all(...params, limit) as unknown as RawKnowledgeRow[]
+  return rows.map((row) => parseKnowledge(row)).filter((entry): entry is KnowledgeRow => entry !== undefined)
+}
+
+export function updateKnowledge(db: DatabaseSync, id: string, patch: Partial<KnowledgeInput>, at = nowIso()): KnowledgeRow | undefined {
+  const before = getKnowledge(db, id)
+  if (before === undefined) return undefined
+  const next: KnowledgeRow = {
+    ...before,
+    kindCode: patch.kindCode ?? before.kindCode,
+    title: patch.title ?? before.title,
+    contentMd: patch.contentMd ?? before.contentMd,
+    tags: patch.tags ?? before.tags,
+    sourceTaskId: patch.sourceTaskId === undefined ? before.sourceTaskId : patch.sourceTaskId,
+    sourceSessionId: patch.sourceSessionId === undefined ? before.sourceSessionId : patch.sourceSessionId,
+    updatedAt: at,
+  }
+  db.prepare(`
+    UPDATE knowledge_entries SET kind_code = ?, title = ?, content_md = ?, tags_json = ?, source_task_id = ?, source_session_id = ?, updated_at = ?
+    WHERE id = ?
+  `).run(next.kindCode, next.title, next.contentMd, JSON.stringify(next.tags), next.sourceTaskId, next.sourceSessionId, next.updatedAt, id)
+  return next
+}
+
+export function deleteKnowledge(db: DatabaseSync, id: string): boolean {
+  return db.prepare('DELETE FROM knowledge_entries WHERE id = ?').run(id).changes > 0
+}
+
+export function confirmKnowledgeDraft(db: DatabaseSync, draftId: string, actor = 'user', at = nowIso()): KnowledgeRow | undefined {
+  const draft = getDraft(db, draftId)
+  if (draft === undefined || draft.kindCode !== 'knowledge') return undefined
+  const payload = draft.payload as { title?: string; contentMd?: string; kindCode?: string; tags?: string[]; sourceTaskId?: string; sourceSessionId?: string }
+  const title = typeof payload.title === 'string' ? payload.title.trim() : ''
+  if (title === '') throw new Error('knowledge requires a non-empty title')
+  const contentMd = typeof payload.contentMd === 'string' ? payload.contentMd : ''
+  if (contentMd.trim() === '') throw new Error('knowledge requires content')
+  db.exec('BEGIN')
+  try {
+    const entry = createKnowledge(db, {
+      kindCode: payload.kindCode ?? 'note',
+      title,
+      contentMd,
+      tags: Array.isArray(payload.tags) ? payload.tags : [],
+      sourceTaskId: typeof payload.sourceTaskId === 'string' ? payload.sourceTaskId : null,
+      sourceSessionId: typeof payload.sourceSessionId === 'string' ? payload.sourceSessionId : draft.sessionId,
+    }, at)
+    setDraftStatus(db, draftId, 'confirmed', at)
+    db.exec('COMMIT')
+    return entry
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
+  }
+}
+
+export function getPendingKnowledgeDraft(db: DatabaseSync, sessionId: string | null): DraftRow | undefined {
+  if (sessionId === null || sessionId === undefined) return undefined
+  const rows = db.prepare("SELECT * FROM task_drafts WHERE status_code = 'pending' AND kind_code = 'knowledge' ORDER BY created_at DESC").all() as unknown as RawDraftRow[]
+  for (const row of rows) {
+    const draft = parseDraft(row)
+    if (draft !== undefined && draft.sessionId === sessionId) return draft
+  }
+  return undefined
+}

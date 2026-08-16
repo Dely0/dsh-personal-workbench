@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openWorkbenchDb } from '../lib/db/database.js'
 import { seedDictionaries } from '../lib/db/seed.js'
-import { proposeDailyPlanTool, submitReportTool, submitTaskTool, updateTaskTool, requestCompletionTool } from '../lib/tools.js'
+import { proposeDailyPlanTool, submitKnowledgeTool, submitReportTool, submitTaskTool, updateTaskTool, requestCompletionTool } from '../lib/tools.js'
 import { createTask, getTask, getDraftBySession, getPendingDailyPlanDraft, getPendingDraftForTask, getPendingReportDraft, updateTask } from '../lib/db/repo.js'
 
 test('agent tools write pending drafts and update tasks', async () => {
@@ -79,6 +79,17 @@ test('agent tools write pending drafts and update tasks', async () => {
     )
     assert.match(reportOut2, /报告草稿已保存/)
     assert.equal(getPendingReportDraft(db, 'sess-report', 'day', localDateStr()).id, reportDraft.id)
+
+    const submitKnowledge = submitKnowledgeTool(db)
+    const kOut = await submitKnowledge.execute(
+      { title: '经验：先验证再开发', content_md: '# 结论', kind_code: 'lesson', tags: ['流程'] },
+      { agent: { session: { id: 'sess-know' } } },
+    )
+    assert.match(kOut, /知识草稿已保存/)
+    assert.match(await submitKnowledge.execute(
+      { title: '经验：先验证再开发 v2', content_md: '# 结论 v2', kind_code: 'lesson', tags: ['流程'] },
+      { agent: { session: { id: 'sess-know' } } },
+    ), /知识草稿已保存/)
     db.close()
   } finally {
     rmSync(dir, { recursive: true, force: true })
