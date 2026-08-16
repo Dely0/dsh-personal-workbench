@@ -26,47 +26,65 @@ html[${ACTIVE_ATTR}]:not([data-dsh-taskboard-active]):not([data-dsh-ssh-active])
 html[${ACTIVE_ATTR}]:not([data-dsh-taskboard-active]):not([data-dsh-ssh-active]) [data-pane='conversation'] > :not([${VIEW_ATTR}]),
 html[${ACTIVE_ATTR}]:not([data-dsh-taskboard-active]):not([data-dsh-ssh-active]) [class*='centerCol'] > :not([${VIEW_ATTR}]) { display: none !important; }
 [${ENTRY_ATTR}] { position:relative; display:flex; align-items:center; gap:8px; width:100%; height:32px; padding:0 12px; background:transparent; border:none; border-radius:8px; color:var(--dsw-alias-label-secondary); cursor:pointer; font-size:13px; white-space:nowrap; text-align:left; }
+[${ENTRY_ATTR}] svg { width:16px; height:16px; flex:none; }
 [${ENTRY_ATTR}]:hover { background: var(--dsw-specific-sidebar-nav-item-hover); color: var(--dsw-alias-label-primary); }
 [${ENTRY_ATTR}][data-active] { background: var(--dsw-specific-sidebar-nav-item-active); color: var(--dsw-alias-label-primary); font-weight:600; }
 html[${PENDING_ATTR}] [${ENTRY_ATTR}]::after { content:''; position:absolute; top:6px; right:10px; width:7px; height:7px; border-radius:50%; background:#e74c3c; }
 [data-dsh-frame][data-sidebar-collapsed] [${ENTRY_ATTR}] { justify-content:center; padding:0; width:100%; }
 [data-dsh-frame][data-sidebar-collapsed] [${ENTRY_ATTR}] .wb-label { display:none; }
 .wb-app { height:100%; display:flex; flex-direction:column; }
-.wb-h { flex:none; display:flex; align-items:center; gap:10px; padding:20px 22px 12px; border-bottom:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.10)); }
-.wb-title { font-size:17px; font-weight:600; letter-spacing:.02em; }
-.wb-tabs { display:flex; gap:4px; }
-.wb-tab { background:none; border:none; border-bottom:2px solid transparent; color:var(--dsw-alias-label-secondary); padding:8px 12px; cursor:pointer; font:inherit; font-weight:500; }
-.wb-tab.on { color:var(--dsw-alias-label-primary); border-bottom-color:#8fa8c8; }
-.wb-btn { border:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.16)); background:transparent; color:inherit; border-radius:8px; padding:6px 12px; cursor:pointer; font:inherit; }
-.wb-btn.primary { background: color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 16%, transparent); border:1px solid color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 35%, transparent); color:var(--dsw-alias-label-primary); }
+.wb-h { flex:none; display:flex; align-items:center; gap:12px; padding:14px 18px; border-bottom:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.22)); background:var(--dsw-alias-bg-layer-1, rgba(255,255,255,.02)); }
+.wb-title { display:flex; align-items:center; gap:8px; font-size:16px; font-weight:700; letter-spacing:.02em; white-space:nowrap; }
+.wb-title svg { width:19px; height:19px; color:var(--dsw-alias-state-business-primary, #8fa8c8); }
+.wb-segmented { display:inline-flex; padding:3px; border-radius:10px; background:var(--dsw-alias-bg-base, #111); border:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.20)); }
+.wb-seg { display:inline-flex; align-items:center; gap:6px; border:none; background:transparent; color:var(--dsw-alias-label-secondary); padding:7px 16px; border-radius:8px; cursor:pointer; font:inherit; font-weight:600; font-size:13.5px; }
+.wb-seg svg { width:15px; height:15px; }
+.wb-seg.on { background: color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 14%, transparent); color:var(--dsw-alias-label-primary); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 32%, transparent); }
+.wb-sub-segmented { padding:2px; }
+.wb-sub-segmented .wb-seg { padding:6px 14px; font-size:12.5px; }
+.wb-sub-segmented .count { min-width:17px; height:17px; padding:0 5px; border-radius:9px; background: color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 14%, transparent); color: var(--dsw-alias-label-primary); font-size:11px; display:inline-flex; align-items:center; justify-content:center; }
+.wb-btn { display:inline-flex; align-items:center; gap:6px; border:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.26)); background:var(--dsw-alias-bg-layer-1, transparent); color:var(--dsw-alias-label-secondary); border-radius:9px; padding:7px 11px; cursor:pointer; font:inherit; font-size:13px; }
+.wb-btn svg { width:15px; height:15px; }
+.wb-btn:hover { background: color-mix(in srgb, var(--dsw-alias-label-primary, #fff) 6%, transparent); color:var(--dsw-alias-label-primary); }
+.wb-btn.primary { background: color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 16%, transparent); border:1px solid color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 38%, transparent); color:var(--dsw-alias-label-primary); }
 .wb-body { flex:1; min-height:0; display:flex; }
-.wb-nav { flex:0 0 58%; min-width:0; overflow:auto; padding:16px 18px; box-sizing:border-box; border-right:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.08)); }
-.wb-detail { flex:1; min-width:0; overflow:auto; padding:12px 14px; box-sizing:border-box; }
-.wb-stats { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin-bottom:10px; }
-.wb-stat { border:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.10)); background:var(--dsw-alias-bg-layer-1, rgba(255,255,255,.02)); border-radius:12px; padding:12px 14px; }
+.wb-nav { flex:0 0 56%; min-width:0; overflow:auto; padding:16px 18px; box-sizing:border-box; border-right:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.14)); }
+.wb-detail { flex:1; min-width:0; overflow:auto; padding:16px 18px; box-sizing:border-box; }
+.wb-stats { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin-bottom:12px; }
+.wb-stat { border:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.20)); background:var(--dsw-alias-bg-layer-1, rgba(255,255,255,.03)); border-radius:12px; padding:12px 14px; box-shadow:0 2px 8px rgba(0,0,0,.06); }
 .wb-stat b { font-size:20px; }
 .wb-stat span { display:block; color:var(--dsw-alias-label-secondary); font-size:12px; }
-.wb-card { border:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.12)); background: var(--dsw-alias-bg-layer-1, rgba(255,255,255,.02)); border-radius:14px; padding:16px; margin-bottom:12px; box-shadow:none; }
-.wb-card h4 { margin:0 0 8px; }
-.wb-list { border:1px solid var(--dsw-alias-border-l1, rgba(255,255,255,.12)); border-radius:10px; overflow:hidden; }
-.wb-row { display:flex; align-items:center; gap:8px; padding:10px 12px; border-bottom:1px solid var(--dsw-alias-border-l1, rgba(255,255,255,.08)); cursor:pointer; transition:background .12s ease; }
+.wb-card { border:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.26)); background: var(--dsw-alias-bg-layer-1, rgba(255,255,255,.03)); border-radius:14px; padding:16px; margin-bottom:14px; box-shadow:0 6px 18px rgba(0,0,0,.08); }
+.wb-card h4 { margin:0 0 10px; padding-bottom:10px; border-bottom:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.16)); display:flex; align-items:center; gap:8px; font-size:14px; font-weight:700; }
+.wb-card h4 svg { width:16px; height:16px; color:var(--dsw-alias-state-business-primary, #8fa8c8); flex:none; }
+.wb-plan { border-left:4px solid var(--dsw-alias-state-business-primary, #8fa8c8); background: linear-gradient(90deg, color-mix(in srgb, var(--dsw-alias-state-business-primary, #8fa8c8) 9%, transparent), color-mix(in srgb, var(--dsw-alias-state-business-primary, #8fa8c8) 3%, transparent) 45%, var(--dsw-alias-bg-layer-1, rgba(255,255,255,.03)) 100%); }
+.wb-plan-item { display:flex; align-items:center; margin:7px 0; font-size:13.5px; }
+.wb-plan-num { display:inline-flex; width:20px; height:20px; border-radius:50%; background: color-mix(in srgb, var(--dsw-alias-state-business-primary, #8fa8c8) 16%, transparent); border:1px solid color-mix(in srgb, var(--dsw-alias-state-business-primary, #8fa8c8) 40%, transparent); color:var(--dsw-alias-label-primary); font-size:11px; font-weight:700; align-items:center; justify-content:center; margin-right:8px; flex:none; }
+.wb-plan-note { color:var(--dsw-alias-label-secondary); margin-left:8px; font-size:12.5px; }
+.wb-list { border:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.24)); border-radius:12px; overflow:hidden; background:var(--dsw-alias-bg-layer-1, rgba(255,255,255,.03)); }
+.wb-row { display:flex; align-items:center; gap:8px; padding:11px 12px; border-bottom:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.12)); cursor:pointer; transition:background .12s ease; }
 .wb-row:last-child { border-bottom:none; }
-.wb-row:hover { background:rgba(143,168,200,.08); }
-.wb-row.selected { background:rgba(143,168,200,.12); box-shadow:inset 2px 0 0 #8fa8c8; }
-.wb-chip { border-radius:6px; padding:2px 7px; font-size:11px; white-space:nowrap; }
+.wb-row:hover { background: color-mix(in srgb, var(--dsw-alias-label-primary, #fff) 5%, transparent); }
+.wb-row.selected { background: color-mix(in srgb, var(--dsw-alias-state-business-primary, #8fa8c8) 12%, transparent); box-shadow:inset 3px 0 0 var(--dsw-alias-state-business-primary, #8fa8c8); }
+.wb-row-title { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.wb-row-meta { flex:none; display:grid; grid-template-columns:68px 46px 56px 88px; align-items:center; gap:6px; }
+.wb-row-meta .wb-chip { display:inline-flex; align-items:center; justify-content:center; width:100%; padding-left:0; padding-right:0; text-align:center; }
+.wb-due { text-align:right; color:var(--dsw-alias-label-secondary); font-size:12px; font-variant-numeric:tabular-nums; white-space:nowrap; }
+.wb-chip { display:inline-flex; align-items:center; justify-content:center; border-radius:6px; padding:2px 7px; font-size:11px; white-space:nowrap; }
 .wb-cal-nav { display:flex; align-items:center; gap:8px; margin-bottom:10px; }
 .wb-week { display:grid; grid-template-columns:repeat(7,1fr); gap:6px; margin-bottom:10px; }
-.wb-day { border:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.10)); background:var(--dsw-alias-bg-layer-1, rgba(255,255,255,.02)); border-radius:12px; min-height:92px; padding:8px; cursor:pointer; transition:border-color .12s ease, background .12s ease; }
-.wb-day.today { border-color: color-mix(in srgb, #8fa8c8 45%, transparent); }
-.wb-day.selected { border-color:#8fa8c8; background:rgba(143,168,200,.12); }
+.wb-day { border:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.18)); background:var(--dsw-alias-bg-layer-1, rgba(255,255,255,.03)); border-radius:12px; min-height:92px; padding:8px; cursor:pointer; transition:border-color .12s ease, background .12s ease; }
+.wb-day.today { border-color: color-mix(in srgb, var(--dsw-alias-state-business-primary, #8fa8c8) 50%, transparent); }
+.wb-day.selected { border-color:var(--dsw-alias-state-business-primary, #8fa8c8); background: color-mix(in srgb, var(--dsw-alias-state-business-primary, #8fa8c8) 10%, transparent); }
 .wb-month { display:grid; grid-template-columns:repeat(7,1fr); gap:6px; margin-bottom:10px; }
-.wb-mday { min-height:52px; border:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.08)); background:var(--dsw-alias-bg-layer-1, rgba(255,255,255,.02)); border-radius:10px; padding:5px; cursor:pointer; color:var(--dsw-alias-label-secondary); }
+.wb-mday { min-height:52px; border:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.16)); background:var(--dsw-alias-bg-layer-1, rgba(255,255,255,.03)); border-radius:10px; padding:5px; cursor:pointer; color:var(--dsw-alias-label-secondary); }
 .wb-mday.other { opacity:.35; }
 .wb-mday.today { border-color: var(--dsw-alias-state-business-primary, #4f8ef7); }
-.wb-mday.selected { background:rgba(79,142,247,.15); }
+.wb-mday.selected { background: color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 12%, transparent); }
 .wb-form { display:grid; grid-template-columns:1fr 1fr; gap:10px; border:1px solid var(--dsw-alias-border-l1, rgba(255,255,255,.12)); border-radius:10px; padding:12px; }
-.wb-form-panel { border:1px solid rgba(143,168,200,.65) !important; border-left:6px solid #8fa8c8 !important; border-radius:14px !important; padding:16px !important; background:color-mix(in srgb, #8fa8c8 8%, transparent) !important; box-shadow:0 10px 28px rgba(0,0,0,.15); margin-bottom:12px; }
-.wb-form-panel h4 { margin:0 0 10px; font-size:15px; color:var(--dsw-alias-label-primary); }
+.wb-form-panel { border:1px solid color-mix(in srgb, var(--dsw-alias-state-business-primary, #8fa8c8) 45%, transparent) !important; border-left:4px solid var(--dsw-alias-state-business-primary, #8fa8c8) !important; border-radius:14px !important; padding:16px !important; background: color-mix(in srgb, var(--dsw-alias-state-business-primary, #8fa8c8) 8%, var(--dsw-alias-bg-base, #111)) !important; box-shadow:0 10px 28px rgba(0,0,0,.15); margin-bottom:12px; }
+.wb-form-panel h4 { margin:0 0 10px; font-size:15px; color:var(--dsw-alias-label-primary); display:flex; align-items:center; gap:8px; }
+.wb-form-panel h4 svg { width:16px; height:16px; color:var(--dsw-alias-state-business-primary, #8fa8c8); }
 .wb-btn.lg { padding:8px 16px; font-size:14px; font-weight:600; }
 .wb-form label { display:flex; flex-direction:column; gap:4px; font-size:12px; color:var(--dsw-alias-label-secondary); }
 .wb-form input, .wb-form select, .wb-form textarea { background: var(--dsw-alias-bg-base,#17171a); border:1px solid var(--dsw-alias-border-l1, rgba(255,255,255,.15)); color:inherit; border-radius:8px; padding:7px 10px; font:inherit; }
@@ -154,6 +172,31 @@ const fmtTime = (iso: string): string => {
 const sameDay = (a: Date, b: Date): boolean => a.toDateString() === b.toDateString()
 const startOfDay = (d: Date): Date => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x }
 const startOfWeek = (d: Date): Date => { const x = startOfDay(d); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return x }
+
+function Icon({ name, size = 16 }: { name: string; size?: number }): JSX.Element {
+  const common = { width: size, height: size, viewBox: '0 0 16 16', fill: 'none', stroke: 'currentColor', strokeWidth: 1.5, 'aria-hidden': true }
+  switch (name) {
+    case 'today': return <svg {...common}><circle cx="8" cy="8" r="5.5" /><path d="M8 5.5V8l1.8 1.8" /></svg>
+    case 'calendar': return <svg {...common}><rect x="2" y="3" width="12" height="11" rx="2" /><path d="M2 6.5h12M5.5 2v3M10.5 2v3" /></svg>
+    case 'list': return <svg {...common}><path d="M3 4h10M3 8h10M3 12h7" /></svg>
+    case 'sparkles': return <svg {...common}><path d="M8 2l1.4 2.8L12 6 9.8 7.4 8 10 6.2 7.4 4 6l2.6-1.2L8 2zM4 12l.8 1.6L6.5 14l-1.7.4L4 16l-.4-1.6L2 14l1.7-.4L4 12zM12 10l.8 1.6 1.7.4-1.7.4L12 14l-.4-1.6L9.9 12l1.7-.4L12 10z" /></svg>
+    case 'plus': return <svg {...common}><path d="M8 2v12M2 8h12" /></svg>
+    case 'settings': return <svg {...common}><circle cx="8" cy="8" r="2.5" /><path d="M8 2.5v2M8 11.5v2M2.5 8h2M11.5 8h2M4.2 4.2l1.4 1.4M10.4 10.4l1.4 1.4M11.8 4.2l-1.4 1.4M5.6 10.4l-1.4 1.4" /></svg>
+    case 'back': return <svg {...common}><path d="M10 2L4 8l6 6" /></svg>
+    case 'edit': return <svg {...common}><path d="M9.5 2.5L3 9l-.5 4.5L7 13l6.5-6.5-4-4z" /><path d="M8 7l2 2" /></svg>
+    case 'report': return <svg {...common}><path d="M3 13V3h8l2 2v8H3z" /><path d="M5 7h4M5 9.5h4" /></svg>
+    case 'bell': return <svg {...common}><path d="M8 2a4 4 0 0 0-4 4v3l-1.5 2.5h11L12 9V6a4 4 0 0 0-4-4z" /><path d="M6.5 14a1.8 1.8 0 0 0 3 0" /></svg>
+    case 'check': return <svg {...common}><circle cx="8" cy="8" r="6" /><path d="M5.5 8.5l1.8 1.8 3.4-4" /></svg>
+    case 'refresh': return <svg {...common}><path d="M13 8a5 5 0 1 1-1.5-3.5M13 3v2.5h-2.5" /></svg>
+    case 'trash': return <svg {...common}><path d="M3 4h10M6.5 4V2.5h3V4M5 4l.5 10h5L11 4" /></svg>
+    case 'ai': return <svg {...common}><path d="M8 2l1.4 2.8L12 6 9.8 7.4 8 10 6.2 7.4 4 6l2.6-1.2L8 2z" /></svg>
+    case 'breakdown': return <svg {...common}><path d="M3 4h4M3 8h4M3 12h4M9.5 4h3.5M9.5 8h3.5M9.5 12h3.5" /></svg>
+    case 'subtask': return <svg {...common}><path d="M8 2v12M2 8h12" /></svg>
+    case 'archive': return <svg {...common}><rect x="2.5" y="3" width="11" height="3.5" rx="1" /><path d="M4 6.5h8v6H4v-6zM6.5 9h3" /></svg>
+    case 'chevron': return <svg {...common}><path d="M6 3l5 5-5 5" /></svg>
+    default: return <svg {...common}><circle cx="8" cy="8" r="5" /></svg>
+  }
+}
 
 function Badge({ dict, code }: { dict: Dict[]; code: string }): JSX.Element {
   const entry = dict.find((d) => d.code === code)
@@ -334,14 +377,12 @@ function TaskRow({ task, dicts, onOpen, selected }: { task: Task; dicts: Dict[];
               : fmtTime(task.dueAt!)
   return (
     <div className={`wb-row ${selected === true ? 'selected' : ''}`} style={{ flex: 1, minWidth: 0 }} onClick={() => onOpen(task)}>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontWeight: 600 }}>{task.title}</div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap', marginTop: 3 }}>
-          <Badge dict={dicts.filter((d) => d.kind === 'type')} code={task.typeCode} />
-          <Badge dict={dicts.filter((d) => d.kind === 'priority')} code={task.priorityCode} />
-          <Badge dict={dicts.filter((d) => d.kind === 'status')} code={task.statusCode} />
-          <span style={{ fontSize: 12, color: '#999' }}>{dueText}</span>
-        </div>
+      <div className="wb-row-title" style={{ fontWeight: 600 }}>{task.title}</div>
+      <div className="wb-row-meta">
+        <Badge dict={dicts.filter((d) => d.kind === 'type')} code={task.typeCode} />
+        <Badge dict={dicts.filter((d) => d.kind === 'priority')} code={task.priorityCode} />
+        <Badge dict={dicts.filter((d) => d.kind === 'status')} code={task.statusCode} />
+        <span className="wb-due">{dueText}</span>
       </div>
     </div>
   )
@@ -360,7 +401,7 @@ function DraftBanner({ draft, onDone, runtime }: { draft: DraftView; onDone: () 
     const sessionId = typeof draft.sessionId === 'string' && draft.sessionId !== '' ? draft.sessionId : typeof draft.payload.sessionId === 'string' ? draft.payload.sessionId : ''
     return (
       <div className="wb-banner review">
-        <h4>📊 报告草稿待确认（{String(draft.payload.periodCode === 'week' ? '周报' : '日报')} {String(draft.payload.periodStart ?? '')}）</h4>
+        <h4><Icon name="report" />报告草稿待确认（{String(draft.payload.periodCode === 'week' ? '周报' : '日报')} {String(draft.payload.periodStart ?? '')}）</h4>
         <div style={{ fontWeight: 600, marginBottom: 6 }}>{title}</div>
         <div style={{ maxHeight: 260, overflow: 'auto' }}><MarkdownText text={summaryMd} /></div>
         <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
@@ -377,7 +418,7 @@ function DraftBanner({ draft, onDone, runtime }: { draft: DraftView; onDone: () 
     const sessionId = typeof draft.sessionId === 'string' && draft.sessionId !== '' ? draft.sessionId : typeof draft.payload.sessionId === 'string' ? draft.payload.sessionId : ''
     return (
       <div className="wb-banner draft">
-        <h4>🧠 今日计划提案待确认（{String(draft.payload.planDate ?? '')}）</h4>
+        <h4><Icon name="sparkles" />今日计划提案待确认（{String(draft.payload.planDate ?? '')}）</h4>
         {summary !== '' && <div style={{ fontSize: 14, lineHeight: 1.7, marginBottom: 6 }}>{summary}</div>}
         <ol style={{ margin: '4px 0 8px 20px', padding: 0, fontSize: 14, lineHeight: 1.7 }}>
           {items.map((item, i) => <li key={i} style={{ margin: '3px 0' }}><b>{item.title ?? '(未命名任务)'}</b>{item.note !== undefined && item.note !== '' ? <span style={{ color: 'var(--dsw-alias-label-secondary)' }}> — {item.note}</span> : null}</li>)}
@@ -395,7 +436,7 @@ function DraftBanner({ draft, onDone, runtime }: { draft: DraftView; onDone: () 
     const sessionId = typeof draft.payload.sessionId === 'string' ? draft.payload.sessionId : ''
     return (
       <div className="wb-banner review">
-        <h4>📝 复盘草稿待确认</h4>
+        <h4><Icon name="report" />复盘草稿待确认</h4>
         <div style={{ maxHeight: 220, overflow: 'auto' }}><MarkdownText text={summary} /></div>
         <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
           <button className="wb-btn primary" disabled={busy} onClick={() => void act(`/api/workbench/drafts/${draft.id}/confirm`)}>确认写回任务</button>
@@ -410,7 +451,7 @@ function DraftBanner({ draft, onDone, runtime }: { draft: DraftView; onDone: () 
     const sessionId = typeof draft.payload.sessionId === 'string' ? draft.payload.sessionId : ''
     return (
       <div className="wb-banner completion">
-        <h4>✅ 执行完成，待你验收</h4>
+        <h4><Icon name="check" />执行完成，待你验收</h4>
         <div style={{ fontSize: 13 }}><b>{String(draft.payload.taskId ?? '')}</b></div>
         <div style={{ fontSize: 12, color: '#999', whiteSpace: 'pre-wrap' }}>{summary}</div>
         <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
@@ -501,7 +542,7 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
             if (notifiedRef.current.has(reminder.reminderId)) continue
             notifiedRef.current.add(reminder.reminderId)
             try {
-              new Notification(`🔔 任务提醒：${reminder.title}`, {
+              new Notification(`任务提醒：${reminder.title}`, {
                 body: `截止时间：${fmtTime(reminder.dueAt)}`,
                 tag: `dsh-workbench:${reminder.reminderId}`,
               })
@@ -765,25 +806,25 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
   return (
     <div className="wb-app">
       <div className="wb-h">
-        <div className="wb-title">🗂️ 个人工作台</div>
-        <div className="wb-tabs">
-          <button className={`wb-tab ${view === 'today' ? 'on' : ''}`} onClick={() => setView('today')}>今日</button>
-          <button className={`wb-tab ${view === 'calendar' ? 'on' : ''}`} onClick={() => setView('calendar')}>日历</button>
-          <button className={`wb-tab ${view === 'list' ? 'on' : ''}`} onClick={() => setView('list')}>列表</button>
+        <div className="wb-title"><Icon name="calendar" size={19} />个人工作台</div>
+        <div className="wb-segmented">
+          <button className={`wb-seg ${view === 'today' ? 'on' : ''}`} onClick={() => setView('today')}><Icon name="today" />今日</button>
+          <button className={`wb-seg ${view === 'calendar' ? 'on' : ''}`} onClick={() => setView('calendar')}><Icon name="calendar" />日历</button>
+          <button className={`wb-seg ${view === 'list' ? 'on' : ''}`} onClick={() => setView('list')}><Icon name="list" />任务</button>
         </div>
         <div style={{ flex: 1 }} />
-        <button className="wb-btn primary" onClick={() => setShowQuick((v) => !v)} disabled={busy}>✨ 快速录入</button>
-        <button className="wb-btn" onClick={() => setShowForm((v) => !v)}>+ 新建</button>
-        <button className="wb-btn" onClick={() => setShowSettings((v) => !v)}>⚙ 设置</button>
-        <button className="wb-btn" onClick={collapseAll}>收起全部</button>
-        <button className="wb-btn" onClick={() => document.documentElement.removeAttribute(ACTIVE_ATTR)}>返回对话</button>
+        <button className="wb-btn primary" onClick={() => setShowQuick((v) => !v)} disabled={busy}><Icon name="sparkles" />快速录入</button>
+        <button className="wb-btn" onClick={() => setShowForm((v) => !v)}><Icon name="plus" />新建</button>
+        <button className="wb-btn" onClick={() => setShowSettings((v) => !v)}><Icon name="settings" />设置</button>
+        <button className="wb-btn" onClick={collapseAll}><Icon name="list" />收起全部</button>
+        <button className="wb-btn" onClick={() => document.documentElement.removeAttribute(ACTIVE_ATTR)}><Icon name="back" />返回对话</button>
       </div>
 
-      {error !== null && <div className="wb-banner error"><h4>⚠️ 出错了</h4>{error} <button className="wb-btn" onClick={() => setError(null)}>关闭</button></div>}
-      {notice !== null && <div className="wb-banner notice"><h4>ℹ️ 提示</h4>{notice} <button className="wb-btn" onClick={() => setNotice(null)}>关闭</button></div>}
+      {error !== null && <div className="wb-banner error"><h4><Icon name="bell" />出错了</h4>{error} <button className="wb-btn" onClick={() => setError(null)}>关闭</button></div>}
+      {notice !== null && <div className="wb-banner notice"><h4><Icon name="bell" />提示</h4>{notice} <button className="wb-btn" onClick={() => setNotice(null)}>关闭</button></div>}
       {reminders.length > 0 && (
         <div className="wb-banner reminder">
-          <h4>🔔 到期提醒（{reminders.length}）</h4>
+          <h4><Icon name="bell" />到期提醒（{reminders.length}）</h4>
           {reminders.map((r) => <div key={r.reminderId} style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 4 }}><span style={{ flex: 1 }}>{r.title} · {fmtTime(r.dueAt)}</span><button className="wb-btn" onClick={() => void fireReminder(r.reminderId)}>知道了</button></div>)}
         </div>
       )}
@@ -793,7 +834,7 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
         <div className="wb-nav">
           {showSettings && (
             <div className="wb-form-panel">
-              <h4>⚙ 工作台设置</h4>
+              <h4><Icon name="settings" />工作台设置</h4>
               <label className="full">默认 AI 会话工作区（任务未指定时使用）
                 <input value={settings.defaultWorkspace} onChange={(e) => setSettings((prev) => ({ ...prev, defaultWorkspace: e.target.value }))} placeholder="例如 D:\Code\AI-Workspace" />
               </label>
@@ -809,7 +850,7 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
                 {notifyPerm === 'unsupported'
                   ? <span style={{ fontSize: 12, color: '#999' }}>当前浏览器不支持系统通知，将使用页内横幅提醒</span>
                   : notifyPerm === 'granted'
-                    ? <span style={{ fontSize: 12, color: '#2E9B7B' }}>✅ 浏览器通知已授权</span>
+                    ? <span style={{ fontSize: 12, color: '#2E9B7B' }}>浏览器通知已授权</span>
                     : <button className="wb-btn" onClick={() => {
                         void Notification.requestPermission().then((perm) => {
                           setNotifyPerm(perm)
@@ -817,12 +858,12 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
                         })
                       }}>授权浏览器通知</button>}
                 {notifyPerm === 'granted' && <button className="wb-btn" onClick={() => {
-                  try { new Notification('✅ dsh-workbench 通知测试', { body: '如果你看到这条系统通知，说明桌面提醒已正常工作。' }) } catch { /* ignore */ }
+                  try { new Notification('dsh-workbench 通知测试', { body: '如果你看到这条系统通知，说明桌面提醒已正常工作。' }) } catch { /* ignore */ }
                 }}>发送测试通知</button>}
                 <span style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)' }}>DSH 页面保持打开（可最小化）即可收到</span>
               </div>
               <div className="full" style={{ display: 'flex', gap: 8 }}>
-                <button className="wb-btn primary lg" onClick={() => void api('/api/workbench/settings', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(settings) }).then(() => { setNotice('设置已保存'); setShowSettings(false) }).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))}>💾 保存设置</button>
+                <button className="wb-btn primary lg" onClick={() => void api('/api/workbench/settings', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(settings) }).then(() => { setNotice('设置已保存'); setShowSettings(false) }).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))}><Icon name="check" />保存设置</button>
                 <button className="wb-btn" onClick={() => setShowSettings(false)}>取消</button>
               </div>
             </div>
@@ -830,7 +871,7 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
 
           {showQuick && (
             <div className="wb-form-panel">
-              <h4>✨ 快速录入 <span style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)' }}>（将跳转官方会话区进行需求澄清）</span></h4>
+              <h4><Icon name="sparkles" />快速录入 <span style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)' }}>（将跳转官方会话区进行需求澄清）</span></h4>
               <textarea rows={3} style={{ width: '100%', minHeight: 76, background: 'var(--dsw-alias-bg-base,#17171a)', border: '1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.18))', color: 'inherit', borderRadius: 10, padding: 10, boxSizing: 'border-box', fontSize: 14 }} value={quickText} onChange={(e) => setQuickText(e.target.value)} placeholder="一句话描述任务，例如：周五10:30接待重要客户" />
               <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
                 <button className="wb-btn primary lg" disabled={busy || quickText.trim() === ''} onClick={() => void startAISession('clarify', null, quickText)}>🚀 创建澄清会话</button>
@@ -841,7 +882,7 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
 
           {showForm && (
             <form className="wb-form wb-form-panel" onSubmit={(e) => void createTask(e)}>
-              <h4 className="full" style={{ margin: 0 }}>📝 新建任务</h4>
+              <h4 className="full" style={{ margin: 0 }}><Icon name="plus" />新建任务</h4>
               <label className="full">标题<input name="title" required placeholder="要做什么？" /></label>
               <label>类型<select name="type" defaultValue="client_meeting">{dictOf('type').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
               <label>优先级<select name="priority" defaultValue="p2">{dictOf('priority').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
@@ -849,7 +890,7 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
               <label>截止时间<input name="due" type="datetime-local" /></label>
               <label>AI 会话工作区（可选，留空用默认）<input name="workspacePath" placeholder={settings.defaultWorkspace || '默认工作区未设置'} /></label>
               <label className="full">描述<textarea name="description" rows={2} placeholder="背景 / 目标 / 验收标准（Markdown）" /></label>
-              <div className="full" style={{ display: 'flex', gap: 8 }}><button className="wb-btn primary lg" type="submit">💾 保存任务</button><button className="wb-btn" type="button" onClick={() => setShowForm(false)}>取消</button></div>
+              <div className="full" style={{ display: 'flex', gap: 8 }}><button className="wb-btn primary lg" type="submit"><Icon name="check" />保存任务</button><button className="wb-btn" type="button" onClick={() => setShowForm(false)}>取消</button></div>
             </form>
           )}
 
@@ -862,19 +903,19 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
                 <div className="wb-stat"><b>{bootstrap?.stats.total ?? 0}</b><span>总数</span></div>
               </div>
               <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
-                <button className="wb-btn primary" disabled={busy || openTasks.length === 0} onClick={() => void startAISession('plan', null, localDateString())}>{todayPlanSession !== null ? '🧠 继续编辑今日计划' : '🧠 AI 智能排序'}</button>
+                <button className="wb-btn primary" disabled={busy || openTasks.length === 0} onClick={() => void startAISession('plan', null, localDateString())}><Icon name="sparkles" />{todayPlanSession !== null ? '继续编辑今日计划' : 'AI 智能排序'}</button>
                 <span style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)', alignSelf: 'center' }}>AI 会先提交顺序提案，确认后才生效</span>
               </div>
               {todayPlan !== null && (
-                <div className="wb-banner draft">
-                  <h4>🧠 今日计划（{todayPlan.planDate}）</h4>
+                <div className="wb-card wb-plan">
+                  <h4><Icon name="sparkles" />今日计划 · {todayPlan.planDate}</h4>
                   {todayPlan.summary !== '' && <div style={{ fontSize: 14, lineHeight: 1.7, marginBottom: 6 }}>{todayPlan.summary}</div>}
-                  <ol style={{ margin: '4px 0 8px 20px', padding: 0, fontSize: 14, lineHeight: 1.7 }}>
-                    {todayPlan.items.map((item) => <li key={item.taskId} style={{ margin: '3px 0' }}><b>{item.title}</b>{item.note !== '' && <span style={{ color: 'var(--dsw-alias-label-secondary)' }}> — {item.note}</span>}</li>)}
-                  </ol>
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    <button className="wb-btn" onClick={() => void startAISession('plan', null, localDateString())}>↻ 重新生成</button>
-                    <button className="wb-btn" onClick={() => void clearTodayPlan()}>清除</button>
+                  <div>
+                    {todayPlan.items.map((item, index) => <div key={item.taskId} className="wb-plan-item"><span className="wb-plan-num">{index + 1}</span><b>{item.title}</b>{item.note !== '' && <span className="wb-plan-note">— {item.note}</span>}</div>)}
+                  </div>
+                  <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                    <button className="wb-btn" onClick={() => void startAISession('plan', null, localDateString())}><Icon name="refresh" />重新生成</button>
+                    <button className="wb-btn" onClick={() => void clearTodayPlan()}><Icon name="trash" />清除</button>
                   </div>
                 </div>
               )}
@@ -894,8 +935,10 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
                 <div style={{ flex: 1, textAlign: 'center', fontWeight: 600 }}>
                   {calMode === 'week' ? `${cursor.getFullYear()}/${cursor.getMonth() + 1}/${cursor.getDate()} 周` : `${cursor.getFullYear()}年${cursor.getMonth() + 1}月`}
                 </div>
-                <button className={`wb-tab ${calMode === 'week' ? 'on' : ''}`} onClick={() => setCalMode('week')}>周</button>
-                <button className={`wb-tab ${calMode === 'month' ? 'on' : ''}`} onClick={() => setCalMode('month')}>月</button>
+                <div className="wb-segmented wb-sub-segmented">
+                  <button className={`wb-seg ${calMode === 'week' ? 'on' : ''}`} onClick={() => setCalMode('week')}>周</button>
+                  <button className={`wb-seg ${calMode === 'month' ? 'on' : ''}`} onClick={() => setCalMode('month')}>月</button>
+                </div>
               </div>
 
               {calMode === 'week' && (
@@ -922,31 +965,31 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
                 </div>
               )}
 
-              <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-                <button className={`wb-tab ${dayTab === 'plan' ? 'on' : ''}`} onClick={() => setDayTab('plan')}>计划（{countTaskTree(pickedPlanTree)}）</button>
-                <button className={`wb-tab ${dayTab === 'done' ? 'on' : ''}`} onClick={() => setDayTab('done')}>已完成（{countTaskTree(pickedDoneTree)}）</button>
-                <button className={`wb-tab ${dayTab === 'report' ? 'on' : ''}`} onClick={() => setDayTab('report')}>📊 报告</button>
+              <div className="wb-segmented wb-sub-segmented">
+                <button className={`wb-seg ${dayTab === 'plan' ? 'on' : ''}`} onClick={() => setDayTab('plan')}><Icon name="list" />计划 <span className="count">{countTaskTree(pickedPlanTree)}</span></button>
+                <button className={`wb-seg ${dayTab === 'done' ? 'on' : ''}`} onClick={() => setDayTab('done')}><Icon name="check" />已完成 <span className="count">{countTaskTree(pickedDoneTree)}</span></button>
+                <button className={`wb-seg ${dayTab === 'report' ? 'on' : ''}`} onClick={() => setDayTab('report')}><Icon name="report" />报告</button>
               </div>
               {dayTab === 'plan' && (
                 <>
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
                     {pickedAnchor < todayAnchor
                       ? <span style={{ fontSize: 12, color: '#999' }}>过去日期只读；如需为今天/未来排期，请选择今天或之后的日期。</span>
-                      : <button className="wb-btn primary" disabled={busy} onClick={() => void startAISession('plan', null, pickedAnchor)}>{pickedPlanSession !== null ? '🧠 继续编辑该日计划' : `🧠 AI 智能排序（${pickedAnchor}）`}</button>}
+                      : <button className="wb-btn primary" disabled={busy} onClick={() => void startAISession('plan', null, pickedAnchor)}><Icon name="sparkles" />{pickedPlanSession !== null ? '继续编辑该日计划' : `AI 智能排序（${pickedAnchor}）`}</button>}
                     <span style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)' }}>AI 会先提交顺序提案，确认后才生效</span>
                   </div>
                   {pickedPlan !== null && (
-                    <div className="wb-banner draft" style={{ margin: '0 0 10px' }}>
-                      <h4>🧠 {pickedPlan.planDate} 计划</h4>
+                    <div className="wb-card wb-plan" style={{ marginTop: 10 }}>
+                      <h4><Icon name="sparkles" />{pickedPlan.planDate} 计划</h4>
                       {pickedPlan.summary !== '' && <div style={{ fontSize: 14, lineHeight: 1.7, marginBottom: 6 }}>{pickedPlan.summary}</div>}
-                      <ol style={{ margin: '4px 0 8px 20px', padding: 0, fontSize: 14, lineHeight: 1.7 }}>
-                        {pickedPlan.items.map((item) => <li key={item.taskId} style={{ margin: '3px 0' }}><b>{item.title}</b>{item.note !== '' && <span style={{ color: 'var(--dsw-alias-label-secondary)' }}> — {item.note}</span>}</li>)}
-                      </ol>
-                      <div style={{ display: 'flex', gap: 8 }}>
-                        {pickedAnchor >= todayAnchor && <button className="wb-btn" onClick={() => void startAISession('plan', null, pickedAnchor)}>↻ 重新生成</button>}
+                      <div>
+                        {pickedPlan.items.map((item, index) => <div key={item.taskId} className="wb-plan-item"><span className="wb-plan-num">{index + 1}</span><b>{item.title}</b>{item.note !== '' && <span className="wb-plan-note">— {item.note}</span>}</div>)}
+                      </div>
+                      <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                        {pickedAnchor >= todayAnchor && <button className="wb-btn" onClick={() => void startAISession('plan', null, pickedAnchor)}><Icon name="refresh" />重新生成</button>}
                         <button className="wb-btn" onClick={() => {
                           void api(`/api/workbench/plans/${pickedAnchor}`, { method: 'DELETE' }).then(() => { setPlanRefreshKey((v) => v + 1); setNotice('该日计划已清除') }).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
-                        }}>清除</button>
+                        }}><Icon name="trash" />清除</button>
                       </div>
                     </div>
                   )}
@@ -958,8 +1001,10 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
               {dayTab === 'report' ? (
                 <div className="wb-card">
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                    <button className={`wb-tab ${reportSubTab === 'day' ? 'on' : ''}`} onClick={() => setReportSubTab('day')}>日报（{localDateString(picked)}）</button>
-                    <button className={`wb-tab ${reportSubTab === 'week' ? 'on' : ''}`} onClick={() => setReportSubTab('week')}>周报（{localDateString(startOfWeek(picked))} 起）</button>
+                    <div className="wb-segmented wb-sub-segmented">
+                      <button className={`wb-seg ${reportSubTab === 'day' ? 'on' : ''}`} onClick={() => setReportSubTab('day')}>日报（{localDateString(picked)}）</button>
+                      <button className={`wb-seg ${reportSubTab === 'week' ? 'on' : ''}`} onClick={() => setReportSubTab('week')}>周报（{localDateString(startOfWeek(picked))} 起）</button>
+                    </div>
                     <div style={{ flex: 1 }} />
                   </div>
                   {reportIsFuture ? (
@@ -1032,7 +1077,7 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
                     <>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                         <h4 style={{ flex: 1, margin: 0 }}>{selected.task.title}</h4>
-                        {!selected.task.archived && <button className="wb-btn" onClick={() => setEditDraft({ title: selected.task.title, description: selected.task.description, typeCode: selected.task.typeCode, priorityCode: selected.task.priorityCode, statusCode: selected.task.statusCode, aiPolicyCode: selected.task.aiPolicyCode, dueLocal: toLocalInput(selected.task.dueAt), workspacePath: selected.task.workspacePath ?? '' })}>✏️ 编辑</button>}
+                        {!selected.task.archived && <button className="wb-btn" onClick={() => setEditDraft({ title: selected.task.title, description: selected.task.description, typeCode: selected.task.typeCode, priorityCode: selected.task.priorityCode, statusCode: selected.task.statusCode, aiPolicyCode: selected.task.aiPolicyCode, dueLocal: toLocalInput(selected.task.dueAt), workspacePath: selected.task.workspacePath ?? '' })}><Icon name="edit" />编辑</button>}
                       </div>
                       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', margin: '8px 0' }}>
                         <Badge dict={dictOf('type')} code={selected.task.typeCode} />
@@ -1086,7 +1131,7 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
                         workspacePath: editDraft.workspacePath.trim() === '' ? null : editDraft.workspacePath.trim(),
                       }).then(() => { setEditDraft(null); setNotice('任务已更新') }).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
                     }}>
-                      <h4 className="full" style={{ margin: 0 }}>✏️ 编辑任务</h4>
+                      <h4 className="full" style={{ margin: 0 }}><Icon name="edit" />编辑任务</h4>
                       <label className="full">标题<input value={editDraft.title} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, title: e.target.value })} /></label>
                       <label>类型<select value={editDraft.typeCode} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, typeCode: e.target.value })}>{dictOf('type').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
                       <label>优先级<select value={editDraft.priorityCode} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, priorityCode: e.target.value })}>{dictOf('priority').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
@@ -1095,7 +1140,7 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
                       <label>截止时间<input type="datetime-local" value={editDraft.dueLocal} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, dueLocal: e.target.value })} /></label>
                       <label className="full">AI 会话工作区（留空使用默认）<input value={editDraft.workspacePath} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, workspacePath: e.target.value })} placeholder={settings.defaultWorkspace || '默认工作区未设置'} /></label>
                       <label className="full">描述（Markdown）<textarea rows={6} value={editDraft.description} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, description: e.target.value })} /></label>
-                      <div className="full" style={{ display: 'flex', gap: 8 }}><button className="wb-btn primary" type="submit">💾 保存</button><button className="wb-btn" type="button" onClick={() => setEditDraft(null)}>取消</button></div>
+                      <div className="full" style={{ display: 'flex', gap: 8 }}><button className="wb-btn primary" type="submit"><Icon name="check" />保存</button><button className="wb-btn" type="button" onClick={() => setEditDraft(null)}>取消</button></div>
                     </form>
                   )}
                 </div>
@@ -1108,7 +1153,7 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
                     const due = String(form.get('due') ?? '')
                     void api('/api/workbench/tasks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title, typeCode: String(form.get('type') ?? subtaskParent.typeCode), priorityCode: String(form.get('priority') ?? subtaskParent.priorityCode), statusCode: 'todo', parentId: subtaskParent.id, dueAt: due === '' ? null : new Date(due).toISOString() }) }).then(() => { setSubtaskParent(null); setNotice('子任务已创建'); void refresh() }).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
                   }}>
-                    <h4 className="full" style={{ margin: 0 }}>➕ 新建子任务（父任务：{subtaskParent.title}）</h4>
+                    <h4 className="full" style={{ margin: 0 }}><Icon name="subtask" />新建子任务（父任务：{subtaskParent.title}）</h4>
                     <label className="full">标题<input name="title" required placeholder="子任务标题" /></label>
                     <label>类型<select name="type" defaultValue={subtaskParent.typeCode}>{dictOf('type').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
                     <label>优先级<select name="priority" defaultValue={subtaskParent.priorityCode}>{dictOf('priority').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
@@ -1123,7 +1168,7 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
                 </div>
                 <div className="wb-card">
                   <h4>提醒（{selected.reminders.length}）</h4>
-                  {selected.reminders.map((r) => <div key={r.id} style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>⏰ {r.offsetMinutes === 0 ? '准时（截止时间）' : `提前 ${r.offsetMinutes} 分钟`} · {r.methodCode === 'os' ? '系统通知' : '页面/桌面通知'} · {r.firedAt === null ? '未触发' : `已触发 ${fmtTime(r.firedAt)}`}</div>)}
+                  {selected.reminders.map((r) => <div key={r.id} style={{ fontSize: 12, color: '#999', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 5 }}><Icon name="bell" size={13} />{r.offsetMinutes === 0 ? '准时（截止时间）' : `提前 ${r.offsetMinutes} 分钟`} · {r.methodCode === 'os' ? '系统通知' : '页面/桌面通知'} · {r.firedAt === null ? '未触发' : `已触发 ${fmtTime(r.firedAt)}`}</div>)}
                   {selected.task.dueAt === null
                     ? <div style={{ fontSize: 12, color: '#999' }}>任务还没有截止时间，请先在详情里设置截止时间，再添加提醒。</div>
                     : selected.task.statusCode === 'done' || selected.task.statusCode === 'cancelled'
@@ -1204,7 +1249,7 @@ export function apply(ctx: unknown): () => void {
   const entry = document.createElement('button')
   entry.type = 'button'
   entry.setAttribute(ENTRY_ATTR, '')
-  entry.innerHTML = '<span aria-hidden="true">🗂️</span><span class="wb-label">工作台</span>'
+  entry.innerHTML = '<svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="3" width="12" height="11" rx="2"/><path d="M2 6.5h12M5.5 2v3M10.5 2v3"/><path d="M5 9.5l1.5 1.5L9.5 8"/></svg><span class="wb-label">工作台</span>'
   entry.addEventListener('click', () => { setOpen(!open) })
   const syncEntry = (): void => { if (open) entry.dataset.active = 'true'; else delete entry.dataset.active }
   const entryObserver = new MutationObserver(syncEntry)
