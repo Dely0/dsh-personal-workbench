@@ -21,6 +21,7 @@ export const DICTIONARY_SEEDS: DictionarySeed[] = [
   { kind: 'type', code: 'team_mgmt', name: '团队管理', sortOrder: 60, config: { color: '#16A085', defaultAiPolicy: 'consult' } },
   { kind: 'type', code: 'project_delivery', name: '项目交付', sortOrder: 70, config: { color: '#2980B9', defaultAiPolicy: 'consult' } },
   { kind: 'type', code: 'personal', name: '个人生活', sortOrder: 80, config: { color: '#95A5A6', defaultAiPolicy: 'none', excludeFromReport: true } },
+  { kind: 'type', code: 'training', name: '培训学习', sortOrder: 90, config: { color: '#8E44AD', defaultAiPolicy: 'consult' } },
 
   // 状态
   { kind: 'status', code: 'backlog', name: '待规划', sortOrder: 10, config: { category: 'open', color: '#95A5A6' } },

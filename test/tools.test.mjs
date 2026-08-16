@@ -21,6 +21,14 @@ test('agent tools write pending drafts and update tasks', async () => {
     assert.match(out, /草稿已保存/)
     assert.ok(getDraftBySession(db, 'sess-1'))
 
+    // AI 可能发明/使用字典外的 type_code：training 应合法，未知 code 应回退不报错
+    const training = await submit.execute({ title: '学做东北菜', type_code: 'training', priority_code: 'p2' }, { agent: { session: { id: 'sess-training' } } })
+    assert.match(training, /草稿已保存/)
+    assert.equal(getDraftBySession(db, 'sess-training').payload.typeCode, 'training')
+    const unknown = await submit.execute({ title: '未知类型任务', type_code: 'foobar', priority_code: 'p2' }, { agent: { session: { id: 'sess-unknown' } } })
+    assert.match(unknown, /草稿已保存/)
+    assert.equal(getDraftBySession(db, 'sess-unknown').payload.typeCode, 'personal')
+
     const update = updateTaskTool(db)
     const task = createTaskForTest(db)
     const upd = await update.execute({ task_id: task.id, description: '## 更新后描述' })

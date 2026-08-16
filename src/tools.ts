@@ -23,6 +23,20 @@ function optionalCode(db: DatabaseSync, kind: string, code: unknown, field: stri
   return requireCode(db, kind, code, field)
 }
 
+function normalizeCode(
+  db: DatabaseSync,
+  kind: string,
+  code: unknown,
+  fallback: string,
+  aliases: Record<string, string> = {},
+): string {
+  const raw = typeof code === 'string' ? code.trim() : ''
+  if (raw === '') return fallback
+  if (getDictionary(db, kind, raw)?.active === 1) return raw
+  const candidate = aliases[raw] ?? fallback
+  return getDictionary(db, kind, candidate)?.active === 1 ? candidate : fallback
+}
+
 function str(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() !== '' ? value : undefined
 }
@@ -57,11 +71,11 @@ export function submitTaskTool(db: DatabaseSync) {
     async execute(args: Record<string, unknown>, exec: { agent?: { session?: { id?: string; header?: { cwd?: string } } } }) {
       const title = str(args.title)
       if (title === undefined) return '错误：title 必填'
-      const typeCode = requireCode(db, 'type', args.type_code, 'type_code')
-      const priorityCode = requireCode(db, 'priority', args.priority_code ?? 'p2', 'priority_code')
-      const statusCode = optionalCode(db, 'status', args.status_code ?? 'todo', 'status_code') ?? 'todo'
+      const typeCode = normalizeCode(db, 'type', args.type_code, 'personal', { training: 'training', learning: 'training', learn: 'training', study: 'training' })
+      const priorityCode = normalizeCode(db, 'priority', args.priority_code ?? 'p2', 'p2')
+      const statusCode = normalizeCode(db, 'status', args.status_code ?? 'todo', 'todo')
       if (statusCode === 'done' || statusCode === 'cancelled') return '错误：澄清草稿不能直接创建为已完成/已取消任务，请使用待办类状态，完成请走执行验收流程。'
-      const aiPolicyCode = optionalCode(db, 'ai_policy', args.ai_policy_code ?? 'consult', 'ai_policy_code') ?? 'consult'
+      const aiPolicyCode = normalizeCode(db, 'ai_policy', args.ai_policy_code ?? 'consult', 'consult')
       // V1.5：execute 已开放；澄清会话默认仍建议 consult，除非用户明确要求可执行。
       const dueAt = str(args.due_at) ?? null
       const typeEntry = getDictionary(db, 'type', typeCode)
