@@ -5,7 +5,7 @@
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { DatabaseSync } from 'node:sqlite'
-import { appendEvent, createDraft, getDictionary, getDraft, getPendingDraftForTask, getTask, updateDraft, updateTask } from './db/repo.js'
+import { appendEvent, createDraft, getDictionary, getDraft, getPendingDailyPlanDraft, getPendingDraftForTask, getTask, localDateString, updateDraft, updateTask } from './db/repo.js'
 
 function text(value: string): ContentBlock[] {
   return [{ type: 'text', text: value }]
@@ -91,6 +91,70 @@ export function submitTaskTool(db: DatabaseSync) {
         ? updateDraft(db, draftId, payload)
         : createDraft(db, { kindCode: 'task', sessionId, payload })
       return `草稿已保存（id=${draft?.id}），等待用户在界面确认。请用一句话告知用户可以检查草稿；不要声称任务已创建。`
+    },
+  })
+}
+
+const PLAN_DATE_RE = /^\d{4}-\d{2}-\d{2}$/
+
+export function proposeDailyPlanTool(db: DatabaseSync) {
+  return defineTool({
+    name: 'workbench_propose_daily_plan',
+    description:
+      '个人工作台每日 AI 智能排序工具：为指定日期生成“今日执行顺序”提案，只写 pending 草稿，由用户在工作台确认后才应用。' +
+      'items 为扁平顺序数组（1 号最重要），每项 {task_id, order, note}；note 解释排位理由或建议时间块。' +
+      '同一父子链上不要同时列入父任务与其子任务；不要修改任何任务字段，不要执行任务。',
+    parameters: {
+      draft_id: { type: 'string', description: '已有计划草稿 id；用户提出修改意见后再次提交时传，更新同一份草稿' },
+      plan_date: { type: 'string', description: '计划日期 YYYY-MM-DD，默认今天（服务器本地日期）' },
+      summary: { type: 'string', required: true, description: '排序思路总结，1-3 句，如“先清逾期，再用上午整块时间做方案”' },
+      items: { type: 'json', required: true, description: '排序结果数组，每项 {task_id, order, note}' },
+    },
+    output: {
+      schema: { type: 'string' },
+      render: (_args, value: string) => text(value),
+    },
+    async execute(args: Record<string, unknown>, exec: { agent?: { session?: { id?: string } } }) {
+      const planDate = str(args.plan_date) ?? localDateString()
+      if (!PLAN_DATE_RE.test(planDate)) return '错误：plan_date 必须是 YYYY-MM-DD 格式'
+      const summary = str(args.summary)
+      if (summary === undefined) return '错误：summary 必填'
+      const rawItems = Array.isArray(args.items) ? args.items as unknown[] : []
+      if (rawItems.length === 0) return '错误：items 不能为空（若今天没有需要处理的任务，请直接告知用户）'
+
+      const seen = new Set<string>()
+      const items: Array<{ taskId: string; order: number; title: string; note: string }> = []
+      for (let index = 0; index < rawItems.length; index += 1) {
+        const raw = (typeof rawItems[index] === 'object' && rawItems[index] !== null ? rawItems[index] : {}) as Record<string, unknown>
+        const taskId = typeof raw.task_id === 'string' ? raw.task_id : typeof raw.taskId === 'string' ? raw.taskId : ''
+        const task = getTask(db, taskId)
+        if (task === undefined) return `错误：items[${index}] 的 task_id 不存在：${taskId || '(空)'}`
+        if (task.archived === 1 || task.statusCode === 'done' || task.statusCode === 'cancelled') {
+          return `错误：任务「${task.title}」已归档或已关闭，不能进入今日计划`
+        }
+        if (seen.has(taskId)) return `错误：任务「${task.title}」在 items 中重复`
+        seen.add(taskId)
+        items.push({
+          taskId,
+          order: typeof raw.order === 'number' && Number.isFinite(raw.order) ? raw.order : index + 1,
+          title: task.title,
+          note: typeof raw.note === 'string' ? raw.note : '',
+        })
+      }
+      items.sort((a, b) => a.order - b.order)
+
+      const sessionId = exec.agent?.session?.id ?? null
+      const draftId = str(args.draft_id)
+      const existing = draftId === undefined ? getPendingDailyPlanDraft(db, sessionId, planDate) : getDraft(db, draftId)
+      if (draftId !== undefined && existing === undefined) return `错误：草稿 ${draftId} 不存在`
+      if (existing !== undefined && existing.statusCode !== 'pending') return `错误：草稿 ${draftId ?? existing.id} 状态为 ${existing.statusCode}，不能更新`
+
+      const payload = { planDate, summary, items, sessionId }
+      const draft = existing !== undefined
+        ? updateDraft(db, existing.id, payload)
+        : createDraft(db, { kindCode: 'daily_plan', sessionId, payload })
+      const preview = items.map((item, i) => `${i + 1}. ${item.title}${item.note !== '' ? `（${item.note}）` : ''}`).join('\n')
+      return `今日计划提案已保存（id=${draft?.id}），等待用户在工作台确认。\n\n${preview}\n\n请用一句话告知用户可以检查计划草稿；不要声称排序已生效。`
     },
   })
 }

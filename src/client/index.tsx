@@ -104,9 +104,11 @@ interface Task {
   completedAt: string | null
   cancelledAt: string | null
 }
-interface Bootstrap { dictionaries: Dict[]; stats: { overdue: number; todayDue: number; doing: number; total: number } }
+interface DailyPlanItemView { taskId: string; order: number; title: string; note: string }
+interface DailyPlanView { id: string; planDate: string; summary: string; items: DailyPlanItemView[]; sourceCode: string; sessionId: string | null; createdAt: string; updatedAt: string }
+interface Bootstrap { dictionaries: Dict[]; stats: { overdue: number; todayDue: number; doing: number; total: number }; todayPlan?: DailyPlanView | null }
 interface TaskDetail { task: Task; children: Task[]; sessions: Array<Record<string, unknown>>; reminders: Array<{ id: string; taskId: string; offsetMinutes: number; methodCode: string; firedAt: string | null }>; events: Array<Record<string, unknown>>; reviews: Array<Record<string, unknown>> }
-interface DraftView { id: string; kindCode: string; statusCode: string; payload: Record<string, unknown> }
+interface DraftView { id: string; kindCode: string; statusCode: string; sessionId: string | null; payload: Record<string, unknown> }
 
 interface SessionDriver {
   sessionId: string
@@ -136,6 +138,7 @@ const folderForText = (text: string): string => {
   const cleaned = text.trim().replace(/[\\/:*?"<>|]/g, '').replace(/\s+/g, ' ').slice(0, 24).trim()
   return cleaned === '' ? '未命名任务' : cleaned
 }
+const localDateString = (d = new Date()): string => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 const fmtTime = (iso: string): string => {
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return iso
@@ -220,15 +223,16 @@ function filterTaskTree(roots: TaskTreeNode[], keep: (task: Task) => boolean): T
 function countTaskTree(roots: TaskTreeNode[]): number {
   return roots.reduce((sum, node) => sum + 1 + countTaskTree(node.children), 0)
 }
-function buildTaskTree(tasks: Task[]): TaskTreeNode[] {
+function buildTaskTree(tasks: Task[], orderOf?: Map<string, number>): TaskTreeNode[] {
   const byParent = new Map<string | null, Task[]>()
   for (const task of tasks) {
     const list = byParent.get(task.parentId) ?? []
     list.push(task)
     byParent.set(task.parentId, list)
   }
+  const unlisted = Number.MAX_SAFE_INTEGER
   const walk = (id: string | null): TaskTreeNode[] => (byParent.get(id) ?? [])
-    .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+    .sort((a, b) => (orderOf?.get(a.id) ?? unlisted) - (orderOf?.get(b.id) ?? unlisted) || a.createdAt.localeCompare(b.createdAt))
     .map((task) => ({ task, children: walk(task.id) }))
   return walk(null)
 }
@@ -293,6 +297,25 @@ function DraftBanner({ draft, onDone, runtime }: { draft: DraftView; onDone: () 
   const act = async (path: string): Promise<void> => {
     setBusy(true)
     try { await api(path, { method: 'POST' }); onDone() } finally { setBusy(false) }
+  }
+  if (draft.kindCode === 'daily_plan') {
+    const items = Array.isArray(draft.payload.items) ? draft.payload.items as Array<{ taskId?: string; order?: number; title?: string; note?: string }> : []
+    const summary = String(draft.payload.summary ?? '')
+    const sessionId = typeof draft.sessionId === 'string' && draft.sessionId !== '' ? draft.sessionId : typeof draft.payload.sessionId === 'string' ? draft.payload.sessionId : ''
+    return (
+      <div className="wb-banner draft">
+        <h4>🧠 今日计划提案待确认（{String(draft.payload.planDate ?? '')}）</h4>
+        {summary !== '' && <div style={{ fontSize: 13, marginBottom: 6 }}>{summary}</div>}
+        <ol style={{ margin: '4px 0 8px 20px', padding: 0, fontSize: 13 }}>
+          {items.map((item, i) => <li key={i} style={{ margin: '3px 0' }}><b>{item.title ?? '(未命名任务)'}</b>{item.note !== undefined && item.note !== '' ? <span style={{ color: 'var(--dsw-alias-label-secondary)' }}> — {item.note}</span> : null}</li>)}
+        </ol>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button className="wb-btn primary" disabled={busy} onClick={() => void act(`/api/workbench/drafts/${draft.id}/confirm`)}>确认应用排序</button>
+          <button className="wb-btn" disabled={busy} onClick={() => void act(`/api/workbench/drafts/${draft.id}/abandon`)}>放弃</button>
+          {sessionId !== '' && <button className="wb-btn" onClick={() => { document.documentElement.removeAttribute(ACTIVE_ATTR); runtime.sessions.open(sessionId) }}>回到排序会话</button>}
+        </div>
+      </div>
+    )
   }
   if (draft.kindCode === 'review') {
     const summary = String(draft.payload.summaryMd ?? '')
@@ -418,7 +441,7 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
     setReminders((list) => list.filter((r) => r.reminderId !== reminderId))
   }
 
-  const startAISession = async (mode: 'clarify' | 'consult' | 'breakdown' | 'execute' | 'review', task: Task | null, text: string, previousSessions: Array<Record<string, unknown>> = []): Promise<void> => {
+  const startAISession = async (mode: 'clarify' | 'consult' | 'breakdown' | 'execute' | 'review' | 'plan', task: Task | null, text: string, previousSessions: Array<Record<string, unknown>> = []): Promise<void> => {
     if (mode === 'clarify' && text.trim() === '') return
     setBusy(true); setError(null)
     try {
@@ -449,8 +472,16 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
       const id = await runtime.workspaces.connectWorkspace(workspaceId)
       const binding = runtime.sessions.binding(id)
       if (binding === undefined) throw new Error('会话绑定未就绪，请稍后重试')
-      await binding.session.rename(mode === 'clarify' ? `澄清：${text.slice(0, 24)}` : mode === 'consult' ? `协助：${task?.title.slice(0, 24)}` : mode === 'breakdown' ? `拆解：${task?.title.slice(0, 24)}` : mode === 'review' ? `复盘：${task?.title.slice(0, 24)}` : `执行：${task?.title.slice(0, 24)}`).catch(() => undefined)
-      const prompt = mode === 'clarify'
+      await binding.session.rename(mode === 'plan' ? `今日计划：${localDateString().slice(5)}` : mode === 'clarify' ? `澄清：${text.slice(0, 24)}` : mode === 'consult' ? `协助：${task?.title.slice(0, 24)}` : mode === 'breakdown' ? `拆解：${task?.title.slice(0, 24)}` : mode === 'review' ? `复盘：${task?.title.slice(0, 24)}` : `执行：${task?.title.slice(0, 24)}`).catch(() => undefined)
+      const planTaskLines = tasks
+        .filter((t) => t.statusCode !== 'done' && t.statusCode !== 'cancelled')
+        .slice(0, 30)
+        .map((t, i) => `${i + 1}. [${t.id}] ${t.title} | 优先级 ${t.priorityCode} | 状态 ${t.statusCode} | 截止 ${t.dueAt ?? '无'} | 预计耗时 ${t.estimatedMinutes ?? '未知'} 分钟 | 父任务 ${t.parentId ?? '无'}`)
+        .join('\n')
+      const planPrompt = `你是“个人工作台”的每日计划助手。请基于下面的未完成任务，给出今天的执行顺序建议。\n\n当前日期：${localDateString()}（${'日一二三四五六'[new Date().getDay()]}）\n当前时间：${new Date().toISOString()}\n\n候选任务（最多 30 条）：\n${planTaskLines || '（无未完成任务）'}\n\n请综合考虑：优先级（p0 紧急 > p1 高 > p2 普通 > p3 低）、是否逾期、截止时间、状态（doing/blocked 优先推进）、预计耗时、父子关系与可能的依赖。如果信息不足以判断，可以先问用户 1-2 个关键问题（例如：今天可投入多少小时、哪些必须完成）。\n\n然后调用 workbench_propose_daily_plan：\n- plan_date="${localDateString()}"\n- summary：1-3 句排序思路\n- items：扁平顺序数组（1 号最重要），每项 {task_id, order, note}；note 写清为什么排这里或建议时间块\n- 同一父子链上不要同时出现父任务和它下面的子任务；如需排子任务，只排可执行的叶子，并在 note 中说明属于哪个父任务\n- 只提交计划草稿，不要修改任何任务字段，不要执行任务。`
+      const prompt = mode === 'plan'
+        ? planPrompt
+        : mode === 'clarify'
         ? `你是“个人工作台”的任务澄清助手。请按 workbench-intake 规范执行。\n\n用户想创建的任务是：\n「${text}」\n\n当前时间：${new Date().toISOString()}\n默认 AI 工作区：${settings.defaultWorkspace || '未设置'}\n\n请先澄清必要信息（一次一个主题，最多5轮）。如果用户对该任务的 AI 会话有指定工作区，请询问具体路径，并在调用 workbench_submit_task 时传入 workspace_path；否则留空使用默认工作区。信息足够后调用 workbench_submit_task 提交结构化任务草稿。不要执行任务本身。`
         : mode === 'consult'
           ? `你是“个人工作台”的任务协助助手。请针对下面这个任务提供咨询、拆解或复盘建议（咨询模式不执行）。\n\n任务 id：${task?.id}\n任务标题：${task?.title}\n任务描述：${task?.description || '（无）'}\n类型：${task?.typeCode} 优先级：${task?.priorityCode} 状态：${task?.statusCode}\n截止：${task?.dueAt ?? '无'}\n\n请先理解任务，再给出建议；如果信息不足，可以一次问一个问题。\n\n重要：如果用户要求把结论/补充信息保存回任务，请调用 workbench_update_task(task_id="${task?.id ?? ''}", description="...") 更新原任务；绝对不要调用 workbench_submit_task 新建任务。`
@@ -519,6 +550,16 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
   const todayEnd = new Date(todayStart); todayEnd.setDate(todayEnd.getDate() + 1)
   const openTasks = tasks.filter((t) => !['done', 'cancelled'].includes(t.statusCode))
   const openTree = useMemo(() => buildTaskTree(openTasks), [tasks])
+  const todayPlan = bootstrap?.todayPlan ?? null
+  const todayTree = useMemo(() => {
+    if (todayPlan === null || todayPlan.items.length === 0) return openTree
+    const order = new Map(todayPlan.items.map((item) => [item.taskId, item.order]))
+    return buildTaskTree(openTasks, order)
+  }, [tasks, todayPlan])
+  const clearTodayPlan = async (): Promise<void> => {
+    await api(`/api/workbench/plans/${localDateString()}`, { method: 'DELETE' })
+    await refresh()
+  }
   const overdue = openTasks.filter((t) => t.dueAt !== null && Date.parse(t.dueAt) < todayStart.getTime())
   const todayDue = openTasks.filter((t) => t.dueAt !== null && Date.parse(t.dueAt) >= todayStart.getTime() && Date.parse(t.dueAt) < todayEnd.getTime())
   const active = openTasks.filter((t) => t.statusCode === 'doing' || t.statusCode === 'blocked')
@@ -621,8 +662,25 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
                 <div className="wb-stat"><b>{bootstrap?.stats.doing ?? 0}</b><span>进行中</span></div>
                 <div className="wb-stat"><b>{bootstrap?.stats.total ?? 0}</b><span>总数</span></div>
               </div>
+              <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+                <button className="wb-btn primary" disabled={busy || openTasks.length === 0} onClick={() => void startAISession('plan', null, localDateString())}>🧠 AI 智能排序</button>
+                <span style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)', alignSelf: 'center' }}>AI 会先提交顺序提案，确认后才生效</span>
+              </div>
+              {todayPlan !== null && (
+                <div className="wb-banner draft">
+                  <h4>🧠 今日计划（{todayPlan.planDate}）</h4>
+                  {todayPlan.summary !== '' && <div style={{ fontSize: 13, marginBottom: 6 }}>{todayPlan.summary}</div>}
+                  <ol style={{ margin: '4px 0 8px 20px', padding: 0, fontSize: 13 }}>
+                    {todayPlan.items.map((item) => <li key={item.taskId} style={{ margin: '3px 0' }}><b>{item.title}</b>{item.note !== '' && <span style={{ color: 'var(--dsw-alias-label-secondary)' }}> — {item.note}</span>}</li>)}
+                  </ol>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button className="wb-btn" onClick={() => void startAISession('plan', null, localDateString())}>↻ 重新生成</button>
+                    <button className="wb-btn" onClick={() => void clearTodayPlan()}>清除</button>
+                  </div>
+                </div>
+              )}
               <div className="wb-list">
-                <TaskTreeRows roots={openTree} depth={0} expanded={todayExpanded} toggle={toggleTodayExpanded} label={label} dicts={dicts} onOpen={openTask} selectedId={selected?.task.id} />
+                <TaskTreeRows roots={todayTree} depth={0} expanded={todayExpanded} toggle={toggleTodayExpanded} label={label} dicts={dicts} onOpen={openTask} selectedId={selected?.task.id} />
                 {openTasks.length === 0 && <div className="wb-empty">今天没有需要关注的任务</div>}
               </div>
             </>

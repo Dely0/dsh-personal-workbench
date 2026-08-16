@@ -7,7 +7,8 @@ import { openWorkbenchDb } from '../lib/db/database.js'
 import { seedDictionaries } from '../lib/db/seed.js'
 import {
   createTask, updateTask, getTask, listTasks, listArchivedTasks, listChildren,
-  createDraft, confirmTaskDraft, getDraftBySession, listTaskSessions, linkTaskSession,
+  createDraft, confirmTaskDraft, confirmDailyPlanDraft, getDailyPlan, deleteDailyPlan,
+  getDraftBySession, listTaskSessions, linkTaskSession, localDateString,
 } from '../lib/db/repo.js'
 
 test('db migrations, dictionaries and task tree', () => {
@@ -30,6 +31,20 @@ test('db migrations, dictionaries and task tree', () => {
     updateTask(db, parent.id, { archived: true })
     assert.equal(listTasks(db).some((t) => t.id === parent.id), false)
     assert.equal(listArchivedTasks(db).some((t) => t.id === parent.id), true)
+
+    // V2 daily plan: draft -> confirm -> persisted per date, replace & delete work
+    const planDate = localDateString()
+    const planTask = createTask(db, { title: 'plan target', typeCode: 'code_impl', priorityCode: 'p2' })
+    const planDraft = createDraft(db, { kindCode: 'daily_plan', sessionId: 's-plan', payload: { planDate, summary: '先清逾期', items: [{ taskId: planTask.id, order: 1, note: '先做' }] } })
+    const plan = confirmDailyPlanDraft(db, planDraft.id)
+    assert.equal(plan.planDate, planDate)
+    assert.equal(plan.items.length, 1)
+    assert.equal(getDailyPlan(db, planDate).summary, '先清逾期')
+    const planDraft2 = createDraft(db, { kindCode: 'daily_plan', sessionId: 's-plan-2', payload: { planDate, summary: '第二版', items: [{ taskId: task.id, order: 1, note: '' }] } })
+    confirmDailyPlanDraft(db, planDraft2.id)
+    assert.equal(getDailyPlan(db, planDate).items[0].taskId, task.id)
+    assert.equal(deleteDailyPlan(db, planDate), true)
+    assert.equal(getDailyPlan(db, planDate), undefined)
     db.close()
   } finally {
     rmSync(dir, { recursive: true, force: true })

@@ -53,6 +53,7 @@ export const DICTIONARY_SEEDS: DictionarySeed[] = [
   { kind: 'draft_kind', code: 'subtask_plan', name: '子任务提案', sortOrder: 20, config: {} },
   { kind: 'draft_kind', code: 'completion', name: '执行完成验收', sortOrder: 30, config: {} },
   { kind: 'draft_kind', code: 'review', name: '复盘确认', sortOrder: 40, config: {} },
+  { kind: 'draft_kind', code: 'daily_plan', name: '今日计划', sortOrder: 50, config: {} },
   { kind: 'draft_status', code: 'pending', name: '待确认', sortOrder: 10, config: {} },
   { kind: 'draft_status', code: 'confirmed', name: '已确认', sortOrder: 20, config: {} },
   { kind: 'draft_status', code: 'abandoned', name: '已放弃', sortOrder: 30, config: {} },

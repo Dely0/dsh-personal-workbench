@@ -7,6 +7,14 @@ import type { DatabaseSync } from 'node:sqlite'
 
 export const nowIso = (): string => new Date().toISOString()
 
+/** 服务器本地时区的 YYYY-MM-DD；每日计划按本地“天”划分。 */
+export function localDateString(date = new Date()): string {
+  const y = date.getFullYear()
+  const m = String(date.getMonth() + 1).padStart(2, '0')
+  const d = String(date.getDate()).padStart(2, '0')
+  return `${y}-${m}-${d}`
+}
+
 export interface DictionaryEntry {
   kind: string
   code: string
@@ -624,4 +632,129 @@ export function addReminder(
     VALUES (?, ?, ?, ?, 1, NULL, ?)
   `).run(id, taskId, offsetMinutes, methodCode, at)
   return id
+}
+
+// ---------------------------------------------------------------------------
+// daily plans（V2 每日 AI 智能排序）
+// ---------------------------------------------------------------------------
+
+export interface DailyPlanItem {
+  taskId: string
+  order: number
+  title: string
+  note?: string
+}
+
+export interface DailyPlanInput {
+  planDate: string
+  summary?: string
+  items: DailyPlanItem[]
+  sourceCode?: string
+  sessionId?: string | null
+}
+
+export interface DailyPlanRow {
+  id: string
+  planDate: string
+  summary: string
+  items: DailyPlanItem[]
+  sourceCode: string
+  sessionId: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+interface RawDailyPlanRow {
+  id: string
+  plan_date: string
+  summary: string
+  items_json: string
+  source_code: string
+  session_id: string | null
+  created_at: string
+  updated_at: string
+}
+
+function parseDailyPlan(row: RawDailyPlanRow | undefined): DailyPlanRow | undefined {
+  if (row === undefined) return undefined
+  const items: unknown = JSON.parse(row.items_json)
+  return {
+    id: row.id,
+    planDate: row.plan_date,
+    summary: row.summary,
+    items: Array.isArray(items) ? items as DailyPlanItem[] : [],
+    sourceCode: row.source_code,
+    sessionId: row.session_id,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }
+}
+
+export function getDailyPlan(db: DatabaseSync, planDate: string): DailyPlanRow | undefined {
+  return parseDailyPlan(db.prepare('SELECT * FROM daily_plans WHERE plan_date = ?').get(planDate) as RawDailyPlanRow | undefined)
+}
+
+/** 同一日期只保留一份计划；再次确认即覆盖旧计划。 */
+export function saveDailyPlan(db: DatabaseSync, input: DailyPlanInput, at = nowIso()): DailyPlanRow {
+  const id = randomUUID()
+  const items = input.items
+    .map((item, index) => ({ taskId: item.taskId, order: Number.isFinite(item.order) ? item.order : index + 1, title: item.title ?? '', note: item.note ?? '' }))
+    .sort((a, b) => a.order - b.order)
+  db.prepare(`
+    INSERT INTO daily_plans (id, plan_date, summary, items_json, source_code, session_id, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(plan_date) DO UPDATE SET
+      summary = excluded.summary,
+      items_json = excluded.items_json,
+      source_code = excluded.source_code,
+      session_id = excluded.session_id,
+      updated_at = excluded.updated_at
+  `).run(id, input.planDate, input.summary ?? '', JSON.stringify(items), input.sourceCode ?? 'ai', input.sessionId ?? null, at, at)
+  return getDailyPlan(db, input.planDate)!
+}
+
+export function deleteDailyPlan(db: DatabaseSync, planDate: string): boolean {
+  return db.prepare('DELETE FROM daily_plans WHERE plan_date = ?').run(planDate).changes > 0
+}
+
+export function confirmDailyPlanDraft(db: DatabaseSync, draftId: string, actor = 'user', at = nowIso()): DailyPlanRow | undefined {
+  const draft = getDraft(db, draftId)
+  if (draft === undefined || draft.kindCode !== 'daily_plan') return undefined
+  const payload = draft.payload as { planDate?: string; summary?: string; items?: DailyPlanItem[] }
+  const planDate = typeof payload.planDate === 'string' ? payload.planDate : undefined
+  if (planDate === undefined || !/^\d{4}-\d{2}-\d{2}$/.test(planDate)) throw new Error('daily_plan requires a valid planDate (YYYY-MM-DD)')
+  const rawItems = Array.isArray(payload.items) ? payload.items : []
+  if (rawItems.length === 0) throw new Error('daily_plan requires at least one item')
+  const items: DailyPlanItem[] = []
+  for (const raw of rawItems) {
+    const taskId = typeof raw.taskId === 'string' ? raw.taskId : ''
+    const task = getTask(db, taskId)
+    if (task === undefined) throw new Error(`daily_plan contains unknown task ${taskId}`)
+    if (task.archived === 1 || task.statusCode === 'done' || task.statusCode === 'cancelled') {
+      throw new Error(`daily_plan task「${task.title}」is archived or closed`)
+    }
+    items.push({ taskId, order: typeof raw.order === 'number' ? raw.order : items.length + 1, title: task.title, note: typeof raw.note === 'string' ? raw.note : '' })
+  }
+  db.exec('BEGIN')
+  try {
+    const plan = saveDailyPlan(db, { planDate, summary: payload.summary ?? '', items, sourceCode: 'ai', sessionId: draft.sessionId }, at)
+    setDraftStatus(db, draftId, 'confirmed', at)
+    db.exec('COMMIT')
+    return plan
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
+  }
+}
+
+export function getPendingDailyPlanDraft(db: DatabaseSync, sessionId: string | null, planDate?: string): DraftRow | undefined {
+  if (sessionId === null || sessionId === undefined) return undefined
+  const rows = db.prepare("SELECT * FROM task_drafts WHERE status_code = 'pending' AND kind_code = 'daily_plan' ORDER BY created_at DESC").all() as unknown as RawDraftRow[]
+  for (const row of rows) {
+    const draft = parseDraft(row)
+    if (draft === undefined || draft.sessionId !== sessionId) continue
+    if (planDate !== undefined && draft.payload.planDate !== planDate) continue
+    return draft
+  }
+  return undefined
 }

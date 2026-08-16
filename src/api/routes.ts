@@ -6,17 +6,18 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import type { DatabaseSync } from 'node:sqlite'
 import {
-  abandonDraft, addReminder, archiveTask, confirmSubtaskPlanDraft, confirmTaskDraft,
+  abandonDraft, addReminder, archiveTask, confirmDailyPlanDraft, confirmSubtaskPlanDraft, confirmTaskDraft,
   createTaskReview,
-  createDraft, createTask, fireReminder, getDictionary, getDraft, getDraftBySession,
+  createDraft, createTask, deleteDailyPlan, fireReminder, getDailyPlan, getDictionary, getDraft, getDraftBySession,
   getLatestPendingDraft, getTask, linkTaskSession, listArchivedTasks, listChildren,
   listDictionaries, listDueReminders, listReminders, listTaskEvents, listTaskReviews,
-  listTaskSessions, listTasks, restoreTask, updateTask, type TaskInput,
+  listTaskSessions, listTasks, localDateString, restoreTask, updateTask, type TaskInput,
 } from '../db/repo.js'
 
 const TASKS_PREFIX = '/api/workbench/tasks'
 const DRAFTS_PREFIX = '/api/workbench/drafts'
 const REMINDERS_PREFIX = '/api/workbench/reminders'
+const PLANS_PREFIX = '/api/workbench/plans'
 
 function isLoopbackRequest(req: IncomingMessage): boolean {
   const address = req.socket.remoteAddress
@@ -160,10 +161,21 @@ export function makeRoutes(db: DatabaseSync): WebRoute[] {
           task.statusCode !== 'done' && task.statusCode !== 'cancelled' && task.dueAt !== null &&
           Date.parse(task.dueAt) >= Date.parse(start) && Date.parse(task.dueAt) < Date.parse(end))
         const doing = tasks.filter((task) => task.statusCode === 'doing' || task.statusCode === 'blocked')
+        const plan = getDailyPlan(db, localDateString(now))
+        const planView = plan === undefined ? null : {
+          ...plan,
+          items: plan.items
+            .map((item) => {
+              const task = getTask(db, item.taskId)
+              return task === undefined ? null : { taskId: item.taskId, order: item.order, title: task.title, note: item.note }
+            })
+            .filter((item): item is { taskId: string; order: number; title: string; note: string } => item !== null),
+        }
         writeJson(res, 200, {
           ok: true,
           dictionaries: listDictionaries(db),
           stats: { overdue: overdue.length, todayDue: todayDue.length, doing: doing.length, total: tasks.length },
+          todayPlan: planView,
           now: now.toISOString(),
         })
       },
@@ -327,6 +339,9 @@ export function makeRoutes(db: DatabaseSync): WebRoute[] {
             if (draft === undefined) return writeJson(res, 404, { error: 'draft not found' })
             if (draft.kindCode === 'task') return writeJson(res, 200, { ok: true, task: publicTask(confirmTaskDraft(db, id)!) })
             if (draft.kindCode === 'subtask_plan') return writeJson(res, 200, { ok: true, tasks: confirmSubtaskPlanDraft(db, id).map(publicTask) })
+            if (draft.kindCode === 'daily_plan') {
+              return writeJson(res, 200, { ok: true, plan: confirmDailyPlanDraft(db, id) })
+            }
             if (draft.kindCode === 'review') {
               const taskId = typeof draft.payload.taskId === 'string' ? draft.payload.taskId : undefined
               const summaryMd = typeof draft.payload.summaryMd === 'string' ? draft.payload.summaryMd : ''
@@ -380,6 +395,27 @@ export function makeRoutes(db: DatabaseSync): WebRoute[] {
         return writeJson(res, 404, { error: 'not found' })
       },
     },
+    // ------------------------------------------------------------------ plans
+    {
+      kind: 'prefix',
+      path: PLANS_PREFIX,
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) return writeJson(res, 403, { error: 'forbidden: loopback-only' })
+        const url = new URL(req.url ?? '/', 'http://localhost')
+        const segments = pathSegments(url, PLANS_PREFIX)
+        const method = req.method ?? 'GET'
+        if (segments.length === 0 && method === 'GET') {
+          const planDate = url.searchParams.get('date') ?? localDateString()
+          const plan = getDailyPlan(db, planDate)
+          return writeJson(res, 200, { ok: true, plan: plan ?? null })
+        }
+        if (segments.length === 1 && method === 'DELETE') {
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(segments[0])) return writeJson(res, 400, { error: 'invalid plan date' })
+          return writeJson(res, 200, { ok: true, deleted: deleteDailyPlan(db, segments[0]) })
+        }
+        return writeJson(res, 404, { error: 'not found' })
+      },
+    },
     // ------------------------------------------------------------------ health
     {
       kind: 'exact',
@@ -390,7 +426,7 @@ export function makeRoutes(db: DatabaseSync): WebRoute[] {
         writeJson(res, 200, {
           ok: true,
           name: 'dsh-workbench',
-          version: '0.5.2',
+          version: '0.6.0',
           db: {
             schemaVersion: versionRow?.value ?? 'unknown',
             taskCount: listTasks(db, { includeArchived: true }).length,

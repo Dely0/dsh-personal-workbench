@@ -4,7 +4,7 @@
  */
 import type { DatabaseSync } from 'node:sqlite'
 
-export const SCHEMA_VERSION = 2
+export const SCHEMA_VERSION = 3
 
 export interface Migration {
   version: number
@@ -140,6 +140,24 @@ export const MIGRATIONS: Migration[] = [
     name: 'task-workspace-path',
     up(db) {
       db.exec('ALTER TABLE tasks ADD COLUMN workspace_path TEXT')
+    },
+  },
+  {
+    version: 3,
+    name: 'daily-plans',
+    up(db) {
+      db.exec(`
+        CREATE TABLE daily_plans (
+          id          TEXT PRIMARY KEY,
+          plan_date   TEXT NOT NULL UNIQUE,
+          summary     TEXT NOT NULL DEFAULT '',
+          items_json  TEXT NOT NULL DEFAULT '[]',
+          source_code TEXT NOT NULL DEFAULT 'ai',
+          session_id  TEXT,
+          created_at  TEXT NOT NULL,
+          updated_at  TEXT NOT NULL
+        ) STRICT;
+      `)
     },
   },
 ]
