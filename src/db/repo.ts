@@ -1503,12 +1503,19 @@ export function confirmIdeaTaskDraft(db: DatabaseSync, draftId: string, actor = 
   db.exec('BEGIN')
   try {
     const created: TaskRow[] = []
+    const validCode = (kind: string, code: string | undefined, fallback: string): string => {
+      if (code !== undefined && getDictionary(db, kind, code)?.active === 1) return code
+      // AI 常见同义 code 归一化；其余未知 code 一律回退到安全默认值。
+      const aliases: Record<string, string> = { life: 'personal', living: 'personal', home: 'personal', work: 'project_delivery', code: 'code_impl' }
+      const candidate = aliases[code ?? ''] ?? fallback
+      return getDictionary(db, kind, candidate)?.active === 1 ? candidate : fallback
+    }
     const walk = (items: Array<Partial<TaskInput> & Record<string, unknown>>, parentId: string | null): void => {
       for (const item of items) {
         const title = typeof item.title === 'string' ? item.title.trim() : ''
         if (title === '') continue
-        const typeCode = String(item.typeCode ?? item.type_code ?? 'solution_design')
-        const priorityCode = String(item.priorityCode ?? item.priority_code ?? 'p2')
+        const typeCode = validCode('type', String(item.typeCode ?? item.type_code ?? ''), 'personal')
+        const priorityCode = validCode('priority', String(item.priorityCode ?? item.priority_code ?? ''), 'p2')
         const task = createTask(db, {
           title,
           description: typeof item.description === 'string' ? item.description : undefined,
@@ -1516,7 +1523,7 @@ export function confirmIdeaTaskDraft(db: DatabaseSync, draftId: string, actor = 
           priorityCode,
           dueAt: typeof item.dueAt === 'string' ? item.dueAt : typeof item.due_at === 'string' ? item.due_at : null,
           estimatedMinutes: typeof item.estimatedMinutes === 'number' ? item.estimatedMinutes : null,
-          aiPolicyCode: typeof item.aiPolicyCode === 'string' ? item.aiPolicyCode : undefined,
+          aiPolicyCode: validCode('ai_policy', typeof item.aiPolicyCode === 'string' ? item.aiPolicyCode : undefined, 'consult'),
           parentId,
           extra: { sourceIdeaIds, sourceClusterId, source: 'idea' },
         }, actor, at)
