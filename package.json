@@ -1,6 +1,6 @@
 {
   "name": "dsh-workbench",
-  "version": "0.12.3",
+  "version": "0.12.4",
   "description": "DSH 个人工作台：日历 + 层级任务 + AI 澄清/拆解/执行/复盘 + AI 智能排序/日报周报 + 桌面提醒",
   "type": "module",
   "main": "./lib/index.js",

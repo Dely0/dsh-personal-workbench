@@ -407,7 +407,7 @@ function TaskRow({ task, dicts, onOpen, selected, bare = false }: { task: Task; 
   )
 }
 
-function DraftBanner({ draft, onDone, runtime }: { draft: DraftView; onDone: () => void; runtime: WorkbenchRuntime }): JSX.Element {
+function DraftBanner({ draft, onDone, runtime, closePanel }: { draft: DraftView; onDone: () => void; runtime: WorkbenchRuntime; closePanel: () => void }): JSX.Element {
   const subtasks = Array.isArray(draft.payload.subtasks) ? draft.payload.subtasks as Array<{ title?: string }> : []
   const [busy, setBusy] = useState(false)
   const act = async (path: string): Promise<void> => {
@@ -426,7 +426,7 @@ function DraftBanner({ draft, onDone, runtime }: { draft: DraftView; onDone: () 
         <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
           <button className="wb-btn primary" disabled={busy} onClick={() => void act(`/api/workbench/drafts/${draft.id}/confirm`)}>确认保存报告</button>
           <button className="wb-btn" disabled={busy} onClick={() => void act(`/api/workbench/drafts/${draft.id}/abandon`)}>放弃</button>
-          {sessionId !== '' && <button className="wb-btn" onClick={() => { document.documentElement.removeAttribute(ACTIVE_ATTR); runtime.sessions.open(sessionId) }}>回到报告会话</button>}
+          {sessionId !== '' && <button className="wb-btn" onClick={() => { closePanel(); runtime.sessions.open(sessionId) }}>回到报告会话</button>}
         </div>
       </div>
     )
@@ -445,7 +445,7 @@ function DraftBanner({ draft, onDone, runtime }: { draft: DraftView; onDone: () 
         <div style={{ display: 'flex', gap: 8 }}>
           <button className="wb-btn primary" disabled={busy} onClick={() => void act(`/api/workbench/drafts/${draft.id}/confirm`)}>确认应用排序</button>
           <button className="wb-btn" disabled={busy} onClick={() => void act(`/api/workbench/drafts/${draft.id}/abandon`)}>放弃</button>
-          {sessionId !== '' && <button className="wb-btn" onClick={() => { document.documentElement.removeAttribute(ACTIVE_ATTR); runtime.sessions.open(sessionId) }}>回到排序会话</button>}
+          {sessionId !== '' && <button className="wb-btn" onClick={() => { closePanel(); runtime.sessions.open(sessionId) }}>回到排序会话</button>}
         </div>
       </div>
     )
@@ -460,7 +460,7 @@ function DraftBanner({ draft, onDone, runtime }: { draft: DraftView; onDone: () 
         <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
           <button className="wb-btn primary" disabled={busy} onClick={() => void act(`/api/workbench/drafts/${draft.id}/confirm`)}>确认写回任务</button>
           <button className="wb-btn" disabled={busy} onClick={() => void act(`/api/workbench/drafts/${draft.id}/abandon`)}>放弃</button>
-          {sessionId !== '' && <button className="wb-btn" onClick={() => { document.documentElement.removeAttribute(ACTIVE_ATTR); runtime.sessions.open(sessionId) }}>回到复盘会话</button>}
+          {sessionId !== '' && <button className="wb-btn" onClick={() => { closePanel(); runtime.sessions.open(sessionId) }}>回到复盘会话</button>}
         </div>
       </div>
     )
@@ -476,7 +476,7 @@ function DraftBanner({ draft, onDone, runtime }: { draft: DraftView; onDone: () 
         <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
           <button className="wb-btn primary" disabled={busy} onClick={() => void act(`/api/workbench/drafts/${draft.id}/confirm`)}>验收通过（标记完成）</button>
           <button className="wb-btn" disabled={busy} onClick={() => void act(`/api/workbench/drafts/${draft.id}/abandon`)}>驳回</button>
-          {sessionId !== '' && <button className="wb-btn" onClick={() => { document.documentElement.removeAttribute(ACTIVE_ATTR); runtime.sessions.open(sessionId) }}>回到执行会话</button>}
+          {sessionId !== '' && <button className="wb-btn" onClick={() => { closePanel(); runtime.sessions.open(sessionId) }}>回到执行会话</button>}
         </div>
         <div style={{ fontSize: 12, color: '#999', marginTop: 6 }}>驳回后请回到执行会话继续修改，AI 可再次提交验收申请。</div>
       </div>
@@ -496,7 +496,7 @@ function DraftBanner({ draft, onDone, runtime }: { draft: DraftView; onDone: () 
   )
 }
 
-function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
+function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; closePanel: () => void }): JSX.Element {
   const [view, setView] = useState<'today' | 'calendar' | 'list'>('today')
   const [bootstrap, setBootstrap] = useState<Bootstrap | null>(null)
   const [tasks, setTasks] = useState<Task[]>([])
@@ -624,7 +624,7 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
           : text.startsWith('week:') ? ['week_report', text.slice(5)] : ['day_report', text.slice(4)]
         const existing = await api<{ session: { sessionId: string } | null }>(`/api/workbench/ai-sessions?scope_code=${scopeCode}&anchor=${anchor}`)
         if (existing.session !== null) {
-          document.documentElement.removeAttribute(ACTIVE_ATTR)
+          closePanel()
           runtime.sessions.open(existing.session.sessionId)
           return
         }
@@ -633,7 +633,7 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
           const periodCode = text.startsWith('week:') ? 'week' : 'day'
           const rep = await api<{ report: { sessionId?: string | null } | null }>(`/api/workbench/reports/${periodCode}/${anchor}`)
           if (typeof rep.report?.sessionId === 'string' && rep.report.sessionId !== '') {
-            document.documentElement.removeAttribute(ACTIVE_ATTR)
+            closePanel()
             runtime.sessions.open(rep.report.sessionId)
             return
           }
@@ -716,7 +716,7 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
       if (task !== null && mode !== 'clarify') {
         await api(`/api/workbench/tasks/${task.id}/sessions`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sessionId: id, roleCode: mode }) }).catch(() => undefined)
       }
-      document.documentElement.removeAttribute(ACTIVE_ATTR)
+      closePanel()
       runtime.sessions.open(id)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -840,7 +840,7 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
         <button className="wb-btn" onClick={() => setShowForm((v) => !v)}><Icon name="plus" />新建</button>
         <button className="wb-btn" onClick={() => setShowSettings((v) => !v)}><Icon name="settings" />设置</button>
         <button className="wb-btn" onClick={collapseAll}><Icon name="list" />收起全部</button>
-        <button className="wb-btn" onClick={() => document.documentElement.removeAttribute(ACTIVE_ATTR)}><Icon name="back" />返回对话</button>
+        <button className="wb-btn" onClick={() => closePanel()}><Icon name="back" />返回对话</button>
       </div>
 
       {error !== null && <div className="wb-banner error"><h4><Icon name="bell" />出错了</h4>{error} <button className="wb-btn" onClick={() => setError(null)}>关闭</button></div>}
@@ -851,7 +851,7 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
           {reminders.map((r) => <div key={r.reminderId} style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 4 }}><span style={{ flex: 1 }}>{r.title} · {fmtTime(r.dueAt)}</span><button className="wb-btn" onClick={() => void fireReminder(r.reminderId)}>知道了</button></div>)}
         </div>
       )}
-      {pendingDraft !== null && <DraftBanner draft={pendingDraft} runtime={runtime} onDone={() => { setPendingDraft(null); setReportRefreshKey((v) => v + 1); void refresh() }} />}
+      {pendingDraft !== null && <DraftBanner draft={pendingDraft} runtime={runtime} closePanel={closePanel} onDone={() => { setPendingDraft(null); setReportRefreshKey((v) => v + 1); void refresh() }} />}
 
       <div className="wb-body">
         <div className="wb-nav">
@@ -1144,7 +1144,7 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
                                 ? <button className="wb-btn" disabled={busy} onClick={() => {
                                     const existing = selected.sessions.find((x) => x.role_code === 'review')
                                     if (existing !== undefined && typeof existing.session_id === 'string' && existing.session_id !== '') {
-                                      document.documentElement.removeAttribute(ACTIVE_ATTR)
+                                      closePanel()
                                       runtime.sessions.open(existing.session_id)
                                     } else {
                                       void startAISession('review', selected.task, selected.task.title)
@@ -1239,7 +1239,7 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
                   <h4>关联会话（{selected.sessions.length}）</h4>
                   {selected.sessions.map((s) => {
                     const sid = typeof s.session_id === 'string' ? s.session_id : ''
-                    return <div key={String(s.session_id ?? s.role_code)} style={{ fontSize: 12, color: 'var(--dsw-alias-state-business-primary,#8fa8c8)', cursor: 'pointer', marginBottom: 4 }} onClick={() => { if (sid !== '') { document.documentElement.removeAttribute(ACTIVE_ATTR); runtime.sessions.open(sid) } }}>#{String(s.role_code ?? '')} · {sid}（点击打开）</div>
+                    return <div key={String(s.session_id ?? s.role_code)} style={{ fontSize: 12, color: 'var(--dsw-alias-state-business-primary,#8fa8c8)', cursor: 'pointer', marginBottom: 4 }} onClick={() => { if (sid !== '') { closePanel(); runtime.sessions.open(sid) } }}>#{String(s.role_code ?? '')} · {sid}（点击打开）</div>
                   })}
                 </div>
                 <div className="wb-card">
@@ -1312,7 +1312,7 @@ export function apply(ctx: unknown): () => void {
   const view = document.createElement('div')
   view.setAttribute(VIEW_ATTR, '')
   const root: Root = createRoot(view)
-  root.render(<WorkbenchApp runtime={runtime} />)
+  root.render(<WorkbenchApp runtime={runtime} closePanel={() => setOpen(false)} />)
 
   let rootEl: HTMLElement | undefined
   let placed = false
