@@ -42,6 +42,9 @@ export interface TaskInput {
   workspacePath?: string | null
   extra?: Record<string, unknown>
   children?: Array<Partial<TaskInput>>
+  recurrenceCode?: string | null
+  recurrenceRule?: Record<string, unknown>
+  recurrenceMasterId?: string | null
 }
 
 export interface TaskPatch {
@@ -57,6 +60,8 @@ export interface TaskPatch {
   archived?: boolean
   workspacePath?: string | null
   extra?: Record<string, unknown>
+  recurrenceCode?: string | null
+  recurrenceRule?: Record<string, unknown>
 }
 
 export interface TaskRow {
@@ -75,6 +80,10 @@ export interface TaskRow {
   workspacePath: string | null
   archived: number
   extra: Record<string, unknown>
+  recurrenceCode: string | null
+  recurrenceRule: Record<string, unknown>
+  recurrenceMasterId: string | null
+  recurrenceLastGenerated: string | null
   createdAt: string
   updatedAt: string
   completedAt: string | null
@@ -111,6 +120,10 @@ interface RawTaskRow {
   workspace_path: string | null
   archived: number
   extra: string
+  recurrence_code: string | null
+  recurrence_rule: string
+  recurrence_master_id: string | null
+  recurrence_last_generated: string | null
   created_at: string
   updated_at: string
   completed_at: string | null
@@ -135,6 +148,10 @@ function parseTask(row: RawTaskRow | undefined): TaskRow | undefined {
     workspacePath: row.workspace_path,
     archived: row.archived,
     extra: JSON.parse(row.extra) as Record<string, unknown>,
+    recurrenceCode: row.recurrence_code,
+    recurrenceRule: JSON.parse(row.recurrence_rule) as Record<string, unknown>,
+    recurrenceMasterId: row.recurrence_master_id,
+    recurrenceLastGenerated: row.recurrence_last_generated,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     completedAt: row.completed_at,
@@ -220,6 +237,10 @@ export function createTask(db: DatabaseSync, input: TaskInput, actor = 'user', a
     workspacePath: input.workspacePath ?? null,
     archived: 0,
     extra: input.extra ?? {},
+    recurrenceCode: input.recurrenceCode === undefined || input.recurrenceCode === 'none' ? null : input.recurrenceCode,
+    recurrenceRule: input.recurrenceRule ?? {},
+    recurrenceMasterId: input.recurrenceMasterId ?? null,
+    recurrenceLastGenerated: null,
     createdAt: at,
     updatedAt: at,
     completedAt: input.statusCode === 'done' ? at : null,
@@ -229,12 +250,14 @@ export function createTask(db: DatabaseSync, input: TaskInput, actor = 'user', a
     INSERT INTO tasks
       (id, parent_id, title, description, type_code, status_code, priority_code,
        ai_policy_code, due_at, all_day, estimated_minutes, source, workspace_path, archived, extra,
+       recurrence_code, recurrence_rule, recurrence_master_id, recurrence_last_generated,
        created_at, updated_at, completed_at, cancelled_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     task.id, task.parentId, task.title, task.description, task.typeCode,
     task.statusCode, task.priorityCode, task.aiPolicyCode, task.dueAt, task.allDay,
     task.estimatedMinutes, task.source, task.workspacePath, JSON.stringify(task.extra),
+    task.recurrenceCode, JSON.stringify(task.recurrenceRule), task.recurrenceMasterId, task.recurrenceLastGenerated,
     task.createdAt, task.updatedAt, task.completedAt, task.cancelledAt,
   )
   appendEvent(db, id, 'created', { after: task, actor, at })
@@ -291,6 +314,8 @@ export function updateTask(db: DatabaseSync, id: string, patch: TaskPatch, actor
     archived: patch.archived === undefined ? before.archived : patch.archived ? 1 : 0,
     workspacePath: patch.workspacePath === undefined ? before.workspacePath : patch.workspacePath,
     extra: patch.extra === undefined ? before.extra : patch.extra,
+    recurrenceCode: patch.recurrenceCode === undefined ? before.recurrenceCode : patch.recurrenceCode === 'none' ? null : patch.recurrenceCode,
+    recurrenceRule: patch.recurrenceRule === undefined ? before.recurrenceRule : patch.recurrenceRule,
     updatedAt: at,
     completedAt: patch.statusCode === 'done' ? at : patch.statusCode !== undefined ? null : before.completedAt,
     cancelledAt: patch.statusCode === 'cancelled' ? at : patch.statusCode !== undefined ? null : before.cancelledAt,
@@ -299,12 +324,14 @@ export function updateTask(db: DatabaseSync, id: string, patch: TaskPatch, actor
     UPDATE tasks SET
       title = ?, description = ?, type_code = ?, status_code = ?, priority_code = ?,
       ai_policy_code = ?, due_at = ?, all_day = ?, estimated_minutes = ?, archived = ?,
-      workspace_path = ?, extra = ?, updated_at = ?, completed_at = ?, cancelled_at = ?
+      workspace_path = ?, extra = ?, recurrence_code = ?, recurrence_rule = ?,
+      updated_at = ?, completed_at = ?, cancelled_at = ?
     WHERE id = ?
   `).run(
     next.title, next.description, next.typeCode, next.statusCode, next.priorityCode,
     next.aiPolicyCode, next.dueAt, next.allDay, next.estimatedMinutes, next.archived,
-    next.workspacePath, JSON.stringify(next.extra), next.updatedAt, next.completedAt, next.cancelledAt, id,
+    next.workspacePath, JSON.stringify(next.extra), next.recurrenceCode, JSON.stringify(next.recurrenceRule),
+    next.updatedAt, next.completedAt, next.cancelledAt, id,
   )
   appendEvent(db, id, 'updated', { before, after: next, actor, at })
   return next
@@ -990,4 +1017,122 @@ export function registerAiSession(db: DatabaseSync, input: AiSessionRegistryInpu
       last_activity_at = excluded.last_activity_at
   `).run(input.scopeCode, input.anchor, input.sessionId, input.workspace ?? null, input.note ?? null, createdAt, at)
   return getAiSession(db, input.scopeCode, input.anchor)!
+}
+
+// ---------------------------------------------------------------------------
+// recurring tasks（V2.4：每天/每周/每月模板 → 惰性补齐实例）
+// ---------------------------------------------------------------------------
+
+export const RECURRENCE_BACKFILL_LIMIT = 100
+
+function nextLocalDate(date: Date): Date {
+  const next = new Date(date)
+  next.setDate(next.getDate() + 1)
+  return next
+}
+
+function localDateFromString(value: string | null | undefined): Date | undefined {
+  if (value === null || value === undefined) return undefined
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value)
+  if (match === null) return undefined
+  const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]))
+  return Number.isNaN(date.getTime()) ? undefined : date
+}
+
+function recurrenceMatches(code: string, rule: Record<string, unknown>, date: Date, anchor: Date): boolean {
+  if (code === 'daily') {
+    const interval = typeof rule.interval === 'number' && rule.interval >= 1 ? Math.floor(rule.interval) : 1
+    const diffDays = Math.round((date.getTime() - anchor.getTime()) / 86_400_000)
+    return diffDays >= 0 && diffDays % interval === 0
+  }
+  if (code === 'weekly') {
+    const weekdays = Array.isArray(rule.weekdays) && rule.weekdays.length > 0
+      ? rule.weekdays.map((day) => Number(day)).filter((day) => Number.isInteger(day) && day >= 0 && day <= 6)
+      : [anchor.getDay()]
+    return weekdays.includes(date.getDay())
+  }
+  if (code === 'monthly') {
+    const monthDay = typeof rule.monthDay === 'number' && rule.monthDay >= 1 && rule.monthDay <= 31 ? Math.floor(rule.monthDay) : anchor.getDate()
+    const lastDay = new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate()
+    return date.getDate() === Math.min(monthDay, lastDay)
+  }
+  return false
+}
+
+function occurrenceDueAt(master: TaskRow, date: Date): { dueAt: string; allDay: boolean } {
+  const allDay = master.allDay === 1
+  let hours = allDay ? 0 : 18
+  let minutes = 0
+  if (master.dueAt !== null) {
+    const base = new Date(master.dueAt)
+    if (!Number.isNaN(base.getTime())) {
+      hours = base.getHours()
+      minutes = base.getMinutes()
+    }
+  }
+  const due = new Date(date.getFullYear(), date.getMonth(), date.getDate(), hours, minutes, 0, 0)
+  return { dueAt: due.toISOString(), allDay }
+}
+
+/** 把重复模板到期实例补齐到 today；单次最多补 RECURRENCE_BACKFILL_LIMIT 条，剩余下一请求继续。 */
+export function ensureRecurringInstances(db: DatabaseSync, today = localDateString(), at = nowIso()): number {
+  const todayDate = localDateFromString(today)
+  if (todayDate === undefined) return 0
+  const masters = (db.prepare(`
+    SELECT * FROM tasks
+    WHERE recurrence_code IN ('daily', 'weekly', 'monthly')
+      AND archived = 0 AND status_code NOT IN ('done', 'cancelled')
+  `).all() as unknown as RawTaskRow[]).map((row) => parseTask(row)).filter((task): task is TaskRow => task !== undefined)
+
+  let created = 0
+  db.exec('BEGIN')
+  try {
+    for (const master of masters) {
+      const rule = master.recurrenceRule
+      const startDate = localDateFromString(typeof rule.startDate === 'string' ? rule.startDate : undefined)
+        ?? (master.dueAt !== null ? localDateFromString(localDateString(new Date(master.dueAt))) : undefined)
+        ?? localDateFromString(localDateString(new Date(master.createdAt)))
+      if (startDate === undefined) continue
+      const endDateRaw = typeof rule.endDate === 'string' ? localDateFromString(rule.endDate) : undefined
+      const endDate = endDateRaw !== undefined && endDateRaw < todayDate ? endDateRaw : todayDate
+      let cursor = localDateFromString(master.recurrenceLastGenerated)
+      cursor = cursor === undefined ? new Date(startDate) : nextLocalDate(cursor)
+      let lastGenerated = cursor
+      while (cursor <= endDate) {
+        if (recurrenceMatches(master.recurrenceCode ?? '', rule, cursor, startDate)) {
+          const { dueAt, allDay } = occurrenceDueAt(master, cursor)
+          createTask(db, {
+            title: master.title,
+            description: master.description,
+            typeCode: master.typeCode,
+            priorityCode: master.priorityCode,
+            aiPolicyCode: master.aiPolicyCode,
+            dueAt,
+            allDay,
+            estimatedMinutes: master.estimatedMinutes,
+            source: 'recurring',
+            parentId: master.id,
+            workspacePath: master.workspacePath,
+            recurrenceMasterId: master.id,
+            extra: { occurrenceDate: localDateString(cursor) },
+          }, 'recurring', at)
+          created += 1
+          lastGenerated = new Date(cursor)
+          if (created >= RECURRENCE_BACKFILL_LIMIT) break
+        }
+        cursor = nextLocalDate(cursor)
+      }
+      if (cursor > endDate) lastGenerated = new Date(endDate)
+      const nextGenerated = lastGenerated <= endDate && lastGenerated >= startDate ? localDateString(lastGenerated) : null
+      if (nextGenerated !== null && nextGenerated !== master.recurrenceLastGenerated) {
+        db.prepare('UPDATE tasks SET recurrence_last_generated = ?, updated_at = ? WHERE id = ?').run(nextGenerated, at, master.id)
+      }
+      if (created >= RECURRENCE_BACKFILL_LIMIT) break
+    }
+    db.exec('COMMIT')
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
+  }
+  return created
 }

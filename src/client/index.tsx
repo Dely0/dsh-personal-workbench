@@ -126,6 +126,10 @@ interface Task {
   workspacePath: string | null
   archived: boolean
   extra: Record<string, unknown>
+  recurrenceCode: string | null
+  recurrenceRule: Record<string, unknown>
+  recurrenceMasterId: string | null
+  recurrenceLastGenerated: string | null
   createdAt: string
   updatedAt: string
   completedAt: string | null
@@ -499,7 +503,7 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
   const [selected, setSelected] = useState<TaskDetail | null>(null)
   const [showForm, setShowForm] = useState(false)
   const [subtaskParent, setSubtaskParent] = useState<Task | null>(null)
-  const [editDraft, setEditDraft] = useState<{ title: string; description: string; typeCode: string; priorityCode: string; statusCode: string; aiPolicyCode: string; dueLocal: string; workspacePath: string } | null>(null)
+  const [editDraft, setEditDraft] = useState<{ title: string; description: string; typeCode: string; priorityCode: string; statusCode: string; aiPolicyCode: string; dueLocal: string; workspacePath: string; recurrenceCode: string } | null>(null)
   const [showQuick, setShowQuick] = useState(false)
   const [quickText, setQuickText] = useState('')
   const [pendingDraft, setPendingDraft] = useState<DraftView | null>(null)
@@ -674,6 +678,7 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
       planDayEnd.setDate(planDayEnd.getDate() + 1)
       const planCandidates = tasks
         .filter((t) => t.statusCode !== 'done' && t.statusCode !== 'cancelled')
+        .filter((t) => t.recurrenceCode === null || t.recurrenceCode === 'none')
         .filter((t) => (t.dueAt !== null && Date.parse(t.dueAt) < planDayEnd.getTime()) || (planAnchor === localDateString() && t.dueAt === null))
         .slice(0, 30)
       const planTaskLines = planCandidates
@@ -724,7 +729,10 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
     const title = String(form.get('title') ?? '').trim()
     if (title === '') return
     const due = String(form.get('due') ?? '')
-    await api('/api/workbench/tasks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title, description: String(form.get('description') ?? ''), typeCode: String(form.get('type') ?? ''), priorityCode: String(form.get('priority') ?? ''), statusCode: String(form.get('status') ?? 'todo'), workspacePath: String(form.get('workspacePath') ?? '').trim() || null, dueAt: due === '' ? null : new Date(due).toISOString() }) })
+    const dueAt = due === '' ? null : new Date(due).toISOString()
+    const recurrenceCode = String(form.get('recurrence') ?? 'none')
+    const recurrenceAnchor = dueAt !== null ? new Date(dueAt) : new Date()
+    await api('/api/workbench/tasks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title, description: String(form.get('description') ?? ''), typeCode: String(form.get('type') ?? ''), priorityCode: String(form.get('priority') ?? ''), statusCode: String(form.get('status') ?? 'todo'), workspacePath: String(form.get('workspacePath') ?? '').trim() || null, dueAt, recurrenceCode: recurrenceCode === 'none' ? null : recurrenceCode, recurrenceRule: recurrenceCode === 'none' ? undefined : { interval: 1, startDate: localDateString(recurrenceAnchor), weekdays: [recurrenceAnchor.getDay()], monthDay: recurrenceAnchor.getDate() } }) })
     setShowForm(false); await refresh()
   }
   // 今日/日历/列表三棵树：默认全部收起
@@ -903,6 +911,7 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
               <label>优先级<select name="priority" defaultValue="p2">{dictOf('priority').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
               <label>状态<select name="status" defaultValue="todo">{dictOf('status').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
               <label>截止时间<input name="due" type="datetime-local" /></label>
+              <label>重复<select name="recurrence" defaultValue="none">{dictOf('recurrence').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
               <label>AI 会话工作区（可选，留空用默认）<input name="workspacePath" placeholder={settings.defaultWorkspace || '默认工作区未设置'} /></label>
               <label className="full">描述<textarea name="description" rows={2} placeholder="背景 / 目标 / 验收标准（Markdown）" /></label>
               <div className="full" style={{ display: 'flex', gap: 8 }}><button className="wb-btn primary lg" type="submit"><Icon name="check" />保存任务</button><button className="wb-btn" type="button" onClick={() => setShowForm(false)}>取消</button></div>
@@ -1092,7 +1101,7 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
                     <>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                         <h4 style={{ flex: 1, margin: 0 }}>{selected.task.title}</h4>
-                        {!selected.task.archived && <button className="wb-btn" onClick={() => setEditDraft({ title: selected.task.title, description: selected.task.description, typeCode: selected.task.typeCode, priorityCode: selected.task.priorityCode, statusCode: selected.task.statusCode, aiPolicyCode: selected.task.aiPolicyCode, dueLocal: toLocalInput(selected.task.dueAt), workspacePath: selected.task.workspacePath ?? '' })}><Icon name="edit" />编辑</button>}
+                        {!selected.task.archived && <button className="wb-btn" onClick={() => setEditDraft({ title: selected.task.title, description: selected.task.description, typeCode: selected.task.typeCode, priorityCode: selected.task.priorityCode, statusCode: selected.task.statusCode, aiPolicyCode: selected.task.aiPolicyCode, dueLocal: toLocalInput(selected.task.dueAt), workspacePath: selected.task.workspacePath ?? '', recurrenceCode: selected.task.recurrenceCode ?? 'none' })}><Icon name="edit" />编辑</button>}
                       </div>
                       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', margin: '8px 0' }}>
                         <Badge dict={dictOf('type')} code={selected.task.typeCode} />
@@ -1100,14 +1109,22 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
                         <Badge dict={dictOf('status')} code={selected.task.statusCode} />
                       </div>
                       <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>截止：{selected.task.dueAt === null ? '无' : fmtTime(selected.task.dueAt)}</div>
-                      <div style={{ fontSize: 12, color: '#999', marginBottom: 8 }}>AI 工作区：{selected.task.workspacePath ?? (settings.defaultWorkspace || '默认工作区未设置')}</div>
+                      <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>AI 工作区：{selected.task.workspacePath ?? (settings.defaultWorkspace || '默认工作区未设置')}</div>
+                      <div style={{ fontSize: 12, color: '#999', marginBottom: 8 }}>
+                        重复：{dicts.find((d) => d.kind === 'recurrence' && d.code === (selected.task.recurrenceCode ?? 'none'))?.name ?? '不重复'}
+                        {selected.task.recurrenceMasterId !== null ? '（自动生成的实例）' : selected.task.recurrenceCode !== null && selected.task.recurrenceCode !== 'none' ? `（模板，已生成到 ${selected.task.recurrenceLastGenerated ?? '—'}）` : ''}
+                      </div>
                       <MarkdownText text={selected.task.description || '（无描述）'} />
                       <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
                         {selected.task.archived ? (
                           <button className="wb-btn primary" onClick={() => { void api(`/api/workbench/tasks/${selected.task.id}/restore`, { method: 'POST' }).then(() => { setNotice('任务已恢复'); setArchivedMode(false); void refresh() }).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e))) }}>恢复任务</button>
                         ) : (
                           <>
-                            {selected.children.length === 0
+                            {selected.task.recurrenceMasterId !== null
+                              ? <span style={{ fontSize: 12, color: '#999', alignSelf: 'center' }}>这是重复任务自动生成的实例，可直接执行/验收。</span>
+                              : selected.task.recurrenceCode !== null && selected.task.recurrenceCode !== 'none'
+                                ? <span style={{ fontSize: 12, color: '#999', alignSelf: 'center' }}>重复任务模板：实例会自动生成到“子任务”中，归档模板即停止重复。</span>
+                                : selected.children.length === 0
                               ? selected.task.statusCode === 'done' || selected.task.statusCode === 'cancelled'
                                 ? <button className="wb-btn" disabled={busy} onClick={() => {
                                     const existing = selected.sessions.find((x) => x.role_code === 'review')
@@ -1144,6 +1161,7 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
                         aiPolicyCode: editDraft.aiPolicyCode,
                         dueAt: editDraft.dueLocal === '' ? null : new Date(editDraft.dueLocal).toISOString(),
                         workspacePath: editDraft.workspacePath.trim() === '' ? null : editDraft.workspacePath.trim(),
+                        recurrenceCode: editDraft.recurrenceCode,
                       }).then(() => { setEditDraft(null); setNotice('任务已更新') }).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
                     }}>
                       <h4 className="full" style={{ margin: 0 }}><Icon name="edit" />编辑任务</h4>
@@ -1152,6 +1170,7 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
                       <label>优先级<select value={editDraft.priorityCode} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, priorityCode: e.target.value })}>{dictOf('priority').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
                       <label>状态<select value={editDraft.statusCode} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, statusCode: e.target.value })}>{dictOf('status').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
                       <label>AI 策略<select value={editDraft.aiPolicyCode} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, aiPolicyCode: e.target.value })}>{dictOf('ai_policy').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
+                      <label>重复<select value={editDraft.recurrenceCode} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, recurrenceCode: e.target.value })}>{dictOf('recurrence').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
                       <label>截止时间<input type="datetime-local" value={editDraft.dueLocal} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, dueLocal: e.target.value })} /></label>
                       <label className="full">AI 会话工作区（留空使用默认）<input value={editDraft.workspacePath} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, workspacePath: e.target.value })} placeholder={settings.defaultWorkspace || '默认工作区未设置'} /></label>
                       <label className="full">描述（Markdown）<textarea rows={6} value={editDraft.description} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, description: e.target.value })} /></label>
@@ -1173,6 +1192,7 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
                     <label>类型<select name="type" defaultValue={subtaskParent.typeCode}>{dictOf('type').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
                     <label>优先级<select name="priority" defaultValue={subtaskParent.priorityCode}>{dictOf('priority').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
                     <label>截止时间<input name="due" type="datetime-local" /></label>
+              <label>重复<select name="recurrence" defaultValue="none">{dictOf('recurrence').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
                     <div className="full" style={{ display: 'flex', gap: 8 }}><button className="wb-btn primary" type="submit">保存子任务</button><button className="wb-btn" type="button" onClick={() => setSubtaskParent(null)}>取消</button></div>
                   </form>
                 )}

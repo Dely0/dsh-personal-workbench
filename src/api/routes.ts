@@ -8,7 +8,7 @@ import type { DatabaseSync } from 'node:sqlite'
 import {
   abandonDraft, addReminder, archiveTask, confirmDailyPlanDraft, confirmReportDraft, confirmSubtaskPlanDraft, confirmTaskDraft,
   createTaskReview,
-  createDraft, createTask, deleteDailyPlan, deleteTaskReport, fireReminder, getAiSession, getDailyPlan, getDictionary, getDraft, getDraftBySession,
+  createDraft, createTask, deleteDailyPlan, deleteTaskReport, ensureRecurringInstances, fireReminder, getAiSession, getDailyPlan, getDictionary, getDraft, getDraftBySession,
   getLatestPendingDraft, getTask, getTaskReport, linkTaskSession, listArchivedTasks, listChildren,
   listDictionaries, listDueReminders, listReminders, listTaskEvents, listTaskReports, listTaskReviews,
   listTaskSessions, listTasks, localDateString, registerAiSession, restoreTask, updateTask, type ReportPeriodCode, type TaskInput,
@@ -92,6 +92,7 @@ function reportContext(db: DatabaseSync, periodCode: ReportPeriodCode, periodSta
   if (range === undefined) return undefined
   const startMs = Date.parse(range.start)
   const endMs = Date.parse(range.end)
+  ensureRecurringInstances(db, periodStart)
   const tasks = listTasks(db, { includeArchived: true })
   const inRange = (iso: string | null): boolean => iso !== null && Date.parse(iso) >= startMs && Date.parse(iso) < endMs
   const completed = tasks.filter((task) => inRange(task.completedAt))
@@ -127,8 +128,21 @@ function publicTask(task: NonNullable<ReturnType<typeof getTask>>): Record<strin
   return { ...task, allDay: task.allDay === 1 }
 }
 
+function defaultRecurrenceRule(code: string, anchor?: string | null): Record<string, unknown> {
+  const base = anchor !== undefined && anchor !== null ? new Date(anchor) : new Date()
+  const date = Number.isNaN(base.getTime()) ? new Date() : base
+  return {
+    interval: 1,
+    startDate: localDateString(date),
+    weekdays: [date.getDay()],
+    monthDay: date.getDate(),
+  }
+}
+
 function taskInputFromBody(body: Record<string, unknown>): TaskInput {
   const str = (key: string): string | undefined => typeof body[key] === 'string' ? body[key] as string : undefined
+  const recurrenceCode = str('recurrenceCode')
+  const recurrenceRule = typeof body.recurrenceRule === 'object' && body.recurrenceRule !== null ? body.recurrenceRule as Record<string, unknown> : undefined
   return {
     title: str('title') ?? '',
     description: str('description'),
@@ -143,6 +157,8 @@ function taskInputFromBody(body: Record<string, unknown>): TaskInput {
     parentId: body.parentId === null ? null : str('parentId'),
     workspacePath: body.workspacePath === null ? null : str('workspacePath'),
     extra: typeof body.extra === 'object' && body.extra !== null ? body.extra as Record<string, unknown> : undefined,
+    recurrenceCode: recurrenceCode ?? null,
+    recurrenceRule: recurrenceCode !== undefined && recurrenceCode !== 'none' ? recurrenceRule ?? defaultRecurrenceRule(recurrenceCode, str('dueAt')) : recurrenceRule,
   }
 }
 
@@ -210,6 +226,7 @@ export function makeRoutes(db: DatabaseSync): WebRoute[] {
         if (!isLoopbackRequest(req)) return writeJson(res, 403, { error: 'forbidden: loopback-only' })
         const now = new Date()
         const { start, end } = todayRange(now)
+        ensureRecurringInstances(db, localDateString(now))
         const tasks = listTasks(db)
         const overdue = tasks.filter((task) =>
           task.statusCode !== 'done' && task.statusCode !== 'cancelled' && task.dueAt !== null && Date.parse(task.dueAt) < now.getTime())
@@ -249,6 +266,7 @@ export function makeRoutes(db: DatabaseSync): WebRoute[] {
 
         if (segments.length === 0) {
           if (method === 'GET') {
+            ensureRecurringInstances(db)
             const parentId = url.searchParams.get('parent_id') ?? undefined
             const archivedOnly = url.searchParams.get('archived') === 'true'
             const tasks = archivedOnly ? listArchivedTasks(db) : listTasks(db, { parentId })
@@ -263,7 +281,9 @@ export function makeRoutes(db: DatabaseSync): WebRoute[] {
               requireCode(db, 'priority', input.priorityCode, 'priorityCode')
               if (input.statusCode !== undefined) requireCode(db, 'status', input.statusCode, 'statusCode')
               if (input.aiPolicyCode !== undefined) requireCode(db, 'ai_policy', input.aiPolicyCode, 'aiPolicyCode')
+              if (input.recurrenceCode !== undefined && input.recurrenceCode !== null && input.recurrenceCode !== 'none') requireCode(db, 'recurrence', input.recurrenceCode, 'recurrenceCode')
               const task = createTask(db, input)
+              ensureRecurringInstances(db)
               return writeJson(res, 201, { ok: true, task: publicTask(task) })
             } catch (error) {
               return writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
@@ -275,6 +295,7 @@ export function makeRoutes(db: DatabaseSync): WebRoute[] {
         const id = segments[0]
         const action = segments[1]
         if (method === 'GET' && action === undefined) {
+          ensureRecurringInstances(db)
           const task = getTask(db, id)
           if (task === undefined) return writeJson(res, 404, { error: 'task not found' })
           return writeJson(res, 200, {
@@ -295,6 +316,21 @@ export function makeRoutes(db: DatabaseSync): WebRoute[] {
             if (typeof body.statusCode === 'string') { requireCode(db, 'status', body.statusCode, 'statusCode'); patch.statusCode = body.statusCode }
             if (typeof body.priorityCode === 'string') { requireCode(db, 'priority', body.priorityCode, 'priorityCode'); patch.priorityCode = body.priorityCode }
             if (typeof body.aiPolicyCode === 'string') { requireCode(db, 'ai_policy', body.aiPolicyCode, 'aiPolicyCode'); patch.aiPolicyCode = body.aiPolicyCode }
+            if (typeof body.recurrenceCode === 'string') {
+              if (body.recurrenceCode !== 'none') requireCode(db, 'recurrence', body.recurrenceCode, 'recurrenceCode')
+              const current = getTask(db, id)
+              if (current?.recurrenceMasterId !== null && current?.recurrenceMasterId !== undefined) {
+                return writeJson(res, 400, { error: 'recurrence can only be edited on the template task' })
+              }
+              patch.recurrenceCode = body.recurrenceCode
+              if (typeof body.recurrenceRule === 'object' && body.recurrenceRule !== null) {
+                patch.recurrenceRule = body.recurrenceRule as Record<string, unknown>
+              } else if (body.recurrenceCode === 'none') {
+                patch.recurrenceRule = {}
+              } else if (current?.recurrenceCode === null || current?.recurrenceCode === undefined || current.recurrenceCode === 'none') {
+                patch.recurrenceRule = defaultRecurrenceRule(body.recurrenceCode, current?.dueAt)
+              }
+            }
             if ('dueAt' in body) patch.dueAt = typeof body.dueAt === 'string' ? body.dueAt : null
             if (body.allDay === true || body.allDay === false) patch.allDay = body.allDay
             if ('estimatedMinutes' in body) patch.estimatedMinutes = typeof body.estimatedMinutes === 'number' ? body.estimatedMinutes : null
@@ -303,6 +339,7 @@ export function makeRoutes(db: DatabaseSync): WebRoute[] {
             if (typeof body.extra === 'object' && body.extra !== null) patch.extra = body.extra as Record<string, unknown>
             const task = updateTask(db, id, patch)
             if (task === undefined) return writeJson(res, 404, { error: 'task not found' })
+            if (patch.recurrenceCode !== undefined || patch.recurrenceRule !== undefined) ensureRecurringInstances(db)
             return writeJson(res, 200, { ok: true, task: publicTask(task) })
           } catch (error) {
             return writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
@@ -563,7 +600,7 @@ export function makeRoutes(db: DatabaseSync): WebRoute[] {
         writeJson(res, 200, {
           ok: true,
           name: 'dsh-workbench',
-          version: '0.11.3',
+          version: '0.12.0',
           db: {
             schemaVersion: versionRow?.value ?? 'unknown',
             taskCount: listTasks(db, { includeArchived: true }).length,

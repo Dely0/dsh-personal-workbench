@@ -56,6 +56,12 @@ export const DICTIONARY_SEEDS: DictionarySeed[] = [
   { kind: 'draft_kind', code: 'daily_plan', name: '今日计划', sortOrder: 50, config: {} },
   { kind: 'draft_kind', code: 'report', name: '日报/周报', sortOrder: 60, config: {} },
 
+  // 重复规则
+  { kind: 'recurrence', code: 'none', name: '不重复', sortOrder: 10, config: {} },
+  { kind: 'recurrence', code: 'daily', name: '每天', sortOrder: 20, config: {} },
+  { kind: 'recurrence', code: 'weekly', name: '每周', sortOrder: 30, config: {} },
+  { kind: 'recurrence', code: 'monthly', name: '每月', sortOrder: 40, config: {} },
+
   // V2 复用型 AI 会话范围
   { kind: 'ai_session_scope', code: 'daily_plan', name: '今日计划会话', sortOrder: 10, config: {} },
   { kind: 'ai_session_scope', code: 'day_report', name: '日报会话', sortOrder: 20, config: {} },

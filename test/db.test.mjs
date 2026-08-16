@@ -9,7 +9,7 @@ import {
   createTask, updateTask, getTask, listTasks, listArchivedTasks, listChildren,
   createDraft, confirmTaskDraft, confirmDailyPlanDraft, confirmReportDraft, getDailyPlan, deleteDailyPlan,
   getTaskReport, listTaskReports, deleteTaskReport,
-  getAiSession, registerAiSession, listReminders,
+  getAiSession, registerAiSession, listReminders, ensureRecurringInstances,
   getDraftBySession, listTaskSessions, linkTaskSession, localDateString,
 } from '../lib/db/repo.js'
 
@@ -70,6 +70,15 @@ test('db migrations, dictionaries and task tree', () => {
     assert.equal(getAiSession(db, 'day_report', planDate).sessionId, 'sess-day-report')
     registerAiSession(db, { scopeCode: 'day_report', anchor: planDate, sessionId: 'sess-day-report-2' })
     assert.equal(getAiSession(db, 'day_report', planDate).sessionId, 'sess-day-report-2')
+
+    // V2.4 recurring tasks: daily template lazily generates instances, idempotent per day
+    const recurring = createTask(db, { title: 'daily standup', typeCode: 'team_mgmt', priorityCode: 'p2', dueAt: '2026-08-16T09:30:00+08:00', recurrenceCode: 'daily', recurrenceRule: { interval: 1, startDate: '2026-08-16', weekdays: [], monthDay: 16 } })
+    assert.equal(ensureRecurringInstances(db, '2026-08-16'), 1)
+    assert.equal(listChildren(db, recurring.id).length, 1)
+    assert.equal(ensureRecurringInstances(db, '2026-08-17'), 1)
+    assert.equal(listChildren(db, recurring.id).length, 2)
+    assert.equal(ensureRecurringInstances(db, '2026-08-17'), 0)
+    assert.equal(getTask(db, recurring.id).recurrenceLastGenerated, '2026-08-17')
     db.close()
   } finally {
     rmSync(dir, { recursive: true, force: true })

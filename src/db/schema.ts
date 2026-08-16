@@ -4,7 +4,7 @@
  */
 import type { DatabaseSync } from 'node:sqlite'
 
-export const SCHEMA_VERSION = 5
+export const SCHEMA_VERSION = 6
 
 export interface Migration {
   version: number
@@ -197,6 +197,20 @@ export const MIGRATIONS: Migration[] = [
           PRIMARY KEY (scope_code, anchor)
         ) STRICT;
         CREATE INDEX idx_ai_session_registry_session ON ai_session_registry(session_id);
+      `)
+    },
+  },
+  {
+    version: 6,
+    name: 'recurring-tasks',
+    up(db) {
+      db.exec(`
+        ALTER TABLE tasks ADD COLUMN recurrence_code TEXT;
+        ALTER TABLE tasks ADD COLUMN recurrence_rule TEXT NOT NULL DEFAULT '{}';
+        ALTER TABLE tasks ADD COLUMN recurrence_master_id TEXT REFERENCES tasks(id) ON DELETE CASCADE;
+        ALTER TABLE tasks ADD COLUMN recurrence_last_generated TEXT;
+        CREATE INDEX idx_tasks_recurrence_master ON tasks(recurrence_master_id);
+        CREATE INDEX idx_tasks_recurrence_code ON tasks(recurrence_code);
       `)
     },
   },
