@@ -378,7 +378,9 @@ function TaskRow({ task, dicts, onOpen, selected, bare = false }: { task: Task; 
   const due = task.dueAt === null ? null : new Date(task.dueAt)
   const now = new Date()
   const dueText = task.statusCode === 'done'
-    ? (task.dueAt !== null ? `${fmtTime(task.dueAt)}（已完成）` : '已完成')
+    ? task.dueAt !== null
+      ? fmtTime(task.dueAt)
+      : task.completedAt !== null ? fmtTime(task.completedAt) : ''
     : task.statusCode === 'cancelled'
       ? '已取消'
       : due === null
