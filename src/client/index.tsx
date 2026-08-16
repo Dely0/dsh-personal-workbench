@@ -181,6 +181,7 @@ function MarkdownText({ text }: { text: string }): JSX.Element {
   const blocks: JSX.Element[] = []
   let list: string[] = []
   let code: string[] = []
+  let table: string[] = []
   let key = 0
   const flushList = () => {
     if (list.length === 0) return
@@ -192,18 +193,47 @@ function MarkdownText({ text }: { text: string }): JSX.Element {
     blocks.push(<pre key={key++} style={{ background: 'rgba(127,127,127,.10)', padding: 8, borderRadius: 8, overflow: 'auto', fontSize: 12 }}>{code.join('\n')}</pre>)
     code = []
   }
-  for (const line of lines) {
-    if (line.startsWith('```')) { flushList(); if (code.length > 0) flushCode(); else code = []; continue }
+  const flushTable = () => {
+    if (table.length === 0) return
+    const rows = table
+      .map((line) => line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((cell) => cell.trim()))
+      .filter((cells) => cells.length > 0 && cells.some((cell) => cell !== ''))
+    const isSeparator = (cells: string[]): boolean => cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell))
+    if (rows.length >= 2 && isSeparator(rows[1])) {
+      const header = rows[0] ?? []
+      const body = rows.slice(2)
+      const border = '1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.22))'
+      blocks.push(
+        <table key={key++} style={{ borderCollapse: 'collapse', width: '100%', margin: '8px 0', fontSize: 13 }}>
+          <thead><tr>{header.map((cell, i) => <th key={i} style={{ border, padding: '4px 8px', textAlign: 'left', background: 'rgba(127,127,127,.10)' }}>{renderInline(cell)}</th>)}</tr></thead>
+          <tbody>{body.map((row, ri) => <tr key={ri}>{row.map((cell, ci) => <td key={ci} style={{ border, padding: '4px 8px' }}>{renderInline(cell)}</td>)}</tr>)}</tbody>
+        </table>,
+      )
+    } else {
+      // 不是合法表格（缺少分隔行）时，按普通段落逐行渲染，避免丢内容。
+      blocks.push(<p key={key++} style={{ margin: '4px 0' }}>{renderInline(table.join('<br/>'))}</p>)
+    }
+    table = []
+  }
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index]
+    if (line.startsWith('```')) { flushList(); flushTable(); if (code.length > 0) flushCode(); else code = []; continue }
     if (code.length > 0) { code.push(line); continue }
-    if (/^###\s/.test(line)) { flushList(); blocks.push(<h5 key={key++} style={{ margin: '8px 0 4px' }}>{renderInline(line.replace(/^###\s*/, ''))}</h5>); continue }
-    if (/^##\s/.test(line)) { flushList(); blocks.push(<h4 key={key++} style={{ margin: '10px 0 4px' }}>{renderInline(line.replace(/^##\s*/, ''))}</h4>); continue }
-    if (/^#\s/.test(line)) { flushList(); blocks.push(<h3 key={key++} style={{ margin: '12px 0 4px' }}>{renderInline(line.replace(/^#\s*/, ''))}</h3>); continue }
-    if (/^[-*]\s/.test(line)) { flushCode(); list.push(line.replace(/^[-*]\s*/, '')); continue }
-    if (line.trim() === '') { flushList(); flushCode(); continue }
-    flushList(); flushCode()
+    if (line.trim().startsWith('|')) { flushList(); table.push(line.trim()); continue }
+    if (/^###\s/.test(line)) { flushList(); flushTable(); blocks.push(<h5 key={key++} style={{ margin: '8px 0 4px' }}>{renderInline(line.replace(/^###\s*/, ''))}</h5>); continue }
+    if (/^##\s/.test(line)) { flushList(); flushTable(); blocks.push(<h4 key={key++} style={{ margin: '10px 0 4px' }}>{renderInline(line.replace(/^##\s*/, ''))}</h4>); continue }
+    if (/^#\s/.test(line)) { flushList(); flushTable(); blocks.push(<h3 key={key++} style={{ margin: '12px 0 4px' }}>{renderInline(line.replace(/^#\s*/, ''))}</h3>); continue }
+    if (/^[-*]\s/.test(line)) { flushTable(); flushCode(); list.push(line.replace(/^[-*]\s*/, '')); continue }
+    if (line.trim() === '') {
+      // 表格行之间允许空行（LLM 常见输出）；只有下一段不是表格时才结束表格。
+      const next = lines.slice(index + 1).find((l) => l.trim() !== '')
+      if (table.length > 0 && next !== undefined && next.trim().startsWith('|')) continue
+      flushList(); flushTable(); flushCode(); continue
+    }
+    flushList(); flushTable(); flushCode()
     blocks.push(<p key={key++} style={{ margin: '4px 0' }}>{renderInline(line)}</p>)
   }
-  flushList(); flushCode()
+  flushList(); flushTable(); flushCode()
   return <div style={{ lineHeight: 1.7, fontSize: 13 }}>{blocks}</div>
 }
 
