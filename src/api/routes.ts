@@ -180,6 +180,7 @@ export function makeRoutes(db: DatabaseSync): WebRoute[] {
             settings: {
               defaultWorkspace: metaGet('ai_default_workspace') ?? '',
               autoCreateTypeFolders: (metaGet('auto_create_type_folders') ?? '1') === '1',
+              desktopNotify: (metaGet('desktop_notify') ?? '1') === '1',
             },
           })
         }
@@ -188,7 +189,12 @@ export function makeRoutes(db: DatabaseSync): WebRoute[] {
           if (body === undefined) return writeJson(res, 400, { error: 'invalid JSON body' })
           if (typeof body.defaultWorkspace === 'string') metaSet('ai_default_workspace', body.defaultWorkspace)
           if (body.autoCreateTypeFolders === true || body.autoCreateTypeFolders === false) metaSet('auto_create_type_folders', body.autoCreateTypeFolders ? '1' : '0')
-          return writeJson(res, 200, { ok: true, settings: { defaultWorkspace: metaGet('ai_default_workspace') ?? '', autoCreateTypeFolders: (metaGet('auto_create_type_folders') ?? '1') === '1' } })
+          if (body.desktopNotify === true || body.desktopNotify === false) metaSet('desktop_notify', body.desktopNotify ? '1' : '0')
+          return writeJson(res, 200, { ok: true, settings: {
+            defaultWorkspace: metaGet('ai_default_workspace') ?? '',
+            autoCreateTypeFolders: (metaGet('auto_create_type_folders') ?? '1') === '1',
+            desktopNotify: (metaGet('desktop_notify') ?? '1') === '1',
+          } })
         }
         return writeJson(res, 405, { error: 'method not allowed' })
       },
@@ -553,7 +559,7 @@ export function makeRoutes(db: DatabaseSync): WebRoute[] {
         writeJson(res, 200, {
           ok: true,
           name: 'dsh-workbench',
-          version: '0.7.3',
+          version: '0.8.0',
           db: {
             schemaVersion: versionRow?.value ?? 'unknown',
             taskCount: listTasks(db, { includeArchived: true }).length,

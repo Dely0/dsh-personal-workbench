@@ -420,10 +420,11 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
   const [showQuick, setShowQuick] = useState(false)
   const [quickText, setQuickText] = useState('')
   const [pendingDraft, setPendingDraft] = useState<DraftView | null>(null)
-  const [reminders, setReminders] = useState<Array<{ reminderId: string; taskId: string; title: string; dueAt: string }>>([])
+  const [reminders, setReminders] = useState<Array<{ reminderId: string; taskId: string; title: string; dueAt: string; methodCode: string }>>([])
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
-  const [settings, setSettings] = useState<{ defaultWorkspace: string; autoCreateTypeFolders: boolean }>({ defaultWorkspace: '', autoCreateTypeFolders: true })
+  const [settings, setSettings] = useState<{ defaultWorkspace: string; autoCreateTypeFolders: boolean; desktopNotify: boolean }>({ defaultWorkspace: '', autoCreateTypeFolders: true, desktopNotify: true })
+  const [notifyPerm, setNotifyPerm] = useState<NotificationPermission | 'unsupported'>(() => typeof Notification === 'undefined' ? 'unsupported' : Notification.permission)
   const [showSettings, setShowSettings] = useState(false)
   const [reportSubTab, setReportSubTab] = useState<'day' | 'week'>('day')
   const [currentReport, setCurrentReport] = useState<TaskReportView | null>(null)
@@ -453,23 +454,38 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
   }, [])
 
   useEffect(() => { void refresh().catch((e: unknown) => setError(e instanceof Error ? e.message : String(e))) }, [refresh])
-  useEffect(() => { void api<{ settings: { defaultWorkspace: string; autoCreateTypeFolders: boolean } }>('/api/workbench/settings').then((r) => setSettings(r.settings)).catch(() => undefined) }, [])
+  useEffect(() => { void api<{ settings: { defaultWorkspace: string; autoCreateTypeFolders: boolean; desktopNotify: boolean } }>('/api/workbench/settings').then((r) => setSettings(r.settings)).catch(() => undefined) }, [])
 
+  const notifiedRef = useRef<Set<string>>(new Set())
   useEffect(() => {
     let alive = true
     const tick = async () => {
       try {
         const res = await api<{ draft: DraftView | null }>('/api/workbench/drafts')
         if (alive) setPendingDraft(res.draft)
-        const r = await api<{ reminders: Array<{ reminderId: string; taskId: string; title: string; dueAt: string }> }>('/api/workbench/reminders/due')
-        if (alive) setReminders(r.reminders)
+        const r = await api<{ reminders: Array<{ reminderId: string; taskId: string; title: string; dueAt: string; methodCode: string }> }>('/api/workbench/reminders/due')
+        if (!alive) return
+        setReminders(r.reminders)
+        // 系统级桌面提醒：启用且浏览器已授权时，对每个到期提醒发一次系统通知。
+        if (settings.desktopNotify && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+          for (const reminder of r.reminders) {
+            if (notifiedRef.current.has(reminder.reminderId)) continue
+            notifiedRef.current.add(reminder.reminderId)
+            try {
+              new Notification(`🔔 任务提醒：${reminder.title}`, {
+                body: `截止时间：${fmtTime(reminder.dueAt)}`,
+                tag: `dsh-workbench:${reminder.reminderId}`,
+              })
+            } catch { /* 部分浏览器限制通知构造，忽略降级为页内横幅 */ }
+          }
+        }
       } catch { /* 轮询失败下轮重试 */ }
     }
     void tick()
     const timer = setInterval(() => void tick(), 5000)
     const refreshTimer = setInterval(() => { void refresh().catch(() => undefined) }, 15000)
     return () => { alive = false; clearInterval(timer); clearInterval(refreshTimer) }
-  }, [refresh])
+  }, [refresh, settings.desktopNotify])
 
   useEffect(() => {
     if (pendingDraft !== null) document.documentElement.setAttribute(PENDING_ATTR, '')
@@ -734,6 +750,26 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
                 <input type="checkbox" checked={settings.autoCreateTypeFolders} onChange={(e) => setSettings((prev) => ({ ...prev, autoCreateTypeFolders: e.target.checked }))} />
                 自动为每个任务创建独立文件夹（用任务名命名）
               </label>
+              <label className="full" style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <input type="checkbox" checked={settings.desktopNotify} onChange={(e) => setSettings((prev) => ({ ...prev, desktopNotify: e.target.checked }))} />
+                启用桌面通知（任务到期时弹系统通知）
+              </label>
+              <div className="full" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                {notifyPerm === 'unsupported'
+                  ? <span style={{ fontSize: 12, color: '#999' }}>当前浏览器不支持系统通知，将使用页内横幅提醒</span>
+                  : notifyPerm === 'granted'
+                    ? <span style={{ fontSize: 12, color: '#2E9B7B' }}>✅ 浏览器通知已授权</span>
+                    : <button className="wb-btn" onClick={() => {
+                        void Notification.requestPermission().then((perm) => {
+                          setNotifyPerm(perm)
+                          if (perm === 'granted') setNotice('桌面通知已开启')
+                        })
+                      }}>授权浏览器通知</button>}
+                {notifyPerm === 'granted' && <button className="wb-btn" onClick={() => {
+                  try { new Notification('✅ dsh-workbench 通知测试', { body: '如果你看到这条系统通知，说明桌面提醒已正常工作。' }) } catch { /* ignore */ }
+                }}>发送测试通知</button>}
+                <span style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)' }}>DSH 页面保持打开（可最小化）即可收到</span>
+              </div>
               <div className="full" style={{ display: 'flex', gap: 8 }}>
                 <button className="wb-btn primary lg" onClick={() => void api('/api/workbench/settings', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(settings) }).then(() => { setNotice('设置已保存'); setShowSettings(false) }).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))}>💾 保存设置</button>
                 <button className="wb-btn" onClick={() => setShowSettings(false)}>取消</button>
