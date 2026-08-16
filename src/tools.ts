@@ -63,6 +63,13 @@ export function submitTaskTool(db: DatabaseSync) {
       const aiPolicyCode = optionalCode(db, 'ai_policy', args.ai_policy_code ?? 'consult', 'ai_policy_code') ?? 'consult'
       // V1.5：execute 已开放；澄清会话默认仍建议 consult，除非用户明确要求可执行。
       const dueAt = str(args.due_at) ?? null
+      const typeEntry = getDictionary(db, 'type', typeCode)
+      const priorityEntry = getDictionary(db, 'priority', priorityCode)
+      const typeDefault = typeof typeEntry?.config.defaultReminderMinutes === 'number' ? typeEntry.config.defaultReminderMinutes as number : undefined
+      const priorityDefault = typeof priorityEntry?.config.defaultReminderMinutes === 'number' ? priorityEntry.config.defaultReminderMinutes as number : undefined
+      const reminderOffset = typeof args.reminder_offset_minutes === 'number'
+        ? args.reminder_offset_minutes
+        : typeDefault ?? priorityDefault
       const payload: Record<string, unknown> = {
         title,
         description: str(args.description) ?? '',
@@ -73,7 +80,7 @@ export function submitTaskTool(db: DatabaseSync) {
         allDay: args.all_day === true,
         estimatedMinutes: typeof args.estimated_minutes === 'number' ? args.estimated_minutes : null,
         aiPolicyCode,
-        reminderOffsetMinutes: typeof args.reminder_offset_minutes === 'number' ? args.reminder_offset_minutes : null,
+        reminderOffsetMinutes: reminderOffset ?? null,
         parentId: str(args.parent_id) ?? null,
         workspacePath: str(args.workspace_path) ?? exec.agent?.session?.header?.cwd ?? null,
         subtasks: args.subtasks ?? [],

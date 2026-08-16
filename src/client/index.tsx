@@ -509,6 +509,17 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
     await api(`/api/workbench/reminders/${reminderId}/fire`, { method: 'POST' })
     setReminders((list) => list.filter((r) => r.reminderId !== reminderId))
   }
+  const addTaskReminder = async (offsetMinutes: number): Promise<void> => {
+    const taskId = selectedRef.current
+    if (taskId === null) return
+    try {
+      await api(`/api/workbench/tasks/${taskId}/reminders`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ offsetMinutes, methodCode: 'browser' }) })
+      setNotice(offsetMinutes === 0 ? '已添加“准时”提醒' : `已添加“提前 ${offsetMinutes} 分钟”提醒`)
+      await refresh()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }
 
   const startAISession = async (mode: 'clarify' | 'consult' | 'breakdown' | 'execute' | 'review' | 'plan' | 'report', task: Task | null, text: string, previousSessions: Array<Record<string, unknown>> = []): Promise<void> => {
     if (mode === 'clarify' && text.trim() === '') return
@@ -1003,7 +1014,19 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
                 </div>
                 <div className="wb-card">
                   <h4>提醒（{selected.reminders.length}）</h4>
-                  {selected.reminders.map((r) => <div key={r.id} style={{ fontSize: 12, color: '#999' }}>提前 {r.offsetMinutes} 分钟 · {r.firedAt === null ? '未触发' : '已触发'}</div>)}
+                  {selected.reminders.map((r) => <div key={r.id} style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>⏰ {r.offsetMinutes === 0 ? '准时（截止时间）' : `提前 ${r.offsetMinutes} 分钟`} · {r.methodCode === 'os' ? '系统通知' : '页面/桌面通知'} · {r.firedAt === null ? '未触发' : `已触发 ${fmtTime(r.firedAt)}`}</div>)}
+                  {selected.task.dueAt === null
+                    ? <div style={{ fontSize: 12, color: '#999' }}>任务还没有截止时间，请先在详情里设置截止时间，再添加提醒。</div>
+                    : selected.task.statusCode === 'done' || selected.task.statusCode === 'cancelled'
+                      ? <div style={{ fontSize: 12, color: '#999' }}>已完成/已取消的任务不再提醒。</div>
+                      : (
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
+                          {[{ offset: 0, label: '准时' }, { offset: 15, label: '提前15分' }, { offset: 30, label: '提前30分' }, { offset: 60, label: '提前1小时' }, { offset: 1440, label: '提前1天' }].map((item) => (
+                            <button key={item.offset} className="wb-btn" disabled={busy} onClick={() => void addTaskReminder(item.offset)}>{item.label}</button>
+                          ))}
+                        </div>
+                      )}
+                  <div style={{ fontSize: 12, color: '#999', marginTop: 6 }}>到提醒时间后：页内横幅 + 桌面通知（设置中授权）；点“知道了”后标记已触发。</div>
                 </div>
                 <div className="wb-card">
                   <h4>关联会话（{selected.sessions.length}）</h4>

@@ -9,7 +9,7 @@ import {
   createTask, updateTask, getTask, listTasks, listArchivedTasks, listChildren,
   createDraft, confirmTaskDraft, confirmDailyPlanDraft, confirmReportDraft, getDailyPlan, deleteDailyPlan,
   getTaskReport, listTaskReports, deleteTaskReport,
-  getAiSession, registerAiSession,
+  getAiSession, registerAiSession, listReminders,
   getDraftBySession, listTaskSessions, linkTaskSession, localDateString,
 } from '../lib/db/repo.js'
 
@@ -28,6 +28,10 @@ test('db migrations, dictionaries and task tree', () => {
     const draft = createDraft(db, { kindCode: 'task', sessionId: 's1', payload: { title: 'from draft', typeCode: 'solution_design', priorityCode: 'p2' } })
     const task = confirmTaskDraft(db, draft.id)
     assert.equal(task.title, 'from draft')
+    const draftWithReminder = createDraft(db, { kindCode: 'task', sessionId: 's1b', payload: { title: 'with reminder', typeCode: 'code_impl', priorityCode: 'p1', dueAt: '2026-08-20T10:00:00+08:00', reminderOffsetMinutes: 15 } })
+    const taskWithReminder = confirmTaskDraft(db, draftWithReminder.id)
+    assert.equal(listReminders(db, taskWithReminder.id).length, 1)
+    assert.equal(listReminders(db, taskWithReminder.id)[0].offsetMinutes, 15)
     linkTaskSession(db, { taskId: task.id, sessionId: 's1', roleCode: 'clarify' })
     assert.equal(listTaskSessions(db, task.id).length, 1)
     updateTask(db, parent.id, { archived: true })

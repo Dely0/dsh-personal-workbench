@@ -424,7 +424,7 @@ function setDraftStatus(db: DatabaseSync, id: string, statusCode: string, at = n
 export function confirmTaskDraft(db: DatabaseSync, draftId: string, actor = 'user', at = nowIso()): TaskRow | undefined {
   const draft = getDraft(db, draftId)
   if (draft === undefined || draft.kindCode !== 'task') return undefined
-  const payload = draft.payload as Partial<TaskInput>
+  const payload = draft.payload as Partial<TaskInput> & { reminderOffsetMinutes?: number; reminder_offset_minutes?: number }
   const title = typeof payload.title === 'string' ? payload.title : ''
   if (title.trim() === '') throw new Error('draft payload requires a non-empty title')
   db.exec('BEGIN')
@@ -444,6 +444,15 @@ export function confirmTaskDraft(db: DatabaseSync, draftId: string, actor = 'use
       workspacePath: typeof payload.workspacePath === 'string' && payload.workspacePath !== '' ? payload.workspacePath : null,
       extra: payload.extra ?? {},
     }, actor, at)
+    const explicitOffset = typeof payload.reminderOffsetMinutes === 'number'
+      ? payload.reminderOffsetMinutes
+      : typeof payload.reminder_offset_minutes === 'number' ? payload.reminder_offset_minutes : undefined
+    const typeDefault = getDictionary(db, 'type', task.typeCode)?.config.defaultReminderMinutes
+    const priorityDefault = getDictionary(db, 'priority', task.priorityCode)?.config.defaultReminderMinutes
+    const reminderOffset = explicitOffset ?? (typeof typeDefault === 'number' ? typeDefault : typeof priorityDefault === 'number' ? priorityDefault : undefined)
+    if (task.dueAt !== null && typeof reminderOffset === 'number' && Number.isFinite(reminderOffset) && reminderOffset >= 0) {
+      addReminder(db, task.id, reminderOffset, 'browser', at)
+    }
     if (draft.sessionId !== null && draft.sessionId !== undefined) {
       linkTaskSession(db, { taskId: task.id, sessionId: draft.sessionId, roleCode: 'clarify' }, at)
     }

@@ -1,6 +1,6 @@
 {
   "name": "dsh-workbench",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "description": "DSH 个人工作台：日历 + 任务列表 + AI 澄清/咨询 + 本地知识沉淀（V1 骨架）",
   "type": "module",
   "main": "./lib/index.js",
