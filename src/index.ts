@@ -9,7 +9,7 @@ import type {} from '@deepseek-ai/dsh-tools'
 import { makeRoutes } from './api/routes.js'
 import { openWorkbenchDb, type WorkbenchDbConfig } from './db/database.js'
 import { seedDictionaries } from './db/seed.js'
-import { proposeDailyPlanTool, proposeSubtasksTool, requestCompletionTool, submitReviewTool, submitTaskTool, updateTaskTool } from './tools.js'
+import { proposeDailyPlanTool, proposeSubtasksTool, requestCompletionTool, submitReportTool, submitReviewTool, submitTaskTool, updateTaskTool } from './tools.js'
 
 export const name = 'workbench'
 
@@ -20,6 +20,7 @@ const WORKBENCH_GUIDANCE = [
   'V1 能力：日历 + 任务列表、自然语言快速录入与 AI 澄清、子任务拆解（AI 提案 + 用户确认）、任务关联多个 Harness 会话。',
   'V1.5 已提供叶子任务“执行”：执行会话完成后应调用 workbench_request_completion 提交验收申请，由用户验收后完成。',
   'V2 今日视图支持“AI 智能排序”：请调用 workbench_propose_daily_plan 提交当日执行顺序提案（只写草稿，用户确认后生效），不要修改任务字段。',
+  'V2 支持日报/周报：请在报告会话中调用 workbench_submit_report(period_code, period_start, title, summary_md) 提交报告草稿，用户确认后才保存。',
   '用户提到「工作台 / 任务 / 日历 / 提醒 / 子任务」时即指本插件，请据此协作。',
 ].join('')
 
@@ -44,7 +45,7 @@ export function apply(ctx: Context, config: Config = {}): void {
 
   const disposeTools = ctx.effect(
     () => {
-      const disposers = [submitTaskTool(db), proposeSubtasksTool(db), proposeDailyPlanTool(db), updateTaskTool(db), requestCompletionTool(db), submitReviewTool(db)].map((tool) => ctx.tools.register(tool))
+      const disposers = [submitTaskTool(db), proposeSubtasksTool(db), proposeDailyPlanTool(db), submitReportTool(db), updateTaskTool(db), requestCompletionTool(db), submitReviewTool(db)].map((tool) => ctx.tools.register(tool))
       return () => { for (const dispose of disposers) dispose() }
     },
     'dsh-workbench: tools',

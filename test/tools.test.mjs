@@ -5,8 +5,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openWorkbenchDb } from '../lib/db/database.js'
 import { seedDictionaries } from '../lib/db/seed.js'
-import { proposeDailyPlanTool, submitTaskTool, updateTaskTool, requestCompletionTool } from '../lib/tools.js'
-import { createTask, getTask, getDraftBySession, getPendingDailyPlanDraft, getPendingDraftForTask } from '../lib/db/repo.js'
+import { proposeDailyPlanTool, submitReportTool, submitTaskTool, updateTaskTool, requestCompletionTool } from '../lib/tools.js'
+import { createTask, getTask, getDraftBySession, getPendingDailyPlanDraft, getPendingDraftForTask, getPendingReportDraft } from '../lib/db/repo.js'
 
 test('agent tools write pending drafts and update tasks', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-workbench-tools-'))
@@ -58,6 +58,21 @@ test('agent tools write pending drafts and update tasks', async () => {
       { agent: { session: { id: 'sess-plan-bad' } } },
     )
     assert.match(badPlan, /已归档或已关闭/)
+
+    const submitReport = submitReportTool(db)
+    const reportOut = await submitReport.execute(
+      { period_code: 'day', period_start: localDateStr(), title: '日报', summary_md: '# 今日' },
+      { agent: { session: { id: 'sess-report' } } },
+    )
+    assert.match(reportOut, /报告草稿已保存/)
+    const reportDraft = getPendingReportDraft(db, 'sess-report', 'day', localDateStr())
+    assert.ok(reportDraft)
+    const reportOut2 = await submitReport.execute(
+      { period_code: 'day', period_start: localDateStr(), title: '日报 v2', summary_md: '# 今日 v2' },
+      { agent: { session: { id: 'sess-report' } } },
+    )
+    assert.match(reportOut2, /报告草稿已保存/)
+    assert.equal(getPendingReportDraft(db, 'sess-report', 'day', localDateStr()).id, reportDraft.id)
     db.close()
   } finally {
     rmSync(dir, { recursive: true, force: true })
@@ -66,4 +81,9 @@ test('agent tools write pending drafts and update tasks', async () => {
 
 function createTaskForTest(db) {
   return createTask(db, { title: 'execution target', typeCode: 'code_impl', priorityCode: 'p1' })
+}
+
+function localDateStr() {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }

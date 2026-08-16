@@ -5,7 +5,7 @@
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { DatabaseSync } from 'node:sqlite'
-import { appendEvent, createDraft, getDictionary, getDraft, getPendingDailyPlanDraft, getPendingDraftForTask, getTask, localDateString, updateDraft, updateTask } from './db/repo.js'
+import { appendEvent, createDraft, getDictionary, getDraft, getPendingDailyPlanDraft, getPendingDraftForTask, getPendingReportDraft, getTask, localDateString, updateDraft, updateTask } from './db/repo.js'
 
 function text(value: string): ContentBlock[] {
   return [{ type: 'text', text: value }]
@@ -155,6 +155,57 @@ export function proposeDailyPlanTool(db: DatabaseSync) {
         : createDraft(db, { kindCode: 'daily_plan', sessionId, payload })
       const preview = items.map((item, i) => `${i + 1}. ${item.title}${item.note !== '' ? `（${item.note}）` : ''}`).join('\n')
       return `今日计划提案已保存（id=${draft?.id}），等待用户在工作台确认。\n\n${preview}\n\n请用一句话告知用户可以检查计划草稿；不要声称排序已生效。`
+    },
+  })
+}
+
+export function submitReportTool(db: DatabaseSync) {
+  return defineTool({
+    name: 'workbench_submit_report',
+    description:
+      '个人工作台日报/周报工具：提交 AI 生成的日报或周报草稿，只写 pending 草稿，由用户在工作台确认后才保存。' +
+      'period_code 为 day 或 week；period_start 为周期第一天（YYYY-MM-DD）；summary_md 为 Markdown 正文；stats 可选统计数字。' +
+      '同一会话重复提交同一周期会更新同一草稿。',
+    parameters: {
+      draft_id: { type: 'string', description: '已有报告草稿 id；修改后再次提交时传' },
+      period_code: { type: 'string', required: true, description: 'day=日报，week=周报' },
+      period_start: { type: 'string', required: true, description: '周期开始日期 YYYY-MM-DD（日报=当天，周报=周一）' },
+      title: { type: 'string', required: true, description: '报告标题' },
+      summary_md: { type: 'string', required: true, description: 'Markdown 报告正文' },
+      stats: { type: 'json', description: '可选统计：{completed, created, focus...}' },
+    },
+    output: {
+      schema: { type: 'string' },
+      render: (_args, value: string) => text(value),
+    },
+    async execute(args: Record<string, unknown>, exec: { agent?: { session?: { id?: string } } }) {
+      const periodCode = str(args.period_code)
+      if (periodCode !== 'day' && periodCode !== 'week') return '错误：period_code 必须是 day 或 week'
+      const periodStart = str(args.period_start)
+      if (periodStart === undefined || !PLAN_DATE_RE.test(periodStart)) return '错误：period_start 必须是 YYYY-MM-DD 格式'
+      const title = str(args.title)
+      if (title === undefined) return '错误：title 必填'
+      const summaryMd = str(args.summary_md)
+      if (summaryMd === undefined) return '错误：summary_md 必填'
+
+      const sessionId = exec.agent?.session?.id ?? null
+      const draftId = str(args.draft_id)
+      const existing = draftId === undefined ? getPendingReportDraft(db, sessionId, periodCode, periodStart) : getDraft(db, draftId)
+      if (draftId !== undefined && existing === undefined) return `错误：草稿 ${draftId} 不存在`
+      if (existing !== undefined && existing.statusCode !== 'pending') return `错误：草稿 ${draftId ?? existing.id} 状态为 ${existing.statusCode}，不能更新`
+
+      const payload = {
+        periodCode,
+        periodStart,
+        title,
+        summaryMd,
+        stats: typeof args.stats === 'object' && args.stats !== null ? args.stats : {},
+        sessionId,
+      }
+      const draft = existing !== undefined
+        ? updateDraft(db, existing.id, payload)
+        : createDraft(db, { kindCode: 'report', sessionId, payload })
+      return `报告草稿已保存（id=${draft?.id}，${periodCode === 'day' ? '日报' : '周报'} ${periodStart}），等待用户在工作台确认后才会保存。请勿声称报告已生成。`
     },
   })
 }

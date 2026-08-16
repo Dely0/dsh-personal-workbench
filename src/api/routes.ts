@@ -6,18 +6,19 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import type { DatabaseSync } from 'node:sqlite'
 import {
-  abandonDraft, addReminder, archiveTask, confirmDailyPlanDraft, confirmSubtaskPlanDraft, confirmTaskDraft,
+  abandonDraft, addReminder, archiveTask, confirmDailyPlanDraft, confirmReportDraft, confirmSubtaskPlanDraft, confirmTaskDraft,
   createTaskReview,
-  createDraft, createTask, deleteDailyPlan, fireReminder, getDailyPlan, getDictionary, getDraft, getDraftBySession,
-  getLatestPendingDraft, getTask, linkTaskSession, listArchivedTasks, listChildren,
-  listDictionaries, listDueReminders, listReminders, listTaskEvents, listTaskReviews,
-  listTaskSessions, listTasks, localDateString, restoreTask, updateTask, type TaskInput,
+  createDraft, createTask, deleteDailyPlan, deleteTaskReport, fireReminder, getDailyPlan, getDictionary, getDraft, getDraftBySession,
+  getLatestPendingDraft, getTask, getTaskReport, linkTaskSession, listArchivedTasks, listChildren,
+  listDictionaries, listDueReminders, listReminders, listTaskEvents, listTaskReports, listTaskReviews,
+  listTaskSessions, listTasks, localDateString, restoreTask, updateTask, type ReportPeriodCode, type TaskInput,
 } from '../db/repo.js'
 
 const TASKS_PREFIX = '/api/workbench/tasks'
 const DRAFTS_PREFIX = '/api/workbench/drafts'
 const REMINDERS_PREFIX = '/api/workbench/reminders'
 const PLANS_PREFIX = '/api/workbench/plans'
+const REPORTS_PREFIX = '/api/workbench/reports'
 
 function isLoopbackRequest(req: IncomingMessage): boolean {
   const address = req.socket.remoteAddress
@@ -71,6 +72,51 @@ function todayRange(now: Date): { start: string; end: string } {
   const end = new Date(start)
   end.setDate(end.getDate() + 1)
   return { start: start.toISOString(), end: end.toISOString() }
+}
+
+const PERIOD_DATE_RE = /^\d{4}-\d{2}-\d{2}$/
+
+function periodRange(periodCode: ReportPeriodCode, periodStart: string): { start: string; end: string } | undefined {
+  if (!PERIOD_DATE_RE.test(periodStart)) return undefined
+  const [y, m, d] = periodStart.split('-').map(Number)
+  const start = new Date(y, m - 1, d)
+  if (Number.isNaN(start.getTime())) return undefined
+  const end = new Date(start)
+  end.setDate(end.getDate() + (periodCode === 'day' ? 1 : 7))
+  return { start: start.toISOString(), end: end.toISOString() }
+}
+
+function reportContext(db: DatabaseSync, periodCode: ReportPeriodCode, periodStart: string): Record<string, unknown> | undefined {
+  const range = periodRange(periodCode, periodStart)
+  if (range === undefined) return undefined
+  const tasks = listTasks(db, { includeArchived: true })
+  const completed = tasks.filter((task) => task.completedAt !== null && task.completedAt >= range.start && task.completedAt < range.end)
+  const created = tasks.filter((task) => task.createdAt >= range.start && task.createdAt < range.end)
+  const eventRows = db.prepare('SELECT * FROM task_events WHERE at >= ? AND at < ? ORDER BY at ASC').all(range.start, range.end) as unknown as Array<{
+    id: string
+    task_id: string
+    event_code: string
+    actor: string
+    note: string | null
+    at: string
+  }>
+  const events = eventRows.map((row) => ({
+    id: row.id,
+    taskId: row.task_id,
+    taskTitle: getTask(db, row.task_id)?.title ?? '(任务已删除)',
+    eventCode: row.event_code,
+    actor: row.actor,
+    note: row.note,
+    at: row.at,
+  }))
+  const plan = periodCode === 'day' ? getDailyPlan(db, periodStart) ?? null : null
+  return {
+    period: { code: periodCode, start: periodStart, range },
+    completedTasks: completed.map((task) => ({ id: task.id, title: task.title, typeCode: task.typeCode, priorityCode: task.priorityCode, completedAt: task.completedAt })),
+    createdTasks: created.map((task) => ({ id: task.id, title: task.title, typeCode: task.typeCode, priorityCode: task.priorityCode, statusCode: task.statusCode, createdAt: task.createdAt })),
+    events,
+    plan,
+  }
 }
 
 function publicTask(task: NonNullable<ReturnType<typeof getTask>>): Record<string, unknown> {
@@ -342,6 +388,9 @@ export function makeRoutes(db: DatabaseSync): WebRoute[] {
             if (draft.kindCode === 'daily_plan') {
               return writeJson(res, 200, { ok: true, plan: confirmDailyPlanDraft(db, id) })
             }
+            if (draft.kindCode === 'report') {
+              return writeJson(res, 200, { ok: true, report: confirmReportDraft(db, id) })
+            }
             if (draft.kindCode === 'review') {
               const taskId = typeof draft.payload.taskId === 'string' ? draft.payload.taskId : undefined
               const summaryMd = typeof draft.payload.summaryMd === 'string' ? draft.payload.summaryMd : ''
@@ -395,6 +444,45 @@ export function makeRoutes(db: DatabaseSync): WebRoute[] {
         return writeJson(res, 404, { error: 'not found' })
       },
     },
+    // ------------------------------------------------------------------ reports
+    {
+      kind: 'prefix',
+      path: REPORTS_PREFIX,
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) return writeJson(res, 403, { error: 'forbidden: loopback-only' })
+        const url = new URL(req.url ?? '/', 'http://localhost')
+        const segments = pathSegments(url, REPORTS_PREFIX)
+        const method = req.method ?? 'GET'
+        if (segments.length === 0 && method === 'GET') {
+          const periodCode = url.searchParams.get('period_code') ?? undefined
+          if (periodCode !== undefined && periodCode !== 'day' && periodCode !== 'week') return writeJson(res, 400, { error: 'invalid period_code' })
+          const limitParam = Number(url.searchParams.get('limit') ?? 200)
+          const limit = Number.isFinite(limitParam) ? Math.max(1, Math.min(limitParam, 500)) : 200
+          return writeJson(res, 200, { ok: true, reports: listTaskReports(db, { periodCode: periodCode as ReportPeriodCode | undefined, limit }) })
+        }
+        if (segments.length === 1 && segments[0] === 'context' && method === 'GET') {
+          const periodCode = url.searchParams.get('period_code')
+          const periodStart = url.searchParams.get('period_start')
+          if (periodCode !== 'day' && periodCode !== 'week') return writeJson(res, 400, { error: 'period_code must be day or week' })
+          if (periodStart === null || periodStart === '') return writeJson(res, 400, { error: 'period_start is required' })
+          const context = reportContext(db, periodCode, periodStart)
+          if (context === undefined) return writeJson(res, 400, { error: 'invalid period_start' })
+          return writeJson(res, 200, { ok: true, context })
+        }
+        if (segments.length === 2 && method === 'GET') {
+          const [periodCode, periodStart] = segments
+          if (periodCode !== 'day' && periodCode !== 'week') return writeJson(res, 400, { error: 'invalid period_code' })
+          const report = getTaskReport(db, periodCode, periodStart)
+          return writeJson(res, 200, { ok: true, report: report ?? null })
+        }
+        if (segments.length === 2 && method === 'DELETE') {
+          const [periodCode, periodStart] = segments
+          if (periodCode !== 'day' && periodCode !== 'week') return writeJson(res, 400, { error: 'invalid period_code' })
+          return writeJson(res, 200, { ok: true, deleted: deleteTaskReport(db, periodCode, periodStart) })
+        }
+        return writeJson(res, 404, { error: 'not found' })
+      },
+    },
     // ------------------------------------------------------------------ plans
     {
       kind: 'prefix',
@@ -426,7 +514,7 @@ export function makeRoutes(db: DatabaseSync): WebRoute[] {
         writeJson(res, 200, {
           ok: true,
           name: 'dsh-workbench',
-          version: '0.6.1',
+          version: '0.7.0',
           db: {
             schemaVersion: versionRow?.value ?? 'unknown',
             taskCount: listTasks(db, { includeArchived: true }).length,

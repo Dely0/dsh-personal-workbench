@@ -4,7 +4,7 @@
  */
 import type { DatabaseSync } from 'node:sqlite'
 
-export const SCHEMA_VERSION = 3
+export const SCHEMA_VERSION = 4
 
 export interface Migration {
   version: number
@@ -157,6 +157,27 @@ export const MIGRATIONS: Migration[] = [
           created_at  TEXT NOT NULL,
           updated_at  TEXT NOT NULL
         ) STRICT;
+      `)
+    },
+  },
+  {
+    version: 4,
+    name: 'task-reports',
+    up(db) {
+      db.exec(`
+        CREATE TABLE task_reports (
+          id           TEXT PRIMARY KEY,
+          period_code  TEXT NOT NULL,
+          period_start TEXT NOT NULL,
+          title        TEXT NOT NULL,
+          summary_md   TEXT NOT NULL,
+          stats_json   TEXT NOT NULL DEFAULT '{}',
+          session_id   TEXT,
+          created_at   TEXT NOT NULL,
+          updated_at   TEXT NOT NULL,
+          UNIQUE (period_code, period_start)
+        ) STRICT;
+        CREATE INDEX idx_task_reports_period ON task_reports(period_code, period_start DESC);
       `)
     },
   },

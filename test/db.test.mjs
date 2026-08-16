@@ -7,7 +7,8 @@ import { openWorkbenchDb } from '../lib/db/database.js'
 import { seedDictionaries } from '../lib/db/seed.js'
 import {
   createTask, updateTask, getTask, listTasks, listArchivedTasks, listChildren,
-  createDraft, confirmTaskDraft, confirmDailyPlanDraft, getDailyPlan, deleteDailyPlan,
+  createDraft, confirmTaskDraft, confirmDailyPlanDraft, confirmReportDraft, getDailyPlan, deleteDailyPlan,
+  getTaskReport, listTaskReports, deleteTaskReport,
   getDraftBySession, listTaskSessions, linkTaskSession, localDateString,
 } from '../lib/db/repo.js'
 
@@ -45,6 +46,18 @@ test('db migrations, dictionaries and task tree', () => {
     assert.equal(getDailyPlan(db, planDate).items[0].taskId, task.id)
     assert.equal(deleteDailyPlan(db, planDate), true)
     assert.equal(getDailyPlan(db, planDate), undefined)
+
+    // V2 reports: draft -> confirm -> persisted per period, replace & list & delete work
+    const reportDraft = createDraft(db, { kindCode: 'report', sessionId: 's-report', payload: { periodCode: 'day', periodStart: planDate, title: '日报', summaryMd: '# 完成 1 项', stats: { completed: 1 } } })
+    const report = confirmReportDraft(db, reportDraft.id)
+    assert.equal(report.periodCode, 'day')
+    assert.equal(getTaskReport(db, 'day', planDate).summaryMd, '# 完成 1 项')
+    const reportDraft2 = createDraft(db, { kindCode: 'report', sessionId: 's-report-2', payload: { periodCode: 'day', periodStart: planDate, title: '日报 v2', summaryMd: '# 完成 2 项' } })
+    confirmReportDraft(db, reportDraft2.id)
+    assert.equal(getTaskReport(db, 'day', planDate).title, '日报 v2')
+    assert.equal(listTaskReports(db, { periodCode: 'day' }).length, 1)
+    assert.equal(deleteTaskReport(db, 'day', planDate), true)
+    assert.equal(getTaskReport(db, 'day', planDate), undefined)
     db.close()
   } finally {
     rmSync(dir, { recursive: true, force: true })
