@@ -600,7 +600,7 @@ export function makeRoutes(db: DatabaseSync): WebRoute[] {
         writeJson(res, 200, {
           ok: true,
           name: 'dsh-workbench',
-          version: '0.12.2',
+          version: '0.12.3',
           db: {
             schemaVersion: versionRow?.value ?? 'unknown',
             taskCount: listTasks(db, { includeArchived: true }).length,
