@@ -98,6 +98,15 @@ html[${PENDING_ATTR}] [${ENTRY_ATTR}]::after { content:''; position:absolute; to
 .wb-banner.error { border-color:rgba(231,76,60,.55); border-left-color:#e74c3c; background:color-mix(in srgb, #e74c3c 10%, transparent); }
 .wb-banner.notice { border-color:rgba(143,168,200,.5); border-left-color:#8fa8c8; background:color-mix(in srgb, #8fa8c8 8%, transparent); }
 .wb-banner h4 { margin:0 0 8px; font-size:15px; }
+
+/* 边界增强：用主题文字色计算边框与卡片底色，亮/暗主题都保证对比 */
+.wb-app { --wb-border: color-mix(in srgb, var(--dsw-alias-label-primary, #888) 26%, transparent); --wb-border-soft: color-mix(in srgb, var(--dsw-alias-label-primary, #888) 15%, transparent); --wb-surface: color-mix(in srgb, var(--dsw-alias-label-primary, #888) 3.5%, var(--dsw-alias-bg-base, #111)); }
+.wb-card, .wb-list, .wb-stat { border-color: var(--wb-border) !important; background: var(--wb-surface) !important; }
+.wb-card h4 { border-bottom-color: var(--wb-border-soft) !important; }
+.wb-row { border-bottom-color: var(--wb-border-soft) !important; }
+.wb-h { border-bottom-color: var(--wb-border) !important; }
+.wb-nav { border-right-color: var(--wb-border-soft) !important; }
+.wb-day, .wb-mday, .wb-form { border-color: var(--wb-border-soft) !important; background: var(--wb-surface) !important; }
 `
 
 interface Dict { kind: string; code: string; name: string; config: Record<string, unknown> }
