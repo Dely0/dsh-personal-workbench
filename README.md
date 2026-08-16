@@ -26,9 +26,13 @@ Turn your DSH into a **calendar + task list + AI assistant workbench**.
 
 ## 截图
 
-| 主界面 | 澄清会话 | AI 协助 |
+| 主界面 | 日历 | 任务列表 |
 |---|---|---|
-| ![主界面](screenshot/%E4%B8%BB%E7%95%8C%E9%9D%A2.PNG) | ![澄清界面](screenshot/%E6%BE%84%E6%B8%85%E7%95%8C%E9%9D%A2.PNG) | ![AI协助界面](screenshot/AI%E5%8D%8F%E5%8A%A9%E7%95%8C%E9%9D%A2.PNG) |
+| ![主界面](screenshot/%E4%B8%BB%E7%95%8C%E9%9D%A2.PNG) | ![日历](screenshot/%E6%97%A5%E5%8E%86%E9%A1%B5%E9%9D%A2.png) | ![任务列表](screenshot/%E4%BB%BB%E5%8A%A1%E5%88%97%E8%A1%A8%E7%95%8C%E9%9D%A2.png) |
+
+| 知识库 | 点子 | 点子王 |
+|---|---|---|
+| ![知识库](screenshot/%E7%9F%A5%E8%AF%86%E5%BA%93%E7%95%8C%E9%9D%A2.png) | ![点子](screenshot/%E7%82%B9%E5%AD%90%E7%95%8C%E9%9D%A2.png) | ![点子王](screenshot/%E7%82%B9%E5%AD%90%E7%8E%8B.png) |
 
 ## 功能清单
 
@@ -165,8 +169,8 @@ Then restart `dsh web` and hard-refresh the browser.
 ## Roadmap
 
 - [x] V2: AI prioritization for any date, OS-level notifications, daily/weekly reports
-- [ ] V2: recurring tasks & automation, personal knowledge base / lessons
-- [ ] Future: multi-device sync, drag-and-drop, import/export
+- [x] V2: recurring tasks, personal knowledge base / lessons, ideas & idea clusters
+- [ ] Future: scheduled automation, multi-device sync, drag-and-drop, import/export
 
 ## License
 
