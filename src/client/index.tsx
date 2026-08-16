@@ -140,6 +140,12 @@ const folderForText = (text: string): string => {
   return cleaned === '' ? '未命名任务' : cleaned
 }
 const localDateString = (d = new Date()): string => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+const toLocalInput = (iso: string | null): string => {
+  if (iso === null) return ''
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}T${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
 const fmtTime = (iso: string): string => {
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return iso
@@ -179,14 +185,25 @@ function renderInline(text: string): (string | JSX.Element)[] {
 function MarkdownText({ text }: { text: string }): JSX.Element {
   const lines = text.split('\n')
   const blocks: JSX.Element[] = []
-  let list: string[] = []
+  let list: { ordered: boolean; items: string[] } | null = null
   let code: string[] = []
   let table: string[] = []
   let key = 0
+  const renderListItem = (item: string): JSX.Element => {
+    const checkbox = /^\[( |x|X)\]\s+(.*)$/.exec(item)
+    if (checkbox !== null) {
+      return <label style={{ display: 'flex', alignItems: 'flex-start', gap: 6, margin: '2px 0' }}><input type="checkbox" readOnly checked={checkbox[1].toLowerCase() === 'x'} style={{ marginTop: 4 }} />{renderInline(checkbox[2])}</label>
+    }
+    return <span style={{ margin: '2px 0' }}>{renderInline(item)}</span>
+  }
   const flushList = () => {
-    if (list.length === 0) return
-    blocks.push(<ul key={key++} style={{ margin: '4px 0 4px 18px', padding: 0 }}>{list.map((item, i) => <li key={i} style={{ margin: '2px 0' }}>{renderInline(item)}</li>)}</ul>)
-    list = []
+    if (list === null || list.items.length === 0) { list = null; return }
+    if (list.ordered) {
+      blocks.push(<ol key={key++} style={{ margin: '4px 0 4px 18px', padding: 0 }}>{list.items.map((item, i) => <li key={i}>{renderListItem(item)}</li>)}</ol>)
+    } else {
+      blocks.push(<ul key={key++} style={{ margin: '4px 0 4px 18px', padding: 0 }}>{list.items.map((item, i) => <li key={i} style={{ listStyleType: /^\[( |x|X)\]\s/.test(item) ? 'none' : undefined }}>{renderListItem(item)}</li>)}</ul>)
+    }
+    list = null
   }
   const flushCode = () => {
     if (code.length === 0) return
@@ -210,7 +227,6 @@ function MarkdownText({ text }: { text: string }): JSX.Element {
         </table>,
       )
     } else {
-      // 不是合法表格（缺少分隔行）时，按普通段落逐行渲染，避免丢内容。
       blocks.push(<p key={key++} style={{ margin: '4px 0' }}>{renderInline(table.join('<br/>'))}</p>)
     }
     table = []
@@ -223,9 +239,18 @@ function MarkdownText({ text }: { text: string }): JSX.Element {
     if (/^###\s/.test(line)) { flushList(); flushTable(); blocks.push(<h5 key={key++} style={{ margin: '8px 0 4px' }}>{renderInline(line.replace(/^###\s*/, ''))}</h5>); continue }
     if (/^##\s/.test(line)) { flushList(); flushTable(); blocks.push(<h4 key={key++} style={{ margin: '10px 0 4px' }}>{renderInline(line.replace(/^##\s*/, ''))}</h4>); continue }
     if (/^#\s/.test(line)) { flushList(); flushTable(); blocks.push(<h3 key={key++} style={{ margin: '12px 0 4px' }}>{renderInline(line.replace(/^#\s*/, ''))}</h3>); continue }
-    if (/^[-*]\s/.test(line)) { flushTable(); flushCode(); list.push(line.replace(/^[-*]\s*/, '')); continue }
+    const orderedMatch = /^(\d+)[.)]\s+(.*)$/.exec(line)
+    const unorderedMatch = /^[-*]\s+(.*)$/.exec(line)
+    if (orderedMatch !== null || unorderedMatch !== null) {
+      flushTable(); flushCode()
+      const ordered = orderedMatch !== null
+      const item = ordered ? orderedMatch[2] : unorderedMatch![1]
+      if (list === null || list.ordered !== ordered) flushList()
+      if (list === null) list = { ordered, items: [] }
+      list.items.push(item)
+      continue
+    }
     if (line.trim() === '') {
-      // 表格行之间允许空行（LLM 常见输出）；只有下一段不是表格时才结束表格。
       const next = lines.slice(index + 1).find((l) => l.trim() !== '')
       if (table.length > 0 && next !== undefined && next.trim().startsWith('|')) continue
       flushList(); flushTable(); flushCode(); continue
@@ -268,9 +293,9 @@ function buildTaskTree(tasks: Task[], orderOf?: Map<string, number>): TaskTreeNo
   return walk(null)
 }
 
-function TaskTreeRows({ roots, depth, expanded, toggle, label, dicts, onOpen, selectedId }: {
+function TaskTreeRows({ roots, depth, expanded, toggle, dicts, onOpen, selectedId }: {
   roots: TaskTreeNode[]; depth: number; expanded: Set<string>; toggle: (id: string) => void
-  label: (kind: string, code: string) => string; dicts: Dict[]; onOpen: (task: Task) => void; selectedId?: string
+  dicts: Dict[]; onOpen: (task: Task) => void; selectedId?: string
 }): JSX.Element {
   return (
     <>
@@ -280,10 +305,10 @@ function TaskTreeRows({ roots, depth, expanded, toggle, label, dicts, onOpen, se
             <button type="button" className="wb-btn" style={{ padding: '2px 6px', border: 'none' }} onClick={(e) => { e.stopPropagation(); toggle(node.task.id) }}>
               {node.children.length > 0 ? (expanded.has(node.task.id) ? '▼' : '▶') : '·'}
             </button>
-            <TaskRow task={node.task} label={label} dicts={dicts} onOpen={onOpen} />
+            <TaskRow task={node.task} dicts={dicts} onOpen={onOpen} />
           </div>
           {node.children.length > 0 && expanded.has(node.task.id) && (
-            <TaskTreeRows roots={node.children} depth={depth + 1} expanded={expanded} toggle={toggle} label={label} dicts={dicts} onOpen={onOpen} selectedId={selectedId} />
+            <TaskTreeRows roots={node.children} depth={depth + 1} expanded={expanded} toggle={toggle} dicts={dicts} onOpen={onOpen} selectedId={selectedId} />
           )}
         </div>
       ))}
@@ -291,7 +316,7 @@ function TaskTreeRows({ roots, depth, expanded, toggle, label, dicts, onOpen, se
   )
 }
 
-function TaskRow({ task, label, dicts, onOpen, selected }: { task: Task; label: (kind: string, code: string) => string; dicts: Dict[]; onOpen: (task: Task) => void; selected?: boolean }): JSX.Element {
+function TaskRow({ task, dicts, onOpen, selected }: { task: Task; dicts: Dict[]; onOpen: (task: Task) => void; selected?: boolean }): JSX.Element {
   const due = task.dueAt === null ? null : new Date(task.dueAt)
   const now = new Date()
   const dueText = task.statusCode === 'done'
@@ -417,6 +442,8 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
   const [tasks, setTasks] = useState<Task[]>([])
   const [selected, setSelected] = useState<TaskDetail | null>(null)
   const [showForm, setShowForm] = useState(false)
+  const [subtaskParent, setSubtaskParent] = useState<Task | null>(null)
+  const [editDraft, setEditDraft] = useState<{ title: string; description: string; typeCode: string; priorityCode: string; statusCode: string; aiPolicyCode: string; dueLocal: string; workspacePath: string } | null>(null)
   const [showQuick, setShowQuick] = useState(false)
   const [quickText, setQuickText] = useState('')
   const [pendingDraft, setPendingDraft] = useState<DraftView | null>(null)
@@ -439,7 +466,6 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
 
   const dicts = useMemo(() => bootstrap?.dictionaries ?? [], [bootstrap])
   const dictOf = useCallback((kind: string) => dicts.filter((d) => d.kind === kind), [dicts])
-  const label = useCallback((kind: string, code: string) => dicts.find((d) => d.kind === kind && d.code === code)?.name ?? code, [dicts])
 
   const refresh = useCallback(async () => {
     const [boot, list] = await Promise.all([api<Bootstrap>('/api/workbench/bootstrap'), api<{ tasks: Task[] }>('/api/workbench/tasks')])
@@ -489,6 +515,8 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
     const refreshTimer = setInterval(() => { void refresh().catch(() => undefined) }, 15000)
     return () => { alive = false; clearInterval(timer); clearInterval(refreshTimer) }
   }, [refresh, settings.desktopNotify])
+
+  useEffect(() => { setEditDraft(null); setSubtaskParent(null) }, [selected?.task.id])
 
   useEffect(() => {
     if (pendingDraft !== null) document.documentElement.setAttribute(PENDING_ATTR, '')
@@ -643,16 +671,6 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
     await api('/api/workbench/tasks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title, description: String(form.get('description') ?? ''), typeCode: String(form.get('type') ?? ''), priorityCode: String(form.get('priority') ?? ''), statusCode: String(form.get('status') ?? 'todo'), workspacePath: String(form.get('workspacePath') ?? '').trim() || null, dueAt: due === '' ? null : new Date(due).toISOString() }) })
     setShowForm(false); await refresh()
   }
-  const createSubtask = async (parent: Task, event: React.FormEvent<HTMLFormElement>): Promise<void> => {
-    event.preventDefault()
-    const form = new FormData(event.currentTarget)
-    const title = String(form.get('title') ?? '').trim()
-    if (title === '') return
-    const due = String(form.get('due') ?? '')
-    await api('/api/workbench/tasks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title, typeCode: String(form.get('type') ?? parent.typeCode), priorityCode: String(form.get('priority') ?? parent.priorityCode), statusCode: 'todo', parentId: parent.id, dueAt: due === '' ? null : new Date(due).toISOString() }) })
-    await refresh()
-  }
-
   // 今日/日历/列表三棵树：默认全部收起
   const [todayExpanded, setTodayExpanded] = useState<Set<string>>(new Set())
   const [calendarExpanded, setCalendarExpanded] = useState<Set<string>>(new Set())
@@ -686,9 +704,6 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
     await api(`/api/workbench/plans/${localDateString()}`, { method: 'DELETE' })
     await refresh()
   }
-  const overdue = openTasks.filter((t) => t.dueAt !== null && Date.parse(t.dueAt) < todayStart.getTime())
-  const todayDue = openTasks.filter((t) => t.dueAt !== null && Date.parse(t.dueAt) >= todayStart.getTime() && Date.parse(t.dueAt) < todayEnd.getTime())
-  const active = openTasks.filter((t) => t.statusCode === 'doing' || t.statusCode === 'blocked')
 
   // 周/月日历
   const [cursor, setCursor] = useState<Date>(startOfWeek(now))
@@ -864,7 +879,7 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
                 </div>
               )}
               <div className="wb-list">
-                <TaskTreeRows roots={todayTree} depth={0} expanded={todayExpanded} toggle={toggleTodayExpanded} label={label} dicts={dicts} onOpen={openTask} selectedId={selected?.task.id} />
+                <TaskTreeRows roots={todayTree} depth={0} expanded={todayExpanded} toggle={toggleTodayExpanded} dicts={dicts} onOpen={openTask} selectedId={selected?.task.id} />
                 {openTasks.length === 0 && <div className="wb-empty">今天没有需要关注的任务</div>}
               </div>
             </>
@@ -980,7 +995,7 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
                 </div>
               ) : (
                 <div className="wb-list">
-                  <TaskTreeRows roots={dayTab === 'plan' ? pickedPlanTree : pickedDoneTree} depth={0} expanded={calendarExpanded} toggle={toggleCalendarExpanded} label={label} dicts={dicts} onOpen={openTask} selectedId={selected?.task.id} />
+                  <TaskTreeRows roots={dayTab === 'plan' ? pickedPlanTree : pickedDoneTree} depth={0} expanded={calendarExpanded} toggle={toggleCalendarExpanded} dicts={dicts} onOpen={openTask} selectedId={selected?.task.id} />
                   {(dayTab === 'plan' ? pickedPlanTree : pickedDoneTree).length === 0 && <div className="wb-empty">{picked.getMonth() + 1}/{picked.getDate()} 没有{dayTab === 'plan' ? '计划任务' : '完成记录'}</div>}
                 </div>
               )}
@@ -998,8 +1013,8 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
               </div>
               <div className="wb-list">
                 {archivedMode
-                  ? archivedTasks.map((t) => <TaskRow key={t.id} task={t} label={label} dicts={dicts} onOpen={openTask} selected={selected?.task.id === t.id} />)
-                  : <TaskTreeRows roots={buildTaskTree(tasks)} depth={0} expanded={expanded} toggle={toggleExpanded} label={label} dicts={dicts} onOpen={openTask} selectedId={selected?.task.id} />}
+                  ? archivedTasks.map((t) => <TaskRow key={t.id} task={t} dicts={dicts} onOpen={openTask} selected={selected?.task.id === t.id} />)
+                  : <TaskTreeRows roots={buildTaskTree(tasks)} depth={0} expanded={expanded} toggle={toggleExpanded} dicts={dicts} onOpen={openTask} selectedId={selected?.task.id} />}
                 {archivedMode && archivedTasks.length === 0 && <div className="wb-empty">没有归档任务</div>}
                 {!archivedMode && tasks.length === 0 && <div className="wb-empty">还没有任务，点“快速录入”或“新建”开始</div>}
               </div>
@@ -1013,50 +1028,94 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
             : (
               <>
                 <div className="wb-card">
-                  <h4>{selected.task.title}</h4>
-                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
-                    <Badge dict={dictOf('type')} code={selected.task.typeCode} />
-                    <Badge dict={dictOf('priority')} code={selected.task.priorityCode} />
-                    <Badge dict={dictOf('status')} code={selected.task.statusCode} />
-                  </div>
-                  <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>截止：{selected.task.dueAt === null ? '无' : fmtTime(selected.task.dueAt)}</div>
-                  <div style={{ fontSize: 12, color: '#999', marginBottom: 8 }}>AI 工作区：{selected.task.workspacePath ?? (settings.defaultWorkspace || '默认工作区未设置')}</div>
-                  <MarkdownText text={selected.task.description || '（无描述）'} />
-                  <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
-                    {selected.task.archived ? (
-                      <button className="wb-btn primary" onClick={() => { void api(`/api/workbench/tasks/${selected.task.id}/restore`, { method: 'POST' }).then(() => { setNotice('任务已恢复'); setArchivedMode(false); void refresh() }).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e))) }}>恢复任务</button>
-                    ) : (
-                      <>
-                        <select style={{ background: 'var(--dsw-alias-bg-base,#17171a)', color: 'inherit', border: '1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.15))', borderRadius: 8, padding: '6px 8px' }} value={selected.task.statusCode} onChange={(e) => void patchTask(selected.task.id, { statusCode: e.target.value })}>
-                          {dictOf('status').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}
-                        </select>
-                        <select style={{ background: 'var(--dsw-alias-bg-base,#17171a)', color: 'inherit', border: '1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.15))', borderRadius: 8, padding: '6px 8px' }} value={selected.task.aiPolicyCode} onChange={(e) => void patchTask(selected.task.id, { aiPolicyCode: e.target.value })}>
-                          {dictOf('ai_policy').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}
-                        </select>
-                        {selected.children.length === 0
-                          ? selected.task.statusCode === 'done' || selected.task.statusCode === 'cancelled'
-                            ? <button className="wb-btn" disabled={busy} onClick={() => {
-                                const existing = selected.sessions.find((x) => x.role_code === 'review')
-                                if (existing !== undefined && typeof existing.session_id === 'string' && existing.session_id !== '') {
-                                  document.documentElement.removeAttribute(ACTIVE_ATTR)
-                                  runtime.sessions.open(existing.session_id)
-                                } else {
-                                  void startAISession('review', selected.task, selected.task.title)
-                                }
-                              }}>{selected.sessions.some((x) => x.role_code === 'review') ? '进入复盘会话' : 'AI 复盘'}</button>
-                            : <button className="wb-btn primary" disabled={busy || selected.task.aiPolicyCode !== 'execute'} title={selected.task.aiPolicyCode !== 'execute' ? '请先开启“可执行”' : selected.sessions.some((x) => x.role_code === 'execute') ? '新建执行会话并携带此前会话提示' : '开始执行'} onClick={() => void startAISession('execute', selected.task, selected.task.title, selected.sessions.filter((x) => x.role_code === 'execute'))}>AI 执行{selected.sessions.some((x) => x.role_code === 'execute') ? '（新会话续作）' : ''}{selected.task.aiPolicyCode !== 'execute' ? '（需可执行）' : ''}</button>
-                          : <span style={{ fontSize: 12, color: '#999', alignSelf: 'center' }}>该任务有子任务，请展开子任务执行叶子任务</span>}
-                        <button className="wb-btn" disabled={busy} onClick={() => void startAISession('consult', selected.task, selected.task.title)}>AI 协助</button>
-                        <button className="wb-btn" disabled={busy} onClick={() => void startAISession('breakdown', selected.task, selected.task.title)}>AI 拆解</button>
-                        <button className="wb-btn" onClick={() => setShowForm(true)}>+ 子任务</button>
-                        <button className="wb-btn" onClick={() => { if (window.confirm('归档后任务会从工作台列表隐藏，但数据和关联会话仍保留；确认归档？')) { const id = selected.task.id; setTasks((list) => list.filter((t) => t.id !== id)); void api(`/api/workbench/tasks/${id}/archive`, { method: 'POST' }).then(() => { setSelected(null); selectedRef.current = null; setNotice('任务已归档（软删除）。以后版本会提供归档区查看。'); void refresh() }).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e))) } }}>归档</button>
-                      </>
-                    )}
-                  </div>
-                  <div style={{ fontSize: 12, color: '#999', marginTop: 6 }}>
-                    {selected.children.length === 0 && selected.task.aiPolicyCode === 'execute' && selected.task.statusCode !== 'done' && selected.task.statusCode !== 'cancelled' ? '执行会话完成后，AI 会提交验收申请，由你验收后标记完成。' : ''}
-                  </div>
+                  {editDraft === null ? (
+                    <>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <h4 style={{ flex: 1, margin: 0 }}>{selected.task.title}</h4>
+                        {!selected.task.archived && <button className="wb-btn" onClick={() => setEditDraft({ title: selected.task.title, description: selected.task.description, typeCode: selected.task.typeCode, priorityCode: selected.task.priorityCode, statusCode: selected.task.statusCode, aiPolicyCode: selected.task.aiPolicyCode, dueLocal: toLocalInput(selected.task.dueAt), workspacePath: selected.task.workspacePath ?? '' })}>✏️ 编辑</button>}
+                      </div>
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', margin: '8px 0' }}>
+                        <Badge dict={dictOf('type')} code={selected.task.typeCode} />
+                        <Badge dict={dictOf('priority')} code={selected.task.priorityCode} />
+                        <Badge dict={dictOf('status')} code={selected.task.statusCode} />
+                      </div>
+                      <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>截止：{selected.task.dueAt === null ? '无' : fmtTime(selected.task.dueAt)}</div>
+                      <div style={{ fontSize: 12, color: '#999', marginBottom: 8 }}>AI 工作区：{selected.task.workspacePath ?? (settings.defaultWorkspace || '默认工作区未设置')}</div>
+                      <MarkdownText text={selected.task.description || '（无描述）'} />
+                      <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
+                        {selected.task.archived ? (
+                          <button className="wb-btn primary" onClick={() => { void api(`/api/workbench/tasks/${selected.task.id}/restore`, { method: 'POST' }).then(() => { setNotice('任务已恢复'); setArchivedMode(false); void refresh() }).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e))) }}>恢复任务</button>
+                        ) : (
+                          <>
+                            {selected.children.length === 0
+                              ? selected.task.statusCode === 'done' || selected.task.statusCode === 'cancelled'
+                                ? <button className="wb-btn" disabled={busy} onClick={() => {
+                                    const existing = selected.sessions.find((x) => x.role_code === 'review')
+                                    if (existing !== undefined && typeof existing.session_id === 'string' && existing.session_id !== '') {
+                                      document.documentElement.removeAttribute(ACTIVE_ATTR)
+                                      runtime.sessions.open(existing.session_id)
+                                    } else {
+                                      void startAISession('review', selected.task, selected.task.title)
+                                    }
+                                  }}>{selected.sessions.some((x) => x.role_code === 'review') ? '进入复盘会话' : 'AI 复盘'}</button>
+                                : <button className="wb-btn primary" disabled={busy || selected.task.aiPolicyCode !== 'execute'} title={selected.task.aiPolicyCode !== 'execute' ? '请先开启“可执行”' : selected.sessions.some((x) => x.role_code === 'execute') ? '新建执行会话并携带此前会话提示' : '开始执行'} onClick={() => void startAISession('execute', selected.task, selected.task.title, selected.sessions.filter((x) => x.role_code === 'execute'))}>AI 执行{selected.sessions.some((x) => x.role_code === 'execute') ? '（新会话续作）' : ''}{selected.task.aiPolicyCode !== 'execute' ? '（需可执行）' : ''}</button>
+                              : <span style={{ fontSize: 12, color: '#999', alignSelf: 'center' }}>该任务有子任务，请展开子任务执行叶子任务</span>}
+                            <button className="wb-btn" disabled={busy} onClick={() => void startAISession('consult', selected.task, selected.task.title)}>AI 协助</button>
+                            <button className="wb-btn" disabled={busy} onClick={() => void startAISession('breakdown', selected.task, selected.task.title)}>AI 拆解</button>
+                            <button className="wb-btn" onClick={() => setSubtaskParent(selected.task)}>+ 子任务</button>
+                            <button className="wb-btn" onClick={() => { if (window.confirm('归档后任务会从工作台列表隐藏；可在列表页“查看归档”中恢复。确认归档？')) { const id = selected.task.id; setTasks((list) => list.filter((t) => t.id !== id)); void api(`/api/workbench/tasks/${id}/archive`, { method: 'POST' }).then(() => { setSelected(null); selectedRef.current = null; setNotice('任务已归档，可在列表页“查看归档”恢复。'); void refresh() }).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e))) } }}>归档</button>
+                          </>
+                        )}
+                      </div>
+                      <div style={{ fontSize: 12, color: '#999', marginTop: 6 }}>
+                        {selected.children.length === 0 && selected.task.aiPolicyCode === 'execute' && selected.task.statusCode !== 'done' && selected.task.statusCode !== 'cancelled' ? '执行会话完成后，AI 会提交验收申请，由你验收后标记完成。' : ''}
+                      </div>
+                    </>
+                  ) : (
+                    <form className="wb-form" onSubmit={(e) => {
+                      e.preventDefault()
+                      if (editDraft.title.trim() === '') return
+                      void patchTask(selected.task.id, {
+                        title: editDraft.title.trim(),
+                        description: editDraft.description,
+                        typeCode: editDraft.typeCode,
+                        priorityCode: editDraft.priorityCode,
+                        statusCode: editDraft.statusCode,
+                        aiPolicyCode: editDraft.aiPolicyCode,
+                        dueAt: editDraft.dueLocal === '' ? null : new Date(editDraft.dueLocal).toISOString(),
+                        workspacePath: editDraft.workspacePath.trim() === '' ? null : editDraft.workspacePath.trim(),
+                      }).then(() => { setEditDraft(null); setNotice('任务已更新') }).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
+                    }}>
+                      <h4 className="full" style={{ margin: 0 }}>✏️ 编辑任务</h4>
+                      <label className="full">标题<input value={editDraft.title} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, title: e.target.value })} /></label>
+                      <label>类型<select value={editDraft.typeCode} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, typeCode: e.target.value })}>{dictOf('type').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
+                      <label>优先级<select value={editDraft.priorityCode} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, priorityCode: e.target.value })}>{dictOf('priority').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
+                      <label>状态<select value={editDraft.statusCode} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, statusCode: e.target.value })}>{dictOf('status').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
+                      <label>AI 策略<select value={editDraft.aiPolicyCode} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, aiPolicyCode: e.target.value })}>{dictOf('ai_policy').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
+                      <label>截止时间<input type="datetime-local" value={editDraft.dueLocal} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, dueLocal: e.target.value })} /></label>
+                      <label className="full">AI 会话工作区（留空使用默认）<input value={editDraft.workspacePath} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, workspacePath: e.target.value })} placeholder={settings.defaultWorkspace || '默认工作区未设置'} /></label>
+                      <label className="full">描述（Markdown）<textarea rows={6} value={editDraft.description} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, description: e.target.value })} /></label>
+                      <div className="full" style={{ display: 'flex', gap: 8 }}><button className="wb-btn primary" type="submit">💾 保存</button><button className="wb-btn" type="button" onClick={() => setEditDraft(null)}>取消</button></div>
+                    </form>
+                  )}
                 </div>
+                {subtaskParent !== null && subtaskParent.id === selected.task.id && (
+                  <form className="wb-form wb-form-panel" onSubmit={(e) => {
+                    e.preventDefault()
+                    const form = new FormData(e.currentTarget)
+                    const title = String(form.get('title') ?? '').trim()
+                    if (title === '') return
+                    const due = String(form.get('due') ?? '')
+                    void api('/api/workbench/tasks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title, typeCode: String(form.get('type') ?? subtaskParent.typeCode), priorityCode: String(form.get('priority') ?? subtaskParent.priorityCode), statusCode: 'todo', parentId: subtaskParent.id, dueAt: due === '' ? null : new Date(due).toISOString() }) }).then(() => { setSubtaskParent(null); setNotice('子任务已创建'); void refresh() }).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
+                  }}>
+                    <h4 className="full" style={{ margin: 0 }}>➕ 新建子任务（父任务：{subtaskParent.title}）</h4>
+                    <label className="full">标题<input name="title" required placeholder="子任务标题" /></label>
+                    <label>类型<select name="type" defaultValue={subtaskParent.typeCode}>{dictOf('type').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
+                    <label>优先级<select name="priority" defaultValue={subtaskParent.priorityCode}>{dictOf('priority').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
+                    <label>截止时间<input name="due" type="datetime-local" /></label>
+                    <div className="full" style={{ display: 'flex', gap: 8 }}><button className="wb-btn primary" type="submit">保存子任务</button><button className="wb-btn" type="button" onClick={() => setSubtaskParent(null)}>取消</button></div>
+                  </form>
+                )}
                 <div className="wb-card">
                   <h4>子任务（{selected.children.length}）</h4>
                   {selected.children.map((c) => <div key={c.id} style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 4 }}><Badge dict={dictOf('status')} code={c.statusCode} /> <span onClick={() => openTask(c)} style={{ cursor: 'pointer' }}>{c.title}</span></div>)}

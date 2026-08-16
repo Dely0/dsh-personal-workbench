@@ -1,7 +1,7 @@
 {
   "name": "dsh-workbench",
-  "version": "0.9.0",
-  "description": "DSH 个人工作台：日历 + 任务列表 + AI 澄清/咨询 + 本地知识沉淀（V1 骨架）",
+  "version": "0.10.0",
+  "description": "DSH 个人工作台：日历 + 层级任务 + AI 澄清/拆解/执行/复盘 + AI 智能排序/日报周报 + 桌面提醒",
   "type": "module",
   "main": "./lib/index.js",
   "types": "./lib/index.d.ts",

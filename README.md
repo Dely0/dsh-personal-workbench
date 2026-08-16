@@ -136,8 +136,8 @@ dsh plugin --profile web add link:/path/to/dsh-workbench
 `dsh-workbench` is a personal workbench plugin for DeepSeek Harness Web:
 calendar + hierarchical task list, natural-language task intake with AI clarification,
 multiple AI sessions per task (clarify / consult / break down / execute / review),
-execution with user acceptance, per-task AI workspaces, reminders, archives, and
-Markdown reviews.
+execution with user acceptance, AI prioritization for any date, daily/weekly reports,
+desktop notifications, per-task AI workspaces, reminders, archives, and Markdown reviews.
 
 All task data is stored locally under `~/.dsh/workbench`.
 
@@ -159,9 +159,9 @@ Then restart `dsh web` and hard-refresh the browser.
 
 ## Roadmap
 
-- V2: AI daily prioritization, OS-level notifications, daily/weekly reports
-- V2: recurring tasks & automation, personal knowledge base / lessons
-- Future: multi-device sync, drag-and-drop, import/export
+- [x] V2: AI prioritization for any date, OS-level notifications, daily/weekly reports
+- [ ] V2: recurring tasks & automation, personal knowledge base / lessons
+- [ ] Future: multi-device sync, drag-and-drop, import/export
 
 ## License
 

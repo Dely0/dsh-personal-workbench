@@ -90,10 +90,13 @@ function periodRange(periodCode: ReportPeriodCode, periodStart: string): { start
 function reportContext(db: DatabaseSync, periodCode: ReportPeriodCode, periodStart: string): Record<string, unknown> | undefined {
   const range = periodRange(periodCode, periodStart)
   if (range === undefined) return undefined
+  const startMs = Date.parse(range.start)
+  const endMs = Date.parse(range.end)
   const tasks = listTasks(db, { includeArchived: true })
-  const completed = tasks.filter((task) => task.completedAt !== null && task.completedAt >= range.start && task.completedAt < range.end)
-  const created = tasks.filter((task) => task.createdAt >= range.start && task.createdAt < range.end)
-  const eventRows = db.prepare('SELECT * FROM task_events WHERE at >= ? AND at < ? ORDER BY at ASC').all(range.start, range.end) as unknown as Array<{
+  const inRange = (iso: string | null): boolean => iso !== null && Date.parse(iso) >= startMs && Date.parse(iso) < endMs
+  const completed = tasks.filter((task) => inRange(task.completedAt))
+  const created = tasks.filter((task) => inRange(task.createdAt))
+  const eventRows = db.prepare('SELECT * FROM task_events WHERE at >= ? AND at < ? ORDER BY at ASC LIMIT 500').all(range.start, range.end) as unknown as Array<{
     id: string
     task_id: string
     event_code: string
@@ -539,6 +542,7 @@ export function makeRoutes(db: DatabaseSync): WebRoute[] {
         const method = req.method ?? 'GET'
         if (segments.length === 0 && method === 'GET') {
           const planDate = url.searchParams.get('date') ?? localDateString()
+          if (!PERIOD_DATE_RE.test(planDate)) return writeJson(res, 400, { error: 'date must be YYYY-MM-DD' })
           const plan = getDailyPlan(db, planDate)
           return writeJson(res, 200, { ok: true, plan: plan ?? null })
         }
@@ -559,7 +563,7 @@ export function makeRoutes(db: DatabaseSync): WebRoute[] {
         writeJson(res, 200, {
           ok: true,
           name: 'dsh-workbench',
-          version: '0.9.0',
+          version: '0.10.0',
           db: {
             schemaVersion: versionRow?.value ?? 'unknown',
             taskCount: listTasks(db, { includeArchived: true }).length,

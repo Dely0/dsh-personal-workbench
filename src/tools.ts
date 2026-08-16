@@ -5,7 +5,7 @@
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { DatabaseSync } from 'node:sqlite'
-import { appendEvent, createDraft, getDictionary, getDraft, getPendingDailyPlanDraft, getPendingDraftForTask, getPendingReportDraft, getTask, localDateString, updateDraft, updateTask } from './db/repo.js'
+import { createDraft, getDictionary, getDraft, getPendingDailyPlanDraft, getPendingDraftForTask, getPendingReportDraft, getTask, listChildren, localDateString, updateDraft, updateTask } from './db/repo.js'
 
 function text(value: string): ContentBlock[] {
   return [{ type: 'text', text: value }]
@@ -60,6 +60,7 @@ export function submitTaskTool(db: DatabaseSync) {
       const typeCode = requireCode(db, 'type', args.type_code, 'type_code')
       const priorityCode = requireCode(db, 'priority', args.priority_code ?? 'p2', 'priority_code')
       const statusCode = optionalCode(db, 'status', args.status_code ?? 'todo', 'status_code') ?? 'todo'
+      if (statusCode === 'done' || statusCode === 'cancelled') return '错误：澄清草稿不能直接创建为已完成/已取消任务，请使用待办类状态，完成请走执行验收流程。'
       const aiPolicyCode = optionalCode(db, 'ai_policy', args.ai_policy_code ?? 'consult', 'ai_policy_code') ?? 'consult'
       // V1.5：execute 已开放；澄清会话默认仍建议 consult，除非用户明确要求可执行。
       const dueAt = str(args.due_at) ?? null
@@ -140,6 +141,21 @@ export function proposeDailyPlanTool(db: DatabaseSync) {
           return `错误：任务「${task.title}」已归档或已关闭，不能进入今日计划`
         }
         if (seen.has(taskId)) return `错误：任务「${task.title}」在 items 中重复`
+        const isAncestor = (ancestorId: string, descendantId: string): boolean => {
+          let cursor = getTask(db, descendantId)
+          let guard = 0
+          while (cursor !== undefined && guard < 32) {
+            if (cursor.parentId === ancestorId) return true
+            cursor = cursor.parentId === null ? undefined : getTask(db, cursor.parentId)
+            guard += 1
+          }
+          return false
+        }
+        for (const existingId of seen) {
+          if (isAncestor(taskId, existingId) || isAncestor(existingId, taskId)) {
+            return `错误：任务「${task.title}」与「${getTask(db, existingId)?.title ?? existingId}」在同一父子链上，不能同时列入计划`
+          }
+        }
         seen.add(taskId)
         items.push({
           taskId,
@@ -239,6 +255,9 @@ export function proposeSubtasksTool(db: DatabaseSync) {
       if (parentTaskId === undefined) return '错误：parent_task_id 必填'
       const parent = getTask(db, parentTaskId)
       if (parent === undefined) return `错误：任务 ${parentTaskId} 不存在`
+      if (parent.archived === 1 || parent.statusCode === 'done' || parent.statusCode === 'cancelled') {
+        return `错误：任务「${parent.title}」已归档或已关闭，不能拆解`
+      }
       const sessionId = exec.agent?.session?.id ?? null
 
       // 子任务缺省字段继承父任务（尤其是 type_code / priority_code），
@@ -313,6 +332,7 @@ export function updateTaskTool(db: DatabaseSync) {
       const priorityCode = optionalCode(db, 'priority', args.priority_code, 'priority_code')
       if (priorityCode !== undefined) patch.priorityCode = priorityCode
       const statusCode = optionalCode(db, 'status', args.status_code, 'status_code')
+      if (statusCode === 'done' || statusCode === 'cancelled') return '错误：AI 不能直接把任务标记为已完成/已取消；完成请由执行会话调用 workbench_request_completion，取消请在界面操作。'
       if (statusCode !== undefined) patch.statusCode = statusCode
       if (str(args.due_at) !== undefined) patch.dueAt = str(args.due_at)
       const aiPolicy = optionalCode(db, 'ai_policy', args.ai_policy_code, 'ai_policy_code')
@@ -343,6 +363,7 @@ export function submitReviewTool(db: DatabaseSync) {
       if (taskId === undefined) return '错误：task_id 必填'
       const task = getTask(db, taskId)
       if (task === undefined) return `错误：任务 ${taskId} 不存在`
+      if (task.statusCode !== 'done') return `错误：任务「${task.title}」尚未完成，不能复盘`
       const summaryMd = str(args.summary_md)
       if (summaryMd === undefined || summaryMd.trim() === '') return '错误：summary_md 必填'
       const sessionId = exec?.agent?.session?.id ?? null
@@ -377,14 +398,15 @@ export function requestCompletionTool(db: DatabaseSync) {
       if (task === undefined) return `错误：任务 ${taskId} 不存在`
       if (task.statusCode === 'done') return `任务「${task.title}」已经是已完成状态`
       if (task.archived === 1) return `错误：任务「${task.title}」已归档`
+      if (task.aiPolicyCode !== 'execute') return `错误：任务「${task.title}」的 AI 策略不是“可执行”，不能申请完成`
+      if (listChildren(db, taskId).length > 0) return `错误：任务「${task.title}」还有子任务，请对叶子任务申请完成`
       const summary = typeof args.summary === 'string' && args.summary.trim() !== '' ? args.summary.trim() : ''
       const sessionId = exec?.agent?.session?.id ?? null
-      const draft = createDraft(db, {
-        kindCode: 'completion',
-        sessionId,
-        payload: { taskId, summary, sessionId },
-      })
-      return `完成验收申请已提交（草稿 id=${draft.id}），等待用户在个人工作台验收。请勿声称任务已经完成。`
+      const existing = getPendingDraftForTask(db, 'completion', taskId)
+      const draft = existing !== undefined
+        ? updateDraft(db, existing.id, { taskId, summary, sessionId })
+        : createDraft(db, { kindCode: 'completion', sessionId, payload: { taskId, summary, sessionId } })
+      return `完成验收申请已提交${existing !== undefined ? '（更新）' : ''}（草稿 id=${draft?.id}），等待用户在个人工作台验收。请勿声称任务已经完成。`
     },
   })
 }

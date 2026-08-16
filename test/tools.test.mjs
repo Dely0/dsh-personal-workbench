@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { openWorkbenchDb } from '../lib/db/database.js'
 import { seedDictionaries } from '../lib/db/seed.js'
 import { proposeDailyPlanTool, submitReportTool, submitTaskTool, updateTaskTool, requestCompletionTool } from '../lib/tools.js'
-import { createTask, getTask, getDraftBySession, getPendingDailyPlanDraft, getPendingDraftForTask, getPendingReportDraft } from '../lib/db/repo.js'
+import { createTask, getTask, getDraftBySession, getPendingDailyPlanDraft, getPendingDraftForTask, getPendingReportDraft, updateTask } from '../lib/db/repo.js'
 
 test('agent tools write pending drafts and update tasks', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-workbench-tools-'))
@@ -33,6 +33,12 @@ test('agent tools write pending drafts and update tasks', async () => {
     const pending = getPendingDraftForTask(db, 'completion', task.id)
     assert.ok(pending)
     assert.equal(getTask(db, task.id).statusCode, 'todo') // 验收前不完成
+    // 幂等：同一任务再次申请完成，更新同一草稿
+    await completion.execute({ task_id: task.id, summary: '完成总结 v2' }, { agent: { session: { id: 'sess-exec' } } })
+    assert.equal(getPendingDraftForTask(db, 'completion', task.id).id, pending.id)
+    // AI 不能直接关闭任务
+    const deniedClose = await update.execute({ task_id: task.id, status_code: 'done' })
+    assert.match(deniedClose, /不能直接/)
 
     const proposePlan = proposeDailyPlanTool(db)
     const t1 = createTaskForTest(db)
@@ -51,7 +57,7 @@ test('agent tools write pending drafts and update tasks', async () => {
     assert.match(planOut2, /今日计划提案已保存/)
     assert.equal(getPendingDailyPlanDraft(db, 'sess-plan').id, planDraft.id)
     // 已完成任务不能进入计划
-    await updateTaskTool(db).execute({ task_id: t1.id, status_code: 'done' })
+    updateTask(db, t1.id, { statusCode: 'done' })
     assert.equal(getTask(db, t1.id).statusCode, 'done')
     const badPlan = await proposePlan.execute(
       { summary: '不应成功', items: [{ task_id: t1.id, order: 1, note: '' }] },
@@ -80,7 +86,7 @@ test('agent tools write pending drafts and update tasks', async () => {
 })
 
 function createTaskForTest(db) {
-  return createTask(db, { title: 'execution target', typeCode: 'code_impl', priorityCode: 'p1' })
+  return createTask(db, { title: 'execution target', typeCode: 'code_impl', priorityCode: 'p1', aiPolicyCode: 'execute' })
 }
 
 function localDateStr() {

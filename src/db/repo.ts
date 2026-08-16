@@ -251,6 +251,7 @@ export function listTasks(db: DatabaseSync, opts: { includeArchived?: boolean; p
   const all = (parentId === undefined
     ? db.prepare('SELECT * FROM tasks').all()
     : db.prepare('SELECT * FROM tasks WHERE parent_id IS ?').all(parentId)) as unknown as RawTaskRow[]
+  const priorityWeights = new Map(listDictionaries(db, 'priority').map((entry) => [entry.code, Number(entry.config.weight ?? 99)]))
   return all
     .filter((row) => includeArchived || row.archived === 0)
     .map((row) => parseTask(row))
@@ -258,8 +259,7 @@ export function listTasks(db: DatabaseSync, opts: { includeArchived?: boolean; p
     .sort((a, b) => {
       const rank = (task: TaskRow): number => {
         if (task.statusCode === 'done' || task.statusCode === 'cancelled') return 4
-        const weight = Number(getDictionary(db, 'priority', task.priorityCode)?.config.weight ?? 99)
-        return weight
+        return priorityWeights.get(task.priorityCode) ?? 99
       }
       const rankDiff = rank(a) - rank(b)
       if (rankDiff !== 0) return rankDiff
@@ -424,7 +424,7 @@ function setDraftStatus(db: DatabaseSync, id: string, statusCode: string, at = n
 export function confirmTaskDraft(db: DatabaseSync, draftId: string, actor = 'user', at = nowIso()): TaskRow | undefined {
   const draft = getDraft(db, draftId)
   if (draft === undefined || draft.kindCode !== 'task') return undefined
-  const payload = draft.payload as Partial<TaskInput> & { reminderOffsetMinutes?: number; reminder_offset_minutes?: number }
+  const payload = draft.payload as Partial<TaskInput> & { reminderOffsetMinutes?: number; reminder_offset_minutes?: number; subtasks?: Array<Partial<TaskInput> & Record<string, unknown>> }
   const title = typeof payload.title === 'string' ? payload.title : ''
   if (title.trim() === '') throw new Error('draft payload requires a non-empty title')
   db.exec('BEGIN')
@@ -453,6 +453,31 @@ export function confirmTaskDraft(db: DatabaseSync, draftId: string, actor = 'use
     if (task.dueAt !== null && typeof reminderOffset === 'number' && Number.isFinite(reminderOffset) && reminderOffset >= 0) {
       addReminder(db, task.id, reminderOffset, 'browser', at)
     }
+    // workbench_submit_task 的 subtasks 参数：确认任务时同步创建简版子任务。
+    const rawChildren = Array.isArray(payload.subtasks) ? payload.subtasks as Array<Partial<TaskInput> & Record<string, unknown>> : []
+    const walkChildren = (items: Array<Partial<TaskInput> & Record<string, unknown>>, parentId: string): void => {
+      for (const item of items) {
+        const childTitle = typeof item.title === 'string' ? item.title : ''
+        if (childTitle.trim() === '') continue
+        const typeCode = String(item.typeCode ?? item.type_code ?? task.typeCode)
+        const priorityCode = String(item.priorityCode ?? item.priority_code ?? task.priorityCode)
+        if (getDictionary(db, 'type', typeCode)?.active !== 1) continue
+        if (getDictionary(db, 'priority', priorityCode)?.active !== 1) continue
+        const child = createTask(db, {
+          title: childTitle,
+          description: typeof item.description === 'string' ? item.description : undefined,
+          typeCode,
+          priorityCode,
+          statusCode: 'todo',
+          dueAt: typeof item.dueAt === 'string' ? item.dueAt : typeof item.due_at === 'string' ? item.due_at : null,
+          estimatedMinutes: typeof item.estimated_minutes === 'number' ? item.estimated_minutes : undefined,
+          source: 'nl',
+          parentId,
+        }, actor, at)
+        if (Array.isArray(item.children)) walkChildren(item.children as Array<Partial<TaskInput> & Record<string, unknown>>, child.id)
+      }
+    }
+    walkChildren(rawChildren, task.id)
     if (draft.sessionId !== null && draft.sessionId !== undefined) {
       linkTaskSession(db, { taskId: task.id, sessionId: draft.sessionId, roleCode: 'clarify' }, at)
     }
@@ -471,6 +496,11 @@ export function confirmSubtaskPlanDraft(db: DatabaseSync, draftId: string, actor
   const payload = draft.payload as { parentTaskId?: string; subtasks?: Array<Partial<TaskInput>> }
   const parentTaskId = typeof payload.parentTaskId === 'string' ? payload.parentTaskId : undefined
   if (parentTaskId === undefined) throw new Error('subtask_plan requires parentTaskId')
+  const parent = getTask(db, parentTaskId)
+  if (parent === undefined) throw new Error(`parent task ${parentTaskId} not found`)
+  if (parent.archived === 1 || parent.statusCode === 'done' || parent.statusCode === 'cancelled') {
+    throw new Error(`parent task「${parent.title}」is archived or closed`)
+  }
   const subtasks = Array.isArray(payload.subtasks) ? payload.subtasks : []
   db.exec('BEGIN')
   try {
@@ -480,8 +510,10 @@ export function confirmSubtaskPlanDraft(db: DatabaseSync, draftId: string, actor
         const title = typeof item.title === 'string' ? item.title : ''
         if (title.trim() === '') continue
         // 提案工具写入的是 snake_case（type_code），表单/任务草稿写入的是 camelCase，这里两者都收。
-        const typeCode = String(item.typeCode ?? item.type_code ?? 'personal')
-        const priorityCode = String(item.priorityCode ?? item.priority_code ?? 'p2')
+        const typeCode = String(item.typeCode ?? item.type_code ?? parent.typeCode)
+        const priorityCode = String(item.priorityCode ?? item.priority_code ?? parent.priorityCode)
+        if (getDictionary(db, 'type', typeCode)?.active !== 1) continue
+        if (getDictionary(db, 'priority', priorityCode)?.active !== 1) continue
         const dueAt = typeof item.dueAt === 'string' ? item.dueAt : typeof item.due_at === 'string' ? item.due_at : null
         const task = createTask(db, {
           title,
@@ -726,7 +758,7 @@ export function deleteDailyPlan(db: DatabaseSync, planDate: string): boolean {
   return db.prepare('DELETE FROM daily_plans WHERE plan_date = ?').run(planDate).changes > 0
 }
 
-export function confirmDailyPlanDraft(db: DatabaseSync, draftId: string, actor = 'user', at = nowIso()): DailyPlanRow | undefined {
+export function confirmDailyPlanDraft(db: DatabaseSync, draftId: string, at = nowIso()): DailyPlanRow | undefined {
   const draft = getDraft(db, draftId)
   if (draft === undefined || draft.kindCode !== 'daily_plan') return undefined
   const payload = draft.payload as { planDate?: string; summary?: string; items?: DailyPlanItem[] }
@@ -854,7 +886,7 @@ export function deleteTaskReport(db: DatabaseSync, periodCode: ReportPeriodCode,
   return db.prepare('DELETE FROM task_reports WHERE period_code = ? AND period_start = ?').run(periodCode, periodStart).changes > 0
 }
 
-export function confirmReportDraft(db: DatabaseSync, draftId: string, actor = 'user', at = nowIso()): TaskReportRow | undefined {
+export function confirmReportDraft(db: DatabaseSync, draftId: string, at = nowIso()): TaskReportRow | undefined {
   const draft = getDraft(db, draftId)
   if (draft === undefined || draft.kindCode !== 'report') return undefined
   const payload = draft.payload as { periodCode?: string; periodStart?: string; title?: string; summaryMd?: string; stats?: Record<string, unknown> }
