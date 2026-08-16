@@ -429,6 +429,9 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
   const [reportSubTab, setReportSubTab] = useState<'day' | 'week'>('day')
   const [currentReport, setCurrentReport] = useState<TaskReportView | null>(null)
   const [reportSession, setReportSession] = useState<{ sessionId: string } | null>(null)
+  const [pickedPlan, setPickedPlan] = useState<DailyPlanView | null>(null)
+  const [pickedPlanSession, setPickedPlanSession] = useState<{ sessionId: string } | null>(null)
+  const [planRefreshKey, setPlanRefreshKey] = useState(0)
   const [reportRefreshKey, setReportRefreshKey] = useState(0)
   const [todayPlanSession, setTodayPlanSession] = useState<{ sessionId: string } | null>(null)
   const [busy, setBusy] = useState(false)
@@ -523,12 +526,13 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
 
   const startAISession = async (mode: 'clarify' | 'consult' | 'breakdown' | 'execute' | 'review' | 'plan' | 'report', task: Task | null, text: string, previousSessions: Array<Record<string, unknown>> = []): Promise<void> => {
     if (mode === 'clarify' && text.trim() === '') return
+    const planAnchor = mode === 'plan' ? (/^\d{4}-\d{2}-\d{2}$/.test(text) ? text : localDateString()) : ''
     setBusy(true); setError(null)
     try {
       // 复用型会话：每日计划 / 日报 / 周报，每个 scope+anchor 只有一个会话。
       if (mode === 'plan' || mode === 'report') {
         const [scopeCode, anchor] = mode === 'plan'
-          ? ['daily_plan', /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : localDateString()]
+          ? ['daily_plan', planAnchor]
           : text.startsWith('week:') ? ['week_report', text.slice(5)] : ['day_report', text.slice(4)]
         const existing = await api<{ session: { sessionId: string } | null }>(`/api/workbench/ai-sessions?scope_code=${scopeCode}&anchor=${anchor}`)
         if (existing.session !== null) {
@@ -574,19 +578,24 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
       const id = await runtime.workspaces.connectWorkspace(workspaceId)
       const binding = runtime.sessions.binding(id)
       if (binding === undefined) throw new Error('会话绑定未就绪，请稍后重试')
-      await binding.session.rename(mode === 'report' ? `${text.startsWith('week:') ? '周报' : '日报'}：${text.split(':')[1] ?? ''}` : mode === 'plan' ? `今日计划：${localDateString().slice(5)}` : mode === 'clarify' ? `澄清：${text.slice(0, 24)}` : mode === 'consult' ? `协助：${task?.title.slice(0, 24)}` : mode === 'breakdown' ? `拆解：${task?.title.slice(0, 24)}` : mode === 'review' ? `复盘：${task?.title.slice(0, 24)}` : `执行：${task?.title.slice(0, 24)}`).catch(() => undefined)
+      await binding.session.rename(mode === 'report' ? `${text.startsWith('week:') ? '周报' : '日报'}：${text.split(':')[1] ?? ''}` : mode === 'plan' ? `AI 计划：${planAnchor.slice(5)}` : mode === 'clarify' ? `澄清：${text.slice(0, 24)}` : mode === 'consult' ? `协助：${task?.title.slice(0, 24)}` : mode === 'breakdown' ? `拆解：${task?.title.slice(0, 24)}` : mode === 'review' ? `复盘：${task?.title.slice(0, 24)}` : `执行：${task?.title.slice(0, 24)}`).catch(() => undefined)
       let reportContextText = ''
       if (mode === 'report') {
         const [periodCode, periodStart] = text.split(':')
         const contextRes = await api<{ context: Record<string, unknown> }>(`/api/workbench/reports/context?period_code=${encodeURIComponent(periodCode)}&period_start=${encodeURIComponent(periodStart)}`)
         reportContextText = JSON.stringify(contextRes.context, null, 2)
       }
-      const planTaskLines = tasks
+      const planDayStart = new Date(`${planAnchor}T00:00:00`)
+      const planDayEnd = new Date(planDayStart)
+      planDayEnd.setDate(planDayEnd.getDate() + 1)
+      const planCandidates = tasks
         .filter((t) => t.statusCode !== 'done' && t.statusCode !== 'cancelled')
+        .filter((t) => (t.dueAt !== null && Date.parse(t.dueAt) < planDayEnd.getTime()) || (planAnchor === localDateString() && t.dueAt === null))
         .slice(0, 30)
+      const planTaskLines = planCandidates
         .map((t, i) => `${i + 1}. [${t.id}] ${t.title} | 优先级 ${t.priorityCode} | 状态 ${t.statusCode} | 截止 ${t.dueAt ?? '无'} | 预计耗时 ${t.estimatedMinutes ?? '未知'} 分钟 | 父任务 ${t.parentId ?? '无'}`)
         .join('\n')
-      const planPrompt = `你是“个人工作台”的每日计划助手。请基于下面的未完成任务，给出今天的执行顺序建议。\n\n当前日期：${localDateString()}（${'日一二三四五六'[new Date().getDay()]}）\n当前时间：${new Date().toISOString()}\n\n候选任务（最多 30 条）：\n${planTaskLines || '（无未完成任务）'}\n\n请综合考虑：优先级（p0 紧急 > p1 高 > p2 普通 > p3 低）、是否逾期、截止时间、状态（doing/blocked 优先推进）、预计耗时、父子关系与可能的依赖。如果信息不足以判断，可以先问用户 1-2 个关键问题（例如：今天可投入多少小时、哪些必须完成）。\n\n然后调用 workbench_propose_daily_plan：\n- plan_date="${localDateString()}"\n- summary：1-3 句排序思路\n- items：扁平顺序数组（1 号最重要），每项 {task_id, order, note}；note 写清为什么排这里或建议时间块\n- 同一父子链上不要同时出现父任务和它下面的子任务；如需排子任务，只排可执行的叶子，并在 note 中说明属于哪个父任务\n- 只提交计划草稿，不要修改任何任务字段，不要执行任务。`
+      const planPrompt = `你是“个人工作台”的 AI 计划助手。请为 ${planAnchor}（${'日一二三四五六'[new Date(`${planAnchor}T00:00:00`).getDay()]}）安排执行顺序。\n\n今天：${localDateString()}；当前时间：${new Date().toISOString()}\n\n候选任务（该日期及之前到期、仍未完成的任务${planAnchor === localDateString() ? '；今天额外包含无截止时间的进行中任务' : ''}，最多 30 条）：\n${planTaskLines || '（无候选任务）'}\n\n请综合考虑：优先级（p0 紧急 > p1 高 > p2 普通 > p3 低）、是否已逾期、截止时间、状态（doing/blocked 优先推进）、预计耗时、父子关系与可能的依赖。如果信息不足，可以先问用户 1-2 个关键问题（例如：当天可投入多少小时、哪些必须当天完成）。\n\n然后调用 workbench_propose_daily_plan：\n- plan_date="${planAnchor}"\n- summary：1-3 句排序思路\n- items：扁平顺序数组（1 号最重要），每项 {task_id, order, note}；note 写清为什么排这里或建议时间块\n- 同一父子链上不要同时出现父任务和它下面的子任务；如需排子任务，只排可执行的叶子，并在 note 中说明属于哪个父任务\n- 只提交计划草稿，不要修改任何任务字段，不要执行任务。`
       const prompt = mode === 'report'
         ? `你是“个人工作台”的日报/周报助手。请根据下面 JSON 数据生成一份 Markdown 报告，然后调用 workbench_submit_report。\n\n报告周期：${text.split(':')[0]}（period_start=${text.split(':')[1] ?? ''}）\n数据：\n${reportContextText}\n\n要求：\n- 结构：今日/本周概览 → 已完成 → 进行中/风险 → 明日/下周建议\n- 只依据给定数据，不要编造；数据不足时如实说明\n- title 简洁；summary_md 用 Markdown；stats 可附 {completed, created} 等数字\n- 只提交草稿，不要修改任务，不要执行任务。`
         : mode === 'plan'
@@ -609,7 +618,7 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
       const result = await binding.session.prompt([{ type: 'text', text: prompt }], 'queue')
       if (result.ok === false) throw new Error(result.error !== undefined ? String(result.error) : '发送失败')
       if (mode === 'plan') {
-        await api('/api/workbench/ai-sessions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ scopeCode: 'daily_plan', anchor: localDateString(), sessionId: id, workspace: workspaceId }) })
+        await api('/api/workbench/ai-sessions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ scopeCode: 'daily_plan', anchor: planAnchor, sessionId: id, workspace: workspaceId }) })
       }
       if (mode === 'report') {
         const [periodCode, periodStart] = text.split(':')
@@ -708,6 +717,18 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
       .then((r) => setTodayPlanSession(r.session))
       .catch(() => setTodayPlanSession(null))
   }, [todayAnchor, bootstrap])
+
+  const pickedAnchor = localDateString(picked)
+  useEffect(() => {
+    if (view !== 'calendar' || dayTab !== 'plan') {
+      setPickedPlan(null); setPickedPlanSession(null)
+      return
+    }
+    void Promise.all([
+      api<{ plan: DailyPlanView | null }>(`/api/workbench/plans?date=${pickedAnchor}`),
+      api<{ session: { sessionId: string } | null }>(`/api/workbench/ai-sessions?scope_code=daily_plan&anchor=${pickedAnchor}`),
+    ]).then(([planRes, sessionRes]) => { setPickedPlan(planRes.plan); setPickedPlanSession(sessionRes.session) }).catch(() => { setPickedPlan(null); setPickedPlanSession(null) })
+  }, [view, dayTab, pickedAnchor, planRefreshKey])
   const weekDays = Array.from({ length: 7 }, (_, i) => { const d = new Date(cursor); d.setDate(d.getDate() + i); return d })
   const moveWeek = (delta: number): void => { const d = new Date(cursor); d.setDate(d.getDate() + delta * 7); setCursor(startOfWeek(d)) }
   const monthGrid = (() => {
@@ -719,7 +740,11 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
   const noDueOpen = tasks.filter((t) => t.dueAt === null && t.statusCode !== 'done' && t.statusCode !== 'cancelled')
   const planKeep = (t: Task): boolean => (t.dueAt !== null && sameDay(new Date(t.dueAt), picked) && t.statusCode !== 'cancelled') || (sameDay(picked, now) && noDueOpen.some((x) => x.id === t.id))
   const doneKeep = (t: Task): boolean => t.completedAt !== null && sameDay(new Date(t.completedAt), picked)
-  const pickedPlanTree = useMemo(() => filterTaskTree(buildTaskTree(tasks), planKeep), [tasks, picked]) // eslint 语义同 tasks
+  const pickedPlanOrder = useMemo(() => {
+    if (pickedPlan === null || pickedPlan.items.length === 0) return undefined
+    return new Map(pickedPlan.items.map((item) => [item.taskId, item.order]))
+  }, [pickedPlan])
+  const pickedPlanTree = useMemo(() => filterTaskTree(buildTaskTree(tasks, pickedPlanOrder), planKeep), [tasks, picked, pickedPlanOrder]) // eslint 语义同 tasks
   const pickedDoneTree = useMemo(() => filterTaskTree(buildTaskTree(tasks), doneKeep), [tasks, picked])
 
   return (
@@ -887,6 +912,31 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
                 <button className={`wb-tab ${dayTab === 'done' ? 'on' : ''}`} onClick={() => setDayTab('done')}>已完成（{countTaskTree(pickedDoneTree)}）</button>
                 <button className={`wb-tab ${dayTab === 'report' ? 'on' : ''}`} onClick={() => setDayTab('report')}>📊 报告</button>
               </div>
+              {dayTab === 'plan' && (
+                <>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
+                    {pickedAnchor < todayAnchor
+                      ? <span style={{ fontSize: 12, color: '#999' }}>过去日期只读；如需为今天/未来排期，请选择今天或之后的日期。</span>
+                      : <button className="wb-btn primary" disabled={busy} onClick={() => void startAISession('plan', null, pickedAnchor)}>{pickedPlanSession !== null ? '🧠 继续编辑该日计划' : `🧠 AI 智能排序（${pickedAnchor}）`}</button>}
+                    <span style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)' }}>AI 会先提交顺序提案，确认后才生效</span>
+                  </div>
+                  {pickedPlan !== null && (
+                    <div className="wb-banner draft" style={{ margin: '0 0 10px' }}>
+                      <h4>🧠 {pickedPlan.planDate} 计划</h4>
+                      {pickedPlan.summary !== '' && <div style={{ fontSize: 14, lineHeight: 1.7, marginBottom: 6 }}>{pickedPlan.summary}</div>}
+                      <ol style={{ margin: '4px 0 8px 20px', padding: 0, fontSize: 14, lineHeight: 1.7 }}>
+                        {pickedPlan.items.map((item) => <li key={item.taskId} style={{ margin: '3px 0' }}><b>{item.title}</b>{item.note !== '' && <span style={{ color: 'var(--dsw-alias-label-secondary)' }}> — {item.note}</span>}</li>)}
+                      </ol>
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        {pickedAnchor >= todayAnchor && <button className="wb-btn" onClick={() => void startAISession('plan', null, pickedAnchor)}>↻ 重新生成</button>}
+                        <button className="wb-btn" onClick={() => {
+                          void api(`/api/workbench/plans/${pickedAnchor}`, { method: 'DELETE' }).then(() => { setPlanRefreshKey((v) => v + 1); setNotice('该日计划已清除') }).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
+                        }}>清除</button>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
               {dayTab === 'plan' && sameDay(picked, now) && noDueOpen.length > 0 && (
                 <div style={{ fontSize: 12, color: '#999', padding: '4px 2px' }}>另有 {noDueOpen.length} 个进行中任务未设置截止时间，暂列今天；点击父任务 ▶ 展开子任务</div>
               )}
