@@ -9,6 +9,7 @@ import {
   createTask, updateTask, getTask, listTasks, listArchivedTasks, listChildren,
   createDraft, confirmTaskDraft, confirmDailyPlanDraft, confirmReportDraft, getDailyPlan, deleteDailyPlan,
   getTaskReport, listTaskReports, deleteTaskReport,
+  getAiSession, registerAiSession,
   getDraftBySession, listTaskSessions, linkTaskSession, localDateString,
 } from '../lib/db/repo.js'
 
@@ -58,6 +59,12 @@ test('db migrations, dictionaries and task tree', () => {
     assert.equal(listTaskReports(db, { periodCode: 'day' }).length, 1)
     assert.equal(deleteTaskReport(db, 'day', planDate), true)
     assert.equal(getTaskReport(db, 'day', planDate), undefined)
+
+    // V2 AI session registry: one session per scope+anchor, repeated register refreshes instead of duplicating
+    registerAiSession(db, { scopeCode: 'day_report', anchor: planDate, sessionId: 'sess-day-report', workspace: 'ws-1' })
+    assert.equal(getAiSession(db, 'day_report', planDate).sessionId, 'sess-day-report')
+    registerAiSession(db, { scopeCode: 'day_report', anchor: planDate, sessionId: 'sess-day-report-2' })
+    assert.equal(getAiSession(db, 'day_report', planDate).sessionId, 'sess-day-report-2')
     db.close()
   } finally {
     rmSync(dir, { recursive: true, force: true })

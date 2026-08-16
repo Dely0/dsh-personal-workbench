@@ -382,7 +382,7 @@ function DraftBanner({ draft, onDone, runtime }: { draft: DraftView; onDone: () 
 }
 
 function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
-  const [view, setView] = useState<'today' | 'calendar' | 'list' | 'reports'>('today')
+  const [view, setView] = useState<'today' | 'calendar' | 'list'>('today')
   const [bootstrap, setBootstrap] = useState<Bootstrap | null>(null)
   const [tasks, setTasks] = useState<Task[]>([])
   const [selected, setSelected] = useState<TaskDetail | null>(null)
@@ -395,10 +395,11 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
   const [notice, setNotice] = useState<string | null>(null)
   const [settings, setSettings] = useState<{ defaultWorkspace: string; autoCreateTypeFolders: boolean }>({ defaultWorkspace: '', autoCreateTypeFolders: true })
   const [showSettings, setShowSettings] = useState(false)
-  const [reportTab, setReportTab] = useState<'day' | 'week'>('day')
-  const [reportDate, setReportDate] = useState<Date>(startOfDay(new Date()))
-  const [reports, setReports] = useState<TaskReportView[]>([])
-  const [selectedReport, setSelectedReport] = useState<TaskReportView | null>(null)
+  const [reportSubTab, setReportSubTab] = useState<'day' | 'week'>('day')
+  const [currentReport, setCurrentReport] = useState<TaskReportView | null>(null)
+  const [reportSession, setReportSession] = useState<{ sessionId: string } | null>(null)
+  const [reportRefreshKey, setReportRefreshKey] = useState(0)
+  const [todayPlanSession, setTodayPlanSession] = useState<{ sessionId: string } | null>(null)
   const [busy, setBusy] = useState(false)
   const selectedRef = useRef<string | null>(null)
 
@@ -421,22 +422,8 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
     }
   }, [])
 
-  const loadReports = useCallback(async () => {
-    const res = await api<{ reports: TaskReportView[] }>('/api/workbench/reports')
-    setReports(res.reports)
-  }, [])
-
   useEffect(() => { void refresh().catch((e: unknown) => setError(e instanceof Error ? e.message : String(e))) }, [refresh])
   useEffect(() => { void api<{ settings: { defaultWorkspace: string; autoCreateTypeFolders: boolean } }>('/api/workbench/settings').then((r) => setSettings(r.settings)).catch(() => undefined) }, [])
-  useEffect(() => {
-    if (view !== 'reports') return
-    void loadReports().catch(() => undefined)
-  }, [view, reportTab, loadReports])
-  const visibleReports = useMemo(() => reports.filter((r) => r.periodCode === reportTab), [reports, reportTab])
-  useEffect(() => {
-    if (visibleReports.length > 0) setSelectedReport(visibleReports[0])
-    else setSelectedReport(null)
-  }, [visibleReports])
 
   useEffect(() => {
     let alive = true
@@ -481,6 +468,28 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
     if (mode === 'clarify' && text.trim() === '') return
     setBusy(true); setError(null)
     try {
+      // 复用型会话：每日计划 / 日报 / 周报，每个 scope+anchor 只有一个会话。
+      if (mode === 'plan' || mode === 'report') {
+        const [scopeCode, anchor] = mode === 'plan'
+          ? ['daily_plan', /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : localDateString()]
+          : text.startsWith('week:') ? ['week_report', text.slice(5)] : ['day_report', text.slice(4)]
+        const existing = await api<{ session: { sessionId: string } | null }>(`/api/workbench/ai-sessions?scope_code=${scopeCode}&anchor=${anchor}`)
+        if (existing.session !== null) {
+          document.documentElement.removeAttribute(ACTIVE_ATTR)
+          runtime.sessions.open(existing.session.sessionId)
+          return
+        }
+        if (mode === 'report') {
+          // 旧版本生成的报告可能还没有登记会话：直接复用报告里的 session_id。
+          const periodCode = text.startsWith('week:') ? 'week' : 'day'
+          const rep = await api<{ report: { sessionId?: string | null } | null }>(`/api/workbench/reports/${periodCode}/${anchor}`)
+          if (typeof rep.report?.sessionId === 'string' && rep.report.sessionId !== '') {
+            document.documentElement.removeAttribute(ACTIVE_ATTR)
+            runtime.sessions.open(rep.report.sessionId)
+            return
+          }
+        }
+      }
       const ws = runtime.workspaces.list.getSnapshot()
       let workspaceId = ws.recentWorkspaceId ?? ws.items[0]?.workspaceId
       const joinPath = (base: string, folder: string): string => `${base.replace(/[\\/]+$/, '')}\\${folder}`
@@ -542,6 +551,13 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
       if (mode === 'clarify') setShowQuick(false)
       const result = await binding.session.prompt([{ type: 'text', text: prompt }], 'queue')
       if (result.ok === false) throw new Error(result.error !== undefined ? String(result.error) : '发送失败')
+      if (mode === 'plan') {
+        await api('/api/workbench/ai-sessions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ scopeCode: 'daily_plan', anchor: localDateString(), sessionId: id, workspace: workspaceId }) })
+      }
+      if (mode === 'report') {
+        const [periodCode, periodStart] = text.split(':')
+        await api('/api/workbench/ai-sessions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ scopeCode: periodCode === 'week' ? 'week_report' : 'day_report', anchor: periodStart, sessionId: id, workspace: workspaceId }) })
+      }
       if (task !== null && mode !== 'clarify') {
         await api(`/api/workbench/tasks/${task.id}/sessions`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sessionId: id, roleCode: mode }) }).catch(() => undefined)
       }
@@ -612,7 +628,29 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
   const [cursor, setCursor] = useState<Date>(startOfWeek(now))
   const [calMode, setCalMode] = useState<'week' | 'month'>('week')
   const [picked, setPicked] = useState<Date>(todayStart)
-  const [dayTab, setDayTab] = useState<'plan' | 'done'>('plan')
+  const [dayTab, setDayTab] = useState<'plan' | 'done' | 'report'>('plan')
+  const reportAnchor = reportSubTab === 'week' ? localDateString(startOfWeek(picked)) : localDateString(picked)
+  const reportScope = reportSubTab === 'week' ? 'week_report' : 'day_report'
+  const todayAnchor = localDateString(new Date())
+  const thisWeekAnchor = localDateString(startOfWeek(new Date()))
+  const reportIsFuture = reportSubTab === 'week' ? reportAnchor > thisWeekAnchor : reportAnchor > todayAnchor
+
+  useEffect(() => {
+    if (view !== 'calendar' || dayTab !== 'report' || reportIsFuture) {
+      setCurrentReport(null); setReportSession(null)
+      return
+    }
+    void Promise.all([
+      api<{ report: TaskReportView | null }>(`/api/workbench/reports/${reportSubTab}/${reportAnchor}`),
+      api<{ session: { sessionId: string } | null }>(`/api/workbench/ai-sessions?scope_code=${reportScope}&anchor=${reportAnchor}`),
+    ]).then(([rep, sess]) => { setCurrentReport(rep.report); setReportSession(sess.session) }).catch(() => { setCurrentReport(null); setReportSession(null) })
+  }, [view, dayTab, reportSubTab, picked, reportIsFuture, reportRefreshKey])
+
+  useEffect(() => {
+    void api<{ session: { sessionId: string } | null }>(`/api/workbench/ai-sessions?scope_code=daily_plan&anchor=${todayAnchor}`)
+      .then((r) => setTodayPlanSession(r.session))
+      .catch(() => setTodayPlanSession(null))
+  }, [todayAnchor, bootstrap])
   const weekDays = Array.from({ length: 7 }, (_, i) => { const d = new Date(cursor); d.setDate(d.getDate() + i); return d })
   const moveWeek = (delta: number): void => { const d = new Date(cursor); d.setDate(d.getDate() + delta * 7); setCursor(startOfWeek(d)) }
   const monthGrid = (() => {
@@ -635,7 +673,6 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
           <button className={`wb-tab ${view === 'today' ? 'on' : ''}`} onClick={() => setView('today')}>今日</button>
           <button className={`wb-tab ${view === 'calendar' ? 'on' : ''}`} onClick={() => setView('calendar')}>日历</button>
           <button className={`wb-tab ${view === 'list' ? 'on' : ''}`} onClick={() => setView('list')}>列表</button>
-          <button className={`wb-tab ${view === 'reports' ? 'on' : ''}`} onClick={() => setView('reports')}>报告</button>
         </div>
         <div style={{ flex: 1 }} />
         <button className="wb-btn primary" onClick={() => setShowQuick((v) => !v)} disabled={busy}>✨ 快速录入</button>
@@ -653,7 +690,7 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
           {reminders.map((r) => <div key={r.reminderId} style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 4 }}><span style={{ flex: 1 }}>{r.title} · {fmtTime(r.dueAt)}</span><button className="wb-btn" onClick={() => void fireReminder(r.reminderId)}>知道了</button></div>)}
         </div>
       )}
-      {pendingDraft !== null && <DraftBanner draft={pendingDraft} runtime={runtime} onDone={() => { setPendingDraft(null); void refresh(); void loadReports().catch(() => undefined) }} />}
+      {pendingDraft !== null && <DraftBanner draft={pendingDraft} runtime={runtime} onDone={() => { setPendingDraft(null); setReportRefreshKey((v) => v + 1); void refresh() }} />}
 
       <div className="wb-body">
         <div className="wb-nav">
@@ -708,7 +745,7 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
                 <div className="wb-stat"><b>{bootstrap?.stats.total ?? 0}</b><span>总数</span></div>
               </div>
               <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
-                <button className="wb-btn primary" disabled={busy || openTasks.length === 0} onClick={() => void startAISession('plan', null, localDateString())}>🧠 AI 智能排序</button>
+                <button className="wb-btn primary" disabled={busy || openTasks.length === 0} onClick={() => void startAISession('plan', null, localDateString())}>{todayPlanSession !== null ? '🧠 继续编辑今日计划' : '🧠 AI 智能排序'}</button>
                 <span style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)', alignSelf: 'center' }}>AI 会先提交顺序提案，确认后才生效</span>
               </div>
               {todayPlan !== null && (
@@ -771,71 +808,57 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
               <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
                 <button className={`wb-tab ${dayTab === 'plan' ? 'on' : ''}`} onClick={() => setDayTab('plan')}>计划（{countTaskTree(pickedPlanTree)}）</button>
                 <button className={`wb-tab ${dayTab === 'done' ? 'on' : ''}`} onClick={() => setDayTab('done')}>已完成（{countTaskTree(pickedDoneTree)}）</button>
+                <button className={`wb-tab ${dayTab === 'report' ? 'on' : ''}`} onClick={() => setDayTab('report')}>📊 报告</button>
               </div>
               {dayTab === 'plan' && sameDay(picked, now) && noDueOpen.length > 0 && (
                 <div style={{ fontSize: 12, color: '#999', padding: '4px 2px' }}>另有 {noDueOpen.length} 个进行中任务未设置截止时间，暂列今天；点击父任务 ▶ 展开子任务</div>
               )}
-              <div className="wb-list">
-                <TaskTreeRows roots={dayTab === 'plan' ? pickedPlanTree : pickedDoneTree} depth={0} expanded={calendarExpanded} toggle={toggleCalendarExpanded} label={label} dicts={dicts} onOpen={openTask} selectedId={selected?.task.id} />
-                {(dayTab === 'plan' ? pickedPlanTree : pickedDoneTree).length === 0 && <div className="wb-empty">{picked.getMonth() + 1}/{picked.getDate()} 没有{dayTab === 'plan' ? '计划任务' : '完成记录'}</div>}
-              </div>
+              {dayTab === 'report' ? (
+                <div className="wb-card">
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <button className={`wb-tab ${reportSubTab === 'day' ? 'on' : ''}`} onClick={() => setReportSubTab('day')}>日报（{reportAnchor}）</button>
+                    <button className={`wb-tab ${reportSubTab === 'week' ? 'on' : ''}`} onClick={() => setReportSubTab('week')}>周报（{localDateString(startOfWeek(picked))} 起）</button>
+                    <div style={{ flex: 1 }} />
+                  </div>
+                  {reportIsFuture ? (
+                    <div className="wb-empty">
+                      未来日期属于工作安排，报告只做复盘。<br />如需安排未来工作，请在「计划」页签给任务设置截止时间；AI 未来排期将在下版支持。
+                    </div>
+                  ) : currentReport !== null ? (
+                    <>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
+                        <h4 style={{ flex: 1, margin: 0 }}>{currentReport.title}</h4>
+                        <button className="wb-btn" onClick={() => {
+                          void api(`/api/workbench/reports/${currentReport.periodCode}/${currentReport.periodStart}`, { method: 'DELETE' }).then(() => { setCurrentReport(null); setReportSession(null); void refresh() }).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
+                        }}>删除</button>
+                      </div>
+                      <div style={{ marginTop: 6 }}><MarkdownText text={currentReport.summaryMd} /></div>
+                      <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                        <button className="wb-btn primary" disabled={busy} onClick={() => void startAISession('report', null, `${reportSubTab}:${reportAnchor}`)}>
+                          {reportSession !== null || currentReport.sessionId !== null ? '继续编辑报告' : 'AI 生成报告'}
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="wb-empty" style={{ marginTop: 8 }}>
+                      {reportSubTab === 'week' ? '本周' : '当天'}还没有报告。
+                      <div style={{ marginTop: 10 }}>
+                        <button className="wb-btn primary lg" disabled={busy} onClick={() => void startAISession('report', null, `${reportSubTab}:${reportAnchor}`)}>
+                          {reportSession !== null ? '继续编辑报告' : `AI 生成${reportSubTab === 'week' ? '周报' : '日报'}（${reportAnchor}）`}
+                        </button>
+                      </div>
+                      <div style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)', marginTop: 8 }}>同一周期只有一个报告会话，重复点击会回到原会话继续修改。</div>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="wb-list">
+                  <TaskTreeRows roots={dayTab === 'plan' ? pickedPlanTree : pickedDoneTree} depth={0} expanded={calendarExpanded} toggle={toggleCalendarExpanded} label={label} dicts={dicts} onOpen={openTask} selectedId={selected?.task.id} />
+                  {(dayTab === 'plan' ? pickedPlanTree : pickedDoneTree).length === 0 && <div className="wb-empty">{picked.getMonth() + 1}/{picked.getDate()} 没有{dayTab === 'plan' ? '计划任务' : '完成记录'}</div>}
+                </div>
+              )}
             </>
           )}
-
-          {view === 'reports' && (() => {
-            const reportPeriodDate = reportTab === 'week' ? startOfWeek(reportDate) : startOfDay(reportDate)
-            const reportPeriodEnd = new Date(reportPeriodDate)
-            reportPeriodEnd.setDate(reportPeriodEnd.getDate() + (reportTab === 'week' ? 6 : 0))
-            const moveReport = (delta: number): void => {
-              const next = new Date(reportPeriodDate)
-              next.setDate(next.getDate() + delta * (reportTab === 'week' ? 7 : 1))
-              setReportDate(startOfDay(next))
-            }
-            const generateReport = (): void => {
-              void startAISession('report', null, `${reportTab}:${localDateString(reportPeriodDate)}`)
-            }
-            return (
-              <>
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10, flexWrap: 'wrap' }}>
-                  <button className={`wb-tab ${reportTab === 'day' ? 'on' : ''}`} onClick={() => setReportTab('day')}>日报</button>
-                  <button className={`wb-tab ${reportTab === 'week' ? 'on' : ''}`} onClick={() => setReportTab('week')}>周报</button>
-                  <button className="wb-btn primary" disabled={busy} onClick={generateReport}>📊 AI 生成{reportTab === 'week' ? '周报' : '日报'}</button>
-                </div>
-                <div className="wb-cal-nav">
-                  <button className="wb-btn" onClick={() => moveReport(-1)}>◀</button>
-                  <button className="wb-btn" onClick={() => setReportDate(startOfDay(new Date()))}>今天</button>
-                  <button className="wb-btn" onClick={() => moveReport(1)}>▶</button>
-                  <div style={{ flex: 1, textAlign: 'center', fontWeight: 600 }}>
-                    {reportTab === 'day'
-                      ? reportPeriodDate.toISOString().slice(0, 10)
-                      : `${localDateString(reportPeriodDate)} ~ ${localDateString(reportPeriodEnd)}`}
-                  </div>
-                </div>
-                <div className="wb-list">
-                  {visibleReports.map((r) => (
-                    <div key={r.id} className={`wb-row ${selectedReport?.id === r.id ? 'selected' : ''}`} onClick={() => setSelectedReport(r)}>
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontWeight: 600 }}>{r.title}</div>
-                        <div style={{ fontSize: 12, color: '#999' }}>{r.periodCode === 'week' ? '周报' : '日报'} · {r.periodStart} · {new Date(r.createdAt).toLocaleString()}</div>
-                      </div>
-                    </div>
-                  ))}
-                  {visibleReports.length === 0 && <div className="wb-empty">还没有{reportTab === 'week' ? '周报' : '日报'}，点“AI 生成”开始</div>}
-                </div>
-                {selectedReport !== null && (
-                  <div className="wb-card" style={{ marginTop: 12 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <h4 style={{ flex: 1 }}>{selectedReport.title}</h4>
-                      <button className="wb-btn" onClick={() => {
-                        void api(`/api/workbench/reports/${selectedReport.periodCode}/${selectedReport.periodStart}`, { method: 'DELETE' }).then(() => loadReports()).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
-                      }}>删除</button>
-                    </div>
-                    <MarkdownText text={selectedReport.summaryMd} />
-                  </div>
-                )}
-              </>
-            )
-          })()}
 
           {view === 'list' && (
             <>

@@ -4,7 +4,7 @@
  */
 import type { DatabaseSync } from 'node:sqlite'
 
-export const SCHEMA_VERSION = 4
+export const SCHEMA_VERSION = 5
 
 export interface Migration {
   version: number
@@ -178,6 +178,25 @@ export const MIGRATIONS: Migration[] = [
           UNIQUE (period_code, period_start)
         ) STRICT;
         CREATE INDEX idx_task_reports_period ON task_reports(period_code, period_start DESC);
+      `)
+    },
+  },
+  {
+    version: 5,
+    name: 'ai-session-registry',
+    up(db) {
+      db.exec(`
+        CREATE TABLE ai_session_registry (
+          scope_code       TEXT NOT NULL,
+          anchor           TEXT NOT NULL,
+          session_id       TEXT NOT NULL,
+          workspace        TEXT,
+          note             TEXT,
+          created_at       TEXT NOT NULL,
+          last_activity_at TEXT NOT NULL,
+          PRIMARY KEY (scope_code, anchor)
+        ) STRICT;
+        CREATE INDEX idx_ai_session_registry_session ON ai_session_registry(session_id);
       `)
     },
   },

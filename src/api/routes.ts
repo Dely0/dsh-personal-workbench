@@ -8,10 +8,10 @@ import type { DatabaseSync } from 'node:sqlite'
 import {
   abandonDraft, addReminder, archiveTask, confirmDailyPlanDraft, confirmReportDraft, confirmSubtaskPlanDraft, confirmTaskDraft,
   createTaskReview,
-  createDraft, createTask, deleteDailyPlan, deleteTaskReport, fireReminder, getDailyPlan, getDictionary, getDraft, getDraftBySession,
+  createDraft, createTask, deleteDailyPlan, deleteTaskReport, fireReminder, getAiSession, getDailyPlan, getDictionary, getDraft, getDraftBySession,
   getLatestPendingDraft, getTask, getTaskReport, linkTaskSession, listArchivedTasks, listChildren,
   listDictionaries, listDueReminders, listReminders, listTaskEvents, listTaskReports, listTaskReviews,
-  listTaskSessions, listTasks, localDateString, restoreTask, updateTask, type ReportPeriodCode, type TaskInput,
+  listTaskSessions, listTasks, localDateString, registerAiSession, restoreTask, updateTask, type ReportPeriodCode, type TaskInput,
 } from '../db/repo.js'
 
 const TASKS_PREFIX = '/api/workbench/tasks'
@@ -19,6 +19,7 @@ const DRAFTS_PREFIX = '/api/workbench/drafts'
 const REMINDERS_PREFIX = '/api/workbench/reminders'
 const PLANS_PREFIX = '/api/workbench/plans'
 const REPORTS_PREFIX = '/api/workbench/reports'
+const AI_SESSIONS_PREFIX = '/api/workbench/ai-sessions'
 
 function isLoopbackRequest(req: IncomingMessage): boolean {
   const address = req.socket.remoteAddress
@@ -444,6 +445,44 @@ export function makeRoutes(db: DatabaseSync): WebRoute[] {
         return writeJson(res, 404, { error: 'not found' })
       },
     },
+    // ------------------------------------------------------------------ ai session registry
+    {
+      kind: 'prefix',
+      path: AI_SESSIONS_PREFIX,
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) return writeJson(res, 403, { error: 'forbidden: loopback-only' })
+        const url = new URL(req.url ?? '/', 'http://localhost')
+        const segments = pathSegments(url, AI_SESSIONS_PREFIX)
+        const method = req.method ?? 'GET'
+        if (segments.length !== 0) return writeJson(res, 404, { error: 'not found' })
+        if (method === 'GET') {
+          const scopeCode = url.searchParams.get('scope_code')
+          const anchor = url.searchParams.get('anchor')
+          if (scopeCode === null || scopeCode === '') return writeJson(res, 400, { error: 'scope_code is required' })
+          if (anchor === null || anchor === '' || !PERIOD_DATE_RE.test(anchor)) return writeJson(res, 400, { error: 'anchor must be YYYY-MM-DD' })
+          requireCode(db, 'ai_session_scope', scopeCode, 'scope_code')
+          return writeJson(res, 200, { ok: true, session: getAiSession(db, scopeCode, anchor) ?? null })
+        }
+        if (method === 'POST') {
+          const body = await readJsonBody(req)
+          if (body === undefined) return writeJson(res, 400, { error: 'invalid JSON body' })
+          const scopeCode = typeof body.scopeCode === 'string' ? body.scopeCode : undefined
+          const anchor = typeof body.anchor === 'string' ? body.anchor : undefined
+          const sessionId = typeof body.sessionId === 'string' ? body.sessionId : undefined
+          if (scopeCode === undefined || anchor === undefined || sessionId === undefined || sessionId.trim() === '') return writeJson(res, 400, { error: 'scopeCode, anchor and sessionId are required' })
+          if (!PERIOD_DATE_RE.test(anchor)) return writeJson(res, 400, { error: 'anchor must be YYYY-MM-DD' })
+          requireCode(db, 'ai_session_scope', scopeCode, 'scope_code')
+          return writeJson(res, 201, { ok: true, session: registerAiSession(db, {
+            scopeCode,
+            anchor,
+            sessionId,
+            workspace: typeof body.workspace === 'string' ? body.workspace : null,
+            note: typeof body.note === 'string' ? body.note : null,
+          }) })
+        }
+        return writeJson(res, 405, { error: 'method not allowed' })
+      },
+    },
     // ------------------------------------------------------------------ reports
     {
       kind: 'prefix',
@@ -514,7 +553,7 @@ export function makeRoutes(db: DatabaseSync): WebRoute[] {
         writeJson(res, 200, {
           ok: true,
           name: 'dsh-workbench',
-          version: '0.7.0',
+          version: '0.7.1',
           db: {
             schemaVersion: versionRow?.value ?? 'unknown',
             taskCount: listTasks(db, { includeArchived: true }).length,
