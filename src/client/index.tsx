@@ -66,6 +66,8 @@ html[${PENDING_ATTR}] [${ENTRY_ATTR}]::after { content:''; position:absolute; to
 .wb-row:last-child { border-bottom:none; }
 .wb-row:hover { background: color-mix(in srgb, var(--dsw-alias-label-primary, #fff) 5%, transparent); }
 .wb-row.selected { background: color-mix(in srgb, var(--dsw-alias-state-business-primary, #8fa8c8) 12%, transparent); box-shadow:inset 3px 0 0 var(--dsw-alias-state-business-primary, #8fa8c8); }
+.wb-card { transition: border-color .16s ease, box-shadow .16s ease, transform .16s ease; }
+.wb-card.selected { border-color: color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 65%, transparent) !important; box-shadow: 0 0 0 1px color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 35%, transparent), 0 6px 18px rgba(0,0,0,.10); transform: translateY(-1px); }
 .wb-row-title { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .wb-row-meta { flex:none; display:grid; grid-template-columns:68px 46px 56px 88px; align-items:center; gap:6px; }
 .wb-row-meta .wb-chip { display:inline-flex; align-items:center; justify-content:center; width:100%; padding-left:0; padding-right:0; text-align:center; }
@@ -1253,15 +1255,15 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                     </select>
                   </div>
                   <div style={{ display: 'flex', gap: 8, marginBottom: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-                    {selectedIdeaIds.size >= 2 && <button className="wb-btn primary" disabled={busy} onClick={() => void startAISession('idea_association', null, [...selectedIdeaIds].sort().join(','))}>AI 找关联</button>}
-                    {selectedIdeaIds.size >= 1 && <button className="wb-btn" disabled={busy} onClick={() => void startAISession('idea_brainstorm', null, `idea:${[...selectedIdeaIds].sort().join(',')}`)}>AI 头脑风暴</button>}
-                    <span style={{ fontSize: 12, color: '#999' }}>已选 {selectedIdeaIds.size} 个点子（勾选卡片）</span>
+                    {ideas.length >= 2 && <button className="wb-btn primary" disabled={busy} onClick={() => { const ids = selectedIdeaIds.size >= 2 ? [...selectedIdeaIds] : ideas.map((idea) => idea.id); void startAISession('idea_association', null, ids.sort().join(',')) }}>{selectedIdeaIds.size >= 2 ? `AI 找关联（已选 ${selectedIdeaIds.size}）` : `AI 自动找关联（全部 ${ideas.length}）`}</button>}
+                    {selectedIdeaIds.size >= 1 && <button className="wb-btn" disabled={busy} onClick={() => void startAISession('idea_brainstorm', null, `idea:${[...selectedIdeaIds].sort().join(',')}`)}>AI 头脑风暴（已选 {selectedIdeaIds.size}）</button>}
+                    <span style={{ fontSize: 12, color: '#999' }}>已选 {selectedIdeaIds.size} 个点子；未选够 2 个时“找关联”会分析全部点子</span>
                   </div>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(170px, 1fr))', gap: 8 }}>
                     {ideas.map((idea) => (
-                      <div key={idea.id} className={`wb-card ${selectedIdea?.id === idea.id ? 'selected' : ''}`} style={{ marginBottom: 0, padding: 12, cursor: 'pointer' }} onClick={() => { setSelectedCluster(null); setSelectedIdea(idea) }}>
-                        <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 6 }}>
-                          <input type="checkbox" checked={selectedIdeaIds.has(idea.id)} onClick={(e) => e.stopPropagation()} onChange={(e) => setSelectedIdeaIds((prev) => { const next = new Set(prev); if (e.target.checked) next.add(idea.id); else next.delete(idea.id); return next })} />
+                      <div key={idea.id} className={`wb-card ${selectedIdea?.id === idea.id || selectedIdeaIds.has(idea.id) ? 'selected' : ''}`} style={{ marginBottom: 0, padding: 12, cursor: 'pointer' }} onClick={() => { setSelectedCluster(null); setSelectedIdea(idea) }}>
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6 }}>
+                          <input type="checkbox" checked={selectedIdeaIds.has(idea.id)} onClick={(e) => e.stopPropagation()} onChange={(e) => setSelectedIdeaIds((prev) => { const next = new Set(prev); if (e.target.checked) next.add(idea.id); else next.delete(idea.id); return next })} style={{ width: 18, height: 18, flex: 'none', accentColor: 'var(--dsw-alias-state-business-primary, #4f8ef7)', cursor: 'pointer' }} />
                           <b style={{ flex: 1 }}>{idea.title}</b>
                         </div>
                         <div style={{ fontSize: 12, color: '#999', minHeight: 32 }}>{idea.contentMd.replace(/[#*`>]/g, '').slice(0, 60) || '（无内容）'}</div>
