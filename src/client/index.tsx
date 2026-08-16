@@ -305,8 +305,8 @@ function DraftBanner({ draft, onDone, runtime }: { draft: DraftView; onDone: () 
     return (
       <div className="wb-banner draft">
         <h4>🧠 今日计划提案待确认（{String(draft.payload.planDate ?? '')}）</h4>
-        {summary !== '' && <div style={{ fontSize: 13, marginBottom: 6 }}>{summary}</div>}
-        <ol style={{ margin: '4px 0 8px 20px', padding: 0, fontSize: 13 }}>
+        {summary !== '' && <div style={{ fontSize: 14, lineHeight: 1.7, marginBottom: 6 }}>{summary}</div>}
+        <ol style={{ margin: '4px 0 8px 20px', padding: 0, fontSize: 14, lineHeight: 1.7 }}>
           {items.map((item, i) => <li key={i} style={{ margin: '3px 0' }}><b>{item.title ?? '(未命名任务)'}</b>{item.note !== undefined && item.note !== '' ? <span style={{ color: 'var(--dsw-alias-label-secondary)' }}> — {item.note}</span> : null}</li>)}
         </ol>
         <div style={{ display: 'flex', gap: 8 }}>
@@ -669,8 +669,8 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
               {todayPlan !== null && (
                 <div className="wb-banner draft">
                   <h4>🧠 今日计划（{todayPlan.planDate}）</h4>
-                  {todayPlan.summary !== '' && <div style={{ fontSize: 13, marginBottom: 6 }}>{todayPlan.summary}</div>}
-                  <ol style={{ margin: '4px 0 8px 20px', padding: 0, fontSize: 13 }}>
+                  {todayPlan.summary !== '' && <div style={{ fontSize: 14, lineHeight: 1.7, marginBottom: 6 }}>{todayPlan.summary}</div>}
+                  <ol style={{ margin: '4px 0 8px 20px', padding: 0, fontSize: 14, lineHeight: 1.7 }}>
                     {todayPlan.items.map((item) => <li key={item.taskId} style={{ margin: '3px 0' }}><b>{item.title}</b>{item.note !== '' && <span style={{ color: 'var(--dsw-alias-label-secondary)' }}> — {item.note}</span>}</li>)}
                   </ol>
                   <div style={{ display: 'flex', gap: 8 }}>
