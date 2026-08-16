@@ -1108,6 +1108,20 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
                         <Badge dict={dictOf('priority')} code={selected.task.priorityCode} />
                         <Badge dict={dictOf('status')} code={selected.task.statusCode} />
                       </div>
+                      {!selected.task.archived && (
+                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', margin: '8px 0' }}>
+                          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--dsw-alias-label-secondary)' }}>状态
+                            <select style={{ background: 'var(--dsw-alias-bg-base,#17171a)', color: 'inherit', border: '1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.15))', borderRadius: 8, padding: '6px 8px' }} value={selected.task.statusCode} onChange={(e) => void patchTask(selected.task.id, { statusCode: e.target.value })}>
+                              {dictOf('status').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}
+                            </select>
+                          </label>
+                          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--dsw-alias-label-secondary)' }}>AI 策略
+                            <select style={{ background: 'var(--dsw-alias-bg-base,#17171a)', color: 'inherit', border: '1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.15))', borderRadius: 8, padding: '6px 8px' }} value={selected.task.aiPolicyCode} onChange={(e) => void patchTask(selected.task.id, { aiPolicyCode: e.target.value })}>
+                              {dictOf('ai_policy').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}
+                            </select>
+                          </label>
+                        </div>
+                      )}
                       <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>截止：{selected.task.dueAt === null ? '无' : fmtTime(selected.task.dueAt)}</div>
                       <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>AI 工作区：{selected.task.workspacePath ?? (settings.defaultWorkspace || '默认工作区未设置')}</div>
                       <div style={{ fontSize: 12, color: '#999', marginBottom: 8 }}>
@@ -1152,7 +1166,7 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
                     <form className="wb-form" onSubmit={(e) => {
                       e.preventDefault()
                       if (editDraft.title.trim() === '') return
-                      void patchTask(selected.task.id, {
+                      const payload: Record<string, unknown> = {
                         title: editDraft.title.trim(),
                         description: editDraft.description,
                         typeCode: editDraft.typeCode,
@@ -1161,8 +1175,10 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
                         aiPolicyCode: editDraft.aiPolicyCode,
                         dueAt: editDraft.dueLocal === '' ? null : new Date(editDraft.dueLocal).toISOString(),
                         workspacePath: editDraft.workspacePath.trim() === '' ? null : editDraft.workspacePath.trim(),
-                        recurrenceCode: editDraft.recurrenceCode,
-                      }).then(() => { setEditDraft(null); setNotice('任务已更新') }).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
+                      }
+                      // 自动生成的实例不允许改重复规则，编辑保存时也不提交该字段，从源头避免 400。
+                      if (selected.task.recurrenceMasterId === null) payload.recurrenceCode = editDraft.recurrenceCode
+                      void patchTask(selected.task.id, payload).then(() => { setEditDraft(null); setNotice('任务已更新') }).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
                     }}>
                       <h4 className="full" style={{ margin: 0 }}><Icon name="edit" />编辑任务</h4>
                       <label className="full">标题<input value={editDraft.title} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, title: e.target.value })} /></label>
@@ -1170,7 +1186,9 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
                       <label>优先级<select value={editDraft.priorityCode} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, priorityCode: e.target.value })}>{dictOf('priority').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
                       <label>状态<select value={editDraft.statusCode} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, statusCode: e.target.value })}>{dictOf('status').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
                       <label>AI 策略<select value={editDraft.aiPolicyCode} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, aiPolicyCode: e.target.value })}>{dictOf('ai_policy').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
-                      <label>重复<select value={editDraft.recurrenceCode} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, recurrenceCode: e.target.value })}>{dictOf('recurrence').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
+                      {selected.task.recurrenceMasterId === null
+                        ? <label>重复<select value={editDraft.recurrenceCode} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, recurrenceCode: e.target.value })}>{dictOf('recurrence').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
+                        : <div style={{ fontSize: 12, color: '#999', alignSelf: 'center' }}>重复：由模板任务管理</div>}
                       <label>截止时间<input type="datetime-local" value={editDraft.dueLocal} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, dueLocal: e.target.value })} /></label>
                       <label className="full">AI 会话工作区（留空使用默认）<input value={editDraft.workspacePath} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, workspacePath: e.target.value })} placeholder={settings.defaultWorkspace || '默认工作区未设置'} /></label>
                       <label className="full">描述（Markdown）<textarea rows={6} value={editDraft.description} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, description: e.target.value })} /></label>
@@ -1192,7 +1210,6 @@ function WorkbenchApp({ runtime }: { runtime: WorkbenchRuntime }): JSX.Element {
                     <label>类型<select name="type" defaultValue={subtaskParent.typeCode}>{dictOf('type').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
                     <label>优先级<select name="priority" defaultValue={subtaskParent.priorityCode}>{dictOf('priority').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
                     <label>截止时间<input name="due" type="datetime-local" /></label>
-              <label>重复<select name="recurrence" defaultValue="none">{dictOf('recurrence').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
                     <div className="full" style={{ display: 'flex', gap: 8 }}><button className="wb-btn primary" type="submit">保存子任务</button><button className="wb-btn" type="button" onClick={() => setSubtaskParent(null)}>取消</button></div>
                   </form>
                 )}
