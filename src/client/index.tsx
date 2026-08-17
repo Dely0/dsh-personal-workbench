@@ -48,12 +48,14 @@ html[${PENDING_ATTR}] [${ENTRY_ATTR}]::after { content:''; position:absolute; to
 .wb-btn:hover { background: color-mix(in srgb, var(--dsw-alias-label-primary, #fff) 6%, transparent); color:var(--dsw-alias-label-primary); }
 .wb-btn.primary { background: color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 16%, transparent); border:1px solid color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 38%, transparent); color:var(--dsw-alias-label-primary); }
 .wb-body { flex:1; min-height:0; display:flex; }
-.wb-nav { flex:0 0 56%; min-width:0; overflow:auto; padding:16px 18px; box-sizing:border-box; border-right:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.14)); }
+.wb-nav { flex:0 0 56%; min-width:0; overflow:auto; padding:0 18px 16px; box-sizing:border-box; border-right:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.14)); }
+.wb-nav > :first-child:not(.wb-stats-sticky) { margin-top:16px; }
 .wb-detail { flex:1; min-width:0; overflow:auto; padding:16px 18px; box-sizing:border-box; }
 .wb-stats { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin-bottom:12px; }
 .wb-stat { border:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.20)); background:var(--dsw-alias-bg-layer-1, rgba(255,255,255,.03)); border-radius:12px; padding:12px 14px; box-shadow:0 2px 8px rgba(0,0,0,.06); }
 .wb-stat b { font-size:20px; }
 .wb-stat span { display:block; color:var(--dsw-alias-label-secondary); font-size:12px; }
+.wb-stats-sticky { position:sticky; top:0; z-index:12; margin:0 -18px 12px; padding:12px 18px 14px; background:var(--dsw-alias-bg-base,#111); box-shadow:none; border-bottom:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.24)); }
 .wb-card { border:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.26)); background: var(--dsw-alias-bg-layer-1, rgba(255,255,255,.03)); border-radius:14px; padding:16px; margin-bottom:14px; box-shadow:0 6px 18px rgba(0,0,0,.08); }
 .wb-card h4 { margin:0 0 10px; padding-bottom:10px; border-bottom:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.16)); display:flex; align-items:center; gap:8px; font-size:14px; font-weight:700; }
 .wb-card h4 svg { width:16px; height:16px; color:var(--dsw-alias-state-business-primary, #8fa8c8); flex:none; }
@@ -61,6 +63,24 @@ html[${PENDING_ATTR}] [${ENTRY_ATTR}]::after { content:''; position:absolute; to
 .wb-plan-item { display:flex; align-items:center; margin:7px 0; font-size:13.5px; }
 .wb-plan-num { display:inline-flex; width:20px; height:20px; border-radius:50%; background: color-mix(in srgb, var(--dsw-alias-state-business-primary, #8fa8c8) 16%, transparent); border:1px solid color-mix(in srgb, var(--dsw-alias-state-business-primary, #8fa8c8) 40%, transparent); color:var(--dsw-alias-label-primary); font-size:11px; font-weight:700; align-items:center; justify-content:center; margin-right:8px; flex:none; }
 .wb-plan-note { color:var(--dsw-alias-label-secondary); margin-left:8px; font-size:12.5px; }
+.wb-plan-scroll { max-height:min(40vh,420px); overflow-y:auto; overscroll-behavior:contain; scrollbar-width:thin; scrollbar-color: color-mix(in srgb, var(--dsw-alias-label-primary, #888) 38%, transparent) transparent; padding-right:4px; }
+.wb-plan-scroll::-webkit-scrollbar { width:8px; }
+.wb-plan-scroll::-webkit-scrollbar-track { background:transparent; }
+.wb-plan-scroll::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--dsw-alias-label-primary, #888) 38%, transparent); border-radius:4px; }
+.wb-plan-expanded .wb-plan-scroll { max-height:min(70vh,720px); }
+.wb-plan-footer { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-top:10px; padding-top:10px; border-top:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.14)); font-size:12px; color:var(--dsw-alias-label-secondary); }
+.wb-plan-item { min-width:0; gap:6px; }
+.wb-plan-item b, .wb-plan-item .wb-plan-note { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.wb-plan-item b { flex:0 1 auto; }
+.wb-plan-item .wb-plan-note { flex:1 1 36%; }
+.wb-plan-item-actions { display:inline-flex; gap:4px; flex:none; margin-left:6px; }
+.wb-plan-act { display:inline-flex; align-items:center; border:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.22)); background:color-mix(in srgb, var(--dsw-alias-label-primary, #fff) 3%, transparent); color:var(--dsw-alias-label-secondary); border-radius:6px; padding:2px 7px; font-size:11px; cursor:pointer; line-height:1.5; }
+.wb-plan-act:hover { color:var(--dsw-alias-label-primary); border-color:color-mix(in srgb, var(--dsw-alias-label-primary, #fff) 35%, transparent); }
+.wb-plan-act:disabled { opacity:.45; cursor:default; }
+.wb-plan-act.done { color:color-mix(in srgb, #2E9B7B 85%, #fff); border-color:color-mix(in srgb, #2E9B7B 45%, transparent); }
+.wb-plan-act.defer { color:color-mix(in srgb, #d9a03f 85%, #fff); border-color:color-mix(in srgb, #d9a03f 45%, transparent); }
+.wb-plan-item.closed { opacity:.55; }
+.wb-plan-item.closed b { text-decoration:line-through; }
 .wb-list { border:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.24)); border-radius:12px; overflow:hidden; background:var(--dsw-alias-bg-layer-1, rgba(255,255,255,.03)); }
 .wb-row { display:flex; align-items:center; gap:8px; padding:11px 12px; border-bottom:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.12)); cursor:pointer; transition:background .12s ease; }
 .wb-row:last-child { border-bottom:none; }
@@ -416,6 +436,96 @@ function TaskRow({ task, dicts, onOpen, selected, bare = false }: { task: Task; 
   )
 }
 
+function PlanPanel({ plan, tasks, title, onComplete, onDefer, onRefresh, onClear, canEdit = true }: {
+  plan: DailyPlanView
+  tasks: Task[]
+  title?: string
+  onComplete: (taskId: string) => Promise<void>
+  onDefer: (taskId: string) => Promise<void>
+  onRefresh?: () => void
+  onClear?: () => void
+  canEdit?: boolean
+}): JSX.Element {
+  const [expanded, setExpanded] = useState(false)
+  const [actingId, setActingId] = useState<string | null>(null)
+  const [overflowing, setOverflowing] = useState(false)
+  const [visibleCount, setVisibleCount] = useState(plan.items.length)
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const total = plan.items.length
+  const taskById = (id: string): Task | undefined => tasks.find((t) => t.id === id)
+  const runAction = async (taskId: string, action: () => Promise<void>): Promise<void> => {
+    if (actingId !== null) return
+    setActingId(taskId)
+    try { await action() } finally { setActingId(null) }
+  }
+  const measureOverflow = useCallback(() => {
+    const el = scrollRef.current
+    if (el === null || expanded) return
+    const over = el.scrollHeight > el.clientHeight + 1
+    setOverflowing(over)
+    if (!over) {
+      setVisibleCount(total)
+      return
+    }
+    const containerRect = el.getBoundingClientRect()
+    let count = 0
+    for (const item of Array.from(el.querySelectorAll<HTMLElement>('.wb-plan-item'))) {
+      const rect = item.getBoundingClientRect()
+      if (rect.bottom <= containerRect.bottom + 1) count += 1
+      else break
+    }
+    setVisibleCount(Math.min(Math.max(count, 1), total))
+  }, [expanded, total])
+  useEffect(() => {
+    measureOverflow()
+    const el = scrollRef.current
+    if (el === null) return
+    const ro = new ResizeObserver(() => measureOverflow())
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [measureOverflow, plan.items, plan.summary])
+  return (
+    <div className={`wb-card wb-plan ${expanded ? 'wb-plan-expanded' : ''}`}>
+      <h4>
+        <Icon name="sparkles" />
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title ?? `${plan.planDate} 计划`}</span>
+        <span style={{ flex: 1 }} />
+        {overflowing && (
+          <button className="wb-btn" onClick={() => setExpanded((v) => !v)}>
+            {expanded ? '收起' : `展开全部（${total}）`}
+          </button>
+        )}
+      </h4>
+      {plan.summary !== '' && <div style={{ fontSize: 14, lineHeight: 1.7, marginBottom: 6 }}>{plan.summary}</div>}
+      <div ref={scrollRef} className="wb-plan-scroll">
+        {plan.items.map((item, index) => {
+          const task = taskById(item.taskId)
+          const closed = task !== undefined && (task.statusCode === 'done' || task.statusCode === 'cancelled')
+          return (
+            <div key={item.taskId} className={`wb-plan-item ${closed ? 'closed' : ''}`}>
+              <span className="wb-plan-num">{index + 1}</span>
+              <b>{item.title}</b>
+              {item.note !== '' && <span className="wb-plan-note">— {item.note}</span>}
+              {task !== undefined && !closed && (
+                <span className="wb-plan-item-actions">
+                  <button type="button" className="wb-plan-act done" disabled={actingId !== null} onClick={() => void runAction(item.taskId, () => onComplete(item.taskId))}>完成</button>
+                  <button type="button" className="wb-plan-act defer" disabled={actingId !== null} onClick={() => void runAction(item.taskId, () => onDefer(item.taskId))}>明天</button>
+                </span>
+              )}
+            </div>
+          )
+        })}
+      </div>
+      <div className="wb-plan-footer">
+        <span>{overflowing ? `共 ${total} 项 · 默认展示前 ${visibleCount} 项，滚动/展开可查看全部` : `共 ${total} 项 · 已全部展示`}</span>
+        <span style={{ flex: 1 }} />
+        {canEdit && onRefresh !== undefined && <button className="wb-btn" onClick={onRefresh}><Icon name="refresh" />重新生成</button>}
+        {canEdit && onClear !== undefined && <button className="wb-btn" onClick={() => { if (window.confirm('确定要清除该日计划吗？清除后不可恢复。')) onClear() }}><Icon name="trash" />清除</button>}
+      </div>
+    </div>
+  )
+}
+
 function DraftBanner({ draft, onDone, runtime, closePanel, kindName }: { draft: DraftView; onDone: () => void; runtime: WorkbenchRuntime; closePanel: () => void; kindName: (kind: string, code: string) => string }): JSX.Element {
   const subtasks = Array.isArray(draft.payload.subtasks) ? draft.payload.subtasks as Array<{ title?: string }> : []
   const [busy, setBusy] = useState(false)
@@ -724,6 +834,18 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
     await api(`/api/workbench/tasks/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) })
     await refresh()
   }
+  const completePlanTask = async (taskId: string): Promise<void> => {
+    await patchTask(taskId, { statusCode: 'done' })
+  }
+  const deferPlanTask = async (taskId: string): Promise<void> => {
+    const task = tasks.find((t) => t.id === taskId)
+    if (task === undefined) return
+    const base = task.dueAt !== null ? new Date(task.dueAt) : new Date()
+    const next = new Date(base)
+    next.setDate(next.getDate() + 1)
+    await patchTask(taskId, { dueAt: next.toISOString() })
+    setNotice(`已推迟到 ${next.getMonth() + 1}/${next.getDate()}`)
+  }
   const fireReminder = async (reminderId: string): Promise<void> => {
     await api(`/api/workbench/reminders/${reminderId}/fire`, { method: 'POST' })
     setReminders((list) => list.filter((r) => r.reminderId !== reminderId))
@@ -754,9 +876,19 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
           : text.startsWith('week:') ? ['week_report', text.slice(5)] : ['day_report', text.slice(4)]
         const existing = await api<{ session: { sessionId: string } | null }>(`/api/workbench/ai-sessions?scope_code=${scopeCode}&anchor=${anchor}`)
         if (existing.session !== null) {
-          closePanel()
-          runtime.sessions.open(existing.session.sessionId)
-          return
+          let shouldReuse = true
+          if (mode === 'plan') {
+            const hasPlan = planAnchor === localDateString()
+              ? todayPlan !== null
+              : pickedPlan !== null && pickedPlan.planDate === planAnchor
+            const hasPendingPlanDraft = pendingDraft !== null && pendingDraft.kindCode === 'daily_plan' && String(pendingDraft.payload.planDate ?? '') === planAnchor
+            shouldReuse = hasPlan || hasPendingPlanDraft
+          }
+          if (shouldReuse) {
+            closePanel()
+            runtime.sessions.open(existing.session.sessionId)
+            return
+          }
         }
         if (mode === 'report') {
           // 旧版本生成的报告可能还没有登记会话：直接复用报告里的 session_id。
@@ -1085,28 +1217,26 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
 
           {view === 'today' && (
             <>
-              <div className="wb-stats">
+              <div className="wb-stats wb-stats-sticky">
                 <div className="wb-stat"><b>{bootstrap?.stats.overdue ?? 0}</b><span>逾期</span></div>
                 <div className="wb-stat"><b>{bootstrap?.stats.todayDue ?? 0}</b><span>今天到期</span></div>
                 <div className="wb-stat"><b>{bootstrap?.stats.doing ?? 0}</b><span>进行中</span></div>
                 <div className="wb-stat"><b>{bootstrap?.stats.total ?? 0}</b><span>总数</span></div>
               </div>
               <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
-                <button className="wb-btn primary" disabled={busy || openTasks.length === 0} onClick={() => void startAISession('plan', null, localDateString())}><Icon name="sparkles" />{todayPlanSession !== null ? '继续编辑今日计划' : 'AI 智能排序'}</button>
+                <button className="wb-btn primary" disabled={busy || openTasks.length === 0} onClick={() => void startAISession('plan', null, localDateString())}><Icon name="sparkles" />{todayPlan !== null || (pendingDraft?.kindCode === 'daily_plan' && String(pendingDraft.payload.planDate ?? '') === todayAnchor) ? '继续编辑今日计划' : 'AI 智能排序'}</button>
                 <span style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)', alignSelf: 'center' }}>AI 会先提交顺序提案，确认后才生效</span>
               </div>
               {todayPlan !== null && (
-                <div className="wb-card wb-plan">
-                  <h4><Icon name="sparkles" />今日计划 · {todayPlan.planDate}</h4>
-                  {todayPlan.summary !== '' && <div style={{ fontSize: 14, lineHeight: 1.7, marginBottom: 6 }}>{todayPlan.summary}</div>}
-                  <div>
-                    {todayPlan.items.map((item, index) => <div key={item.taskId} className="wb-plan-item"><span className="wb-plan-num">{index + 1}</span><b>{item.title}</b>{item.note !== '' && <span className="wb-plan-note">— {item.note}</span>}</div>)}
-                  </div>
-                  <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-                    <button className="wb-btn" onClick={() => void startAISession('plan', null, localDateString())}><Icon name="refresh" />重新生成</button>
-                    <button className="wb-btn" onClick={() => void clearTodayPlan()}><Icon name="trash" />清除</button>
-                  </div>
-                </div>
+                <PlanPanel
+                  plan={todayPlan}
+                  tasks={tasks}
+                  title={`今日计划 · ${todayPlan.planDate}`}
+                  onComplete={completePlanTask}
+                  onDefer={deferPlanTask}
+                  onRefresh={() => void startAISession('plan', null, localDateString())}
+                  onClear={() => void clearTodayPlan()}
+                />
               )}
               <div className="wb-list">
                 <TaskTreeRows roots={todayTree} depth={0} expanded={todayExpanded} toggle={toggleTodayExpanded} dicts={dicts} onOpen={openTask} selectedId={selected?.task.id} />
@@ -1164,23 +1294,21 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
                     {pickedAnchor < todayAnchor
                       ? <span style={{ fontSize: 12, color: '#999' }}>过去日期只读；如需为今天/未来排期，请选择今天或之后的日期。</span>
-                      : <button className="wb-btn primary" disabled={busy} onClick={() => void startAISession('plan', null, pickedAnchor)}><Icon name="sparkles" />{pickedPlanSession !== null ? '继续编辑该日计划' : `AI 智能排序（${pickedAnchor}）`}</button>}
+                      : <button className="wb-btn primary" disabled={busy} onClick={() => void startAISession('plan', null, pickedAnchor)}><Icon name="sparkles" />{pickedPlan !== null || (pendingDraft?.kindCode === 'daily_plan' && String(pendingDraft.payload.planDate ?? '') === pickedAnchor) ? '继续编辑该日计划' : `AI 智能排序（${pickedAnchor}）`}</button>}
                     <span style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)' }}>AI 会先提交顺序提案，确认后才生效</span>
                   </div>
                   {pickedPlan !== null && (
-                    <div className="wb-card wb-plan" style={{ marginTop: 10 }}>
-                      <h4><Icon name="sparkles" />{pickedPlan.planDate} 计划</h4>
-                      {pickedPlan.summary !== '' && <div style={{ fontSize: 14, lineHeight: 1.7, marginBottom: 6 }}>{pickedPlan.summary}</div>}
-                      <div>
-                        {pickedPlan.items.map((item, index) => <div key={item.taskId} className="wb-plan-item"><span className="wb-plan-num">{index + 1}</span><b>{item.title}</b>{item.note !== '' && <span className="wb-plan-note">— {item.note}</span>}</div>)}
-                      </div>
-                      <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-                        {pickedAnchor >= todayAnchor && <button className="wb-btn" onClick={() => void startAISession('plan', null, pickedAnchor)}><Icon name="refresh" />重新生成</button>}
-                        <button className="wb-btn" onClick={() => {
-                          void api(`/api/workbench/plans/${pickedAnchor}`, { method: 'DELETE' }).then(() => { setPlanRefreshKey((v) => v + 1); setNotice('该日计划已清除') }).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
-                        }}><Icon name="trash" />清除</button>
-                      </div>
-                    </div>
+                    <PlanPanel
+                      plan={pickedPlan}
+                      tasks={tasks}
+                      title={`${pickedPlan.planDate} 计划`}
+                      onComplete={completePlanTask}
+                      onDefer={deferPlanTask}
+                      onRefresh={pickedAnchor >= todayAnchor ? () => void startAISession('plan', null, pickedAnchor) : undefined}
+                      onClear={() => {
+                        void api(`/api/workbench/plans/${pickedAnchor}`, { method: 'DELETE' }).then(() => { setPlanRefreshKey((v) => v + 1); setNotice('该日计划已清除') }).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
+                      }}
+                    />
                   )}
                 </>
               )}

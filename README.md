@@ -124,6 +124,9 @@ dsh plugin --profile web add link:/path/to/dsh-personal-workbench
 - [x] V2 日报/周报（0.7.0）
 - [x] V2：重复任务（0.12.0）
 - [x] V2：个人知识库 / 错题集（1.0.0）
+- [x] V2：今日计划面板长列表优化（sticky 统计卡 / 固定高度内部滚动 / 展开收起 / 面板内完成·推迟）（1.4.0）
+- [ ] V2：AI 会话前自定义提示词输入（除快速录入外，默认提示词 + 用户输入追加）
+- [ ] V2：今日/日历计划面板手动编辑（上下移、改备注、从今日任务增删计划项；保留 AI 生成 + 确认 + 完成/推迟）
 - [ ] V2：定时自动化
 - [ ] 未来：多端同步、任务拖拽排序、数据导入导出
 
@@ -173,6 +176,9 @@ Then restart `dsh web` and hard-refresh the browser.
 
 - [x] V2: AI prioritization for any date, OS-level notifications, daily/weekly reports
 - [x] V2: recurring tasks, personal knowledge base / lessons, ideas & idea clusters
+- [x] V2: Today plan panel long-list optimization (sticky stats / fixed-height inner scroll / expand-collapse / inline complete & defer) (1.4.0)
+- [ ] V2: Custom prompt input before AI sessions (except quick intake; append user input after the default prompt)
+- [ ] V2: Manual editing for today/calendar plan panel (reorder, edit notes, add/remove plan items; keep AI generate + confirm + complete/defer)
 - [ ] Future: scheduled automation, multi-device sync, drag-and-drop, import/export
 
 ## License
