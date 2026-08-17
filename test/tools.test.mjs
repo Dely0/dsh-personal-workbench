@@ -5,8 +5,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openWorkbenchDb } from '../lib/db/database.js'
 import { seedDictionaries } from '../lib/db/seed.js'
-import { proposeDailyPlanTool, proposeIdeaClustersTool, submitIdeaTasksTool, submitKnowledgeTool, submitReportTool, submitTaskTool, updateTaskTool, requestCompletionTool } from '../lib/tools.js'
-import { createIdea, createTask, getTask, getDraftBySession, getPendingDailyPlanDraft, getPendingDraftForSession, getPendingDraftForTask, getPendingReportDraft, updateTask } from '../lib/db/repo.js'
+import { proposeDailyPlanTool, proposeIdeaClustersTool, submitIdeaTasksTool, submitKnowledgeTool, submitReportTool, submitTaskTool, updateTaskTool, requestCompletionTool, saveTaskMemoryTool } from '../lib/tools.js'
+import { createIdea, createTask, getTask, getTaskMemoryContext, getDraftBySession, getPendingDailyPlanDraft, getPendingDraftForSession, getPendingDraftForTask, getPendingReportDraft, updateTask } from '../lib/db/repo.js'
 
 test('agent tools write pending drafts and update tasks', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-personal-workbench-tools-'))
@@ -47,6 +47,19 @@ test('agent tools write pending drafts and update tasks', async () => {
     // AI 不能直接关闭任务
     const deniedClose = await update.execute({ task_id: task.id, status_code: 'done' })
     assert.match(deniedClose, /不能直接/)
+
+    // 任意节点（含父任务）均可申请完成；父任务不再被“叶子”限制拒绝
+    const parent = createTask(db, { title: 'parent exec', typeCode: 'code_impl', priorityCode: 'p1', aiPolicyCode: 'execute' })
+    createTask(db, { title: 'child', typeCode: 'code_impl', priorityCode: 'p1', parentId: parent.id })
+    const parentDone = await completion.execute({ task_id: parent.id, summary: '父任务完成' }, { agent: { session: { id: 'sess-parent' } } })
+    assert.match(parentDone, /验收申请/)
+    assert.ok(getPendingDraftForTask(db, 'completion', parent.id))
+
+    // 任务共享记忆工具：保存后可被同树后续会话读取
+    const saveMem = saveTaskMemoryTool(db)
+    const memOut = await saveMem.execute({ task_id: task.id, content: '关键决策：使用方案A', kind: 'decision' }, { agent: { session: { id: 'sess-exec' } } })
+    assert.match(memOut, /已保存任务共享记忆/)
+    assert.match(getTaskMemoryContext(db, task.id), /关键决策：使用方案A/)
 
     const proposePlan = proposeDailyPlanTool(db)
     const t1 = createTaskForTest(db)

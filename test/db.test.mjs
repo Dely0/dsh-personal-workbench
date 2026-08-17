@@ -13,6 +13,7 @@ import {
   createKnowledge, listKnowledge, getKnowledge, deleteKnowledge, confirmKnowledgeDraft,
   createIdea, listIdeas, createIdeaCluster, getIdeaCluster, confirmIdeaClusterDraft, confirmIdeaTaskDraft,
   getDraftBySession, listTaskSessions, linkTaskSession, localDateString,
+  completeTaskCascade, repairParentCompletion, addTaskMemory, getTaskMemoryContext, listTaskMemories,
 } from '../lib/db/repo.js'
 
 test('db migrations, dictionaries and task tree', () => {
@@ -107,6 +108,57 @@ test('db migrations, dictionaries and task tree', () => {
     const tasks = confirmIdeaTaskDraft(db, taskDraft.id)
     assert.equal(tasks.length, 1)
     assert.deepEqual(tasks[0].extra.sourceIdeaIds, [i1.id])
+    db.close()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('status cascade aggregation, repair and shared memory', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-personal-workbench-cascade-'))
+  try {
+    const db = openWorkbenchDb({ dbPath: join(dir, 'workbench.db') })
+    seedDictionaries(db)
+
+    // 3 层：所有叶子完成 -> 父节点递归自动完成
+    const root = createTask(db, { title: 'root', typeCode: 'code_impl', priorityCode: 'p1' })
+    const child = createTask(db, { title: 'child', typeCode: 'code_impl', priorityCode: 'p1', parentId: root.id })
+    const leaf1 = createTask(db, { title: 'leaf1', typeCode: 'code_impl', priorityCode: 'p1', parentId: child.id })
+    const leaf2 = createTask(db, { title: 'leaf2', typeCode: 'code_impl', priorityCode: 'p1', parentId: child.id })
+    completeTaskCascade(db, leaf1.id)
+    assert.equal(getTask(db, child.id).statusCode, 'todo')
+    completeTaskCascade(db, leaf2.id)
+    assert.equal(getTask(db, child.id).statusCode, 'done')
+    assert.equal(getTask(db, root.id).statusCode, 'done')
+    // 幂等：重复完成不再回退/重复触发
+    completeTaskCascade(db, leaf2.id)
+    assert.equal(getTask(db, child.id).statusCode, 'done')
+    assert.equal(getTask(db, root.id).statusCode, 'done')
+
+    // 父任务直接完成 -> 级联完成后代
+    const p2 = createTask(db, { title: 'p2', typeCode: 'code_impl', priorityCode: 'p1' })
+    const c2 = createTask(db, { title: 'c2', typeCode: 'code_impl', priorityCode: 'p1', parentId: p2.id })
+    const c3 = createTask(db, { title: 'c3', typeCode: 'code_impl', priorityCode: 'p1', parentId: c2.id })
+    completeTaskCascade(db, p2.id)
+    assert.equal(getTask(db, c2.id).statusCode, 'done')
+    assert.equal(getTask(db, c3.id).statusCode, 'done')
+
+    // 存量修复：子任务已全部完成但父任务未完成 -> 补完成，且幂等
+    const p3 = createTask(db, { title: 'p3', typeCode: 'code_impl', priorityCode: 'p1' })
+    const c4 = createTask(db, { title: 'c4', typeCode: 'code_impl', priorityCode: 'p1', parentId: p3.id })
+    const c5 = createTask(db, { title: 'c5', typeCode: 'code_impl', priorityCode: 'p1', parentId: p3.id })
+    updateTask(db, c4.id, { statusCode: 'done' })
+    updateTask(db, c5.id, { statusCode: 'done' })
+    assert.equal(getTask(db, p3.id).statusCode, 'todo')
+    assert.equal(repairParentCompletion(db), 1)
+    assert.equal(getTask(db, p3.id).statusCode, 'done')
+    assert.equal(repairParentCompletion(db), 0)
+
+    // 共享记忆：按整棵任务树共享，父/子会话都能读取
+    addTaskMemory(db, { taskId: leaf1.id, kind: 'decision', content: '使用方案A' })
+    assert.match(getTaskMemoryContext(db, leaf2.id), /使用方案A/)
+    assert.match(getTaskMemoryContext(db, root.id), /使用方案A/)
+    assert.equal(listTaskMemories(db, { taskId: leaf1.id }).length, 1)
     db.close()
   } finally {
     rmSync(dir, { recursive: true, force: true })

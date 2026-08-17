@@ -5,7 +5,7 @@
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { DatabaseSync } from 'node:sqlite'
-import { createDraft, getDictionary, getDraft, getIdea, getIdeaCluster, getPendingDailyPlanDraft, getPendingDraftForSession, getPendingDraftForTask, getPendingKnowledgeDraft, getPendingReportDraft, getTask, listChildren, localDateString, updateDraft, updateTask } from './db/repo.js'
+import { addTaskMemory, createDraft, getDictionary, getDraft, getIdea, getIdeaCluster, getPendingDailyPlanDraft, getPendingDraftForSession, getPendingDraftForTask, getPendingKnowledgeDraft, getPendingReportDraft, getTask, localDateString, updateDraft, updateTask } from './db/repo.js'
 
 function text(value: string): ContentBlock[] {
   return [{ type: 'text', text: value }]
@@ -547,9 +547,9 @@ export function requestCompletionTool(db: DatabaseSync) {
   return defineTool({
     name: 'workbench_request_completion',
     description:
-      '个人工作台执行验收工具：执行会话完成工作后调用，提交“完成验收申请”。用户验收通过后任务才会置为已完成；本工具不会自行完成任务。task_id 必填，summary 为完成总结（2-4 句）。',
+      '个人工作台执行验收工具：任意节点（含父任务）完成工作后调用，提交“完成验收申请”。用户验收通过后任务才会置为已完成；父任务验收通过时未完成子任务会级联完成。本工具不会自行完成任务。task_id 必填，summary 为完成总结（2-4 句）。',
     parameters: {
-      task_id: { type: 'string', required: true, description: '要申请完成的任务 id' },
+      task_id: { type: 'string', required: true, description: '要申请完成的任务 id（任意节点，父任务也可）' },
       summary: { type: 'string', description: '完成总结（2-4 句）' },
     },
     output: {
@@ -564,7 +564,6 @@ export function requestCompletionTool(db: DatabaseSync) {
       if (task.statusCode === 'done') return `任务「${task.title}」已经是已完成状态`
       if (task.archived === 1) return `错误：任务「${task.title}」已归档`
       if (task.aiPolicyCode !== 'execute') return `错误：任务「${task.title}」的 AI 策略不是“可执行”，不能申请完成`
-      if (listChildren(db, taskId).length > 0) return `错误：任务「${task.title}」还有子任务，请对叶子任务申请完成`
       const summary = typeof args.summary === 'string' && args.summary.trim() !== '' ? args.summary.trim() : ''
       const sessionId = exec?.agent?.session?.id ?? null
       const existing = getPendingDraftForTask(db, 'completion', taskId)
@@ -572,6 +571,42 @@ export function requestCompletionTool(db: DatabaseSync) {
         ? updateDraft(db, existing.id, { taskId, summary, sessionId })
         : createDraft(db, { kindCode: 'completion', sessionId, payload: { taskId, summary, sessionId } })
       return `完成验收申请已提交${existing !== undefined ? '（更新）' : ''}（草稿 id=${draft?.id}），等待用户在个人工作台验收。请勿声称任务已经完成。`
+    },
+  })
+}
+
+export function saveTaskMemoryTool(db: DatabaseSync) {
+  return defineTool({
+    name: 'workbench_save_task_memory',
+    description:
+      '个人工作台任务共享记忆工具：把当前会话的重要上下文、阶段性结论或决策保存到任务级共享记忆。' +
+      '同一任务/子树下的后续会话（尤其是父任务会话）会自动加载这些记忆，避免跨会话失忆。' +
+      'task_id 必填，content 为要记住的内容；kind 可选 note/decision/summary/context，默认 note。',
+    parameters: {
+      task_id: { type: 'string', required: true, description: '要写入共享记忆的任务 id（任意节点）' },
+      content: { type: 'string', required: true, description: '要共享的上下文/结论，建议简洁、可独立理解' },
+      kind: { type: 'string', description: '记忆类型：note/decision/summary/context，默认 note' },
+    },
+    output: {
+      schema: { type: 'string' },
+      render: (_args, value: string) => text(value),
+    },
+    async execute(args: Record<string, unknown>, exec: { agent?: { session?: { id?: string } } }) {
+      const taskId = str(args.task_id)
+      if (taskId === undefined) return '错误：task_id 必填'
+      const task = getTask(db, taskId)
+      if (task === undefined) return `错误：任务 ${taskId} 不存在`
+      const content = typeof args.content === 'string' ? args.content.trim() : ''
+      if (content === '') return '错误：content 必填'
+      const kind = typeof args.kind === 'string' && args.kind.trim() !== '' ? args.kind.trim() : 'note'
+      const memory = addTaskMemory(db, {
+        taskId,
+        kind,
+        content,
+        sourceSessionId: exec?.agent?.session?.id ?? null,
+      })
+      if (memory === undefined) return '错误：保存共享记忆失败'
+      return `已保存任务共享记忆（id=${memory.id}，kind=${memory.kind}）。后续同一任务/子树的会话会自动带上这条上下文。`
     },
   })
 }

@@ -4,7 +4,7 @@
  */
 import type { DatabaseSync } from 'node:sqlite'
 
-export const SCHEMA_VERSION = 9
+export const SCHEMA_VERSION = 10
 
 export interface Migration {
   version: number
@@ -277,6 +277,26 @@ export const MIGRATIONS: Migration[] = [
     name: 'knowledge-source-review',
     up(db) {
       db.exec('ALTER TABLE knowledge_entries ADD COLUMN source_review_id TEXT')
+    },
+  },
+  {
+    version: 10,
+    name: 'task-shared-memory',
+    up(db) {
+      db.exec(`
+        CREATE TABLE task_memories (
+          id               TEXT PRIMARY KEY,
+          root_task_id     TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+          task_id          TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+          kind             TEXT NOT NULL DEFAULT 'note',
+          content          TEXT NOT NULL,
+          source_session_id TEXT,
+          created_at       TEXT NOT NULL,
+          updated_at       TEXT NOT NULL
+        ) STRICT;
+        CREATE INDEX idx_task_memories_root ON task_memories(root_task_id, updated_at DESC);
+        CREATE INDEX idx_task_memories_task ON task_memories(task_id, updated_at DESC);
+      `)
     },
   },
 ]

@@ -6,12 +6,12 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import type { DatabaseSync } from 'node:sqlite'
 import {
-  abandonDraft, addReminder, archiveTask, confirmDailyPlanDraft, confirmIdeaClusterDraft, confirmIdeaTaskDraft, confirmKnowledgeDraft, confirmReportDraft, confirmSubtaskPlanDraft, confirmTaskDraft,
+  abandonDraft, addReminder, addTaskMemory, archiveTask, completeTaskCascade, confirmDailyPlanDraft, confirmIdeaClusterDraft, confirmIdeaTaskDraft, confirmKnowledgeDraft, confirmReportDraft, confirmSubtaskPlanDraft, confirmTaskDraft,
   createIdea, createIdeaCluster, createKnowledge, createTaskReview,
   createDraft, createTask, deleteDailyPlan, deleteIdea, deleteIdeaCluster, deleteKnowledge, deleteTaskReport, ensureRecurringInstances, fireReminder, getAiSession, getDailyPlan, getDictionary, getDraft, getDraftBySession,
-  getIdea, getIdeaCluster, getKnowledge, getLatestPendingDraft, getTask, getTaskReport, linkTaskSession, listArchivedTasks, listChildren,
-  listDictionaries, listDueReminders, listIdeas, listIdeaClusters, listIdeaClustersForIdea, listKnowledge, listReminders, listTaskEvents, listTaskReports, listTaskReviews,
-  listTaskSessions, listTasks, localDateString, registerAiSession, restoreTask, updateIdea, updateKnowledge, updateTask, type ReportPeriodCode, type TaskInput,
+  getIdea, getIdeaCluster, getKnowledge, getLatestPendingDraft, getTask, getTaskMemoryContext, getTaskReport, getTaskRootId, linkTaskSession, listArchivedTasks, listChildren,
+  listDictionaries, listDueReminders, listIdeas, listIdeaClusters, listIdeaClustersForIdea, listKnowledge, listReminders, listTaskEvents, listTaskMemories, listTaskReports, listTaskReviews,
+  listTaskSessions, listTasks, localDateString, registerAiSession, repairParentCompletion, restoreTask, updateIdea, updateKnowledge, updateTask, updateTaskWithCompletion, type ReportPeriodCode, type TaskInput,
 } from '../db/repo.js'
 
 const TASKS_PREFIX = '/api/workbench/tasks'
@@ -340,7 +340,8 @@ export function makeRoutes(db: DatabaseSync): WebRoute[] {
             if (body.archived === true || body.archived === false) patch.archived = body.archived
             if ('workspacePath' in body) patch.workspacePath = typeof body.workspacePath === 'string' ? body.workspacePath : null
             if (typeof body.extra === 'object' && body.extra !== null) patch.extra = body.extra as Record<string, unknown>
-            const task = updateTask(db, id, patch)
+            // 新语义：任意节点直接完成时，在同一事务内级联完成未完成子节点，并向上递归聚合父节点。
+            const task = updateTaskWithCompletion(db, id, patch)
             if (task === undefined) return writeJson(res, 404, { error: 'task not found' })
             if (patch.recurrenceCode !== undefined || patch.recurrenceRule !== undefined) ensureRecurringInstances(db)
             return writeJson(res, 200, { ok: true, task: publicTask(task) })
@@ -365,6 +366,29 @@ export function makeRoutes(db: DatabaseSync): WebRoute[] {
         if (method === 'GET' && action === 'reviews') {
           if (getTask(db, id) === undefined) return writeJson(res, 404, { error: 'task not found' })
           return writeJson(res, 200, { ok: true, reviews: listTaskReviews(db, id) })
+        }
+        if (method === 'GET' && action === 'memories') {
+          if (getTask(db, id) === undefined) return writeJson(res, 404, { error: 'task not found' })
+          const rootTaskId = getTaskRootId(db, id)
+          return writeJson(res, 200, { ok: true, memories: rootTaskId === undefined ? [] : listTaskMemories(db, { rootTaskId }) })
+        }
+        if (method === 'GET' && action === 'memory-context') {
+          if (getTask(db, id) === undefined) return writeJson(res, 404, { error: 'task not found' })
+          return writeJson(res, 200, { ok: true, context: getTaskMemoryContext(db, id) })
+        }
+        if (method === 'POST' && action === 'memories') {
+          if (body === undefined) return writeJson(res, 400, { error: 'invalid JSON body' })
+          if (getTask(db, id) === undefined) return writeJson(res, 404, { error: 'task not found' })
+          const content = typeof body.content === 'string' ? body.content.trim() : ''
+          if (content === '') return writeJson(res, 400, { error: 'content is required' })
+          const kind = typeof body.kind === 'string' && body.kind.trim() !== '' ? body.kind.trim() : 'note'
+          const sourceSessionId = typeof body.sourceSessionId === 'string' ? body.sourceSessionId : null
+          try {
+            const memory = addTaskMemory(db, { taskId: id, kind, content, sourceSessionId })
+            return writeJson(res, 201, { ok: true, memory })
+          } catch (error) {
+            return writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
+          }
         }
         if (method === 'POST' && action === 'sessions') {
           if (body === undefined) return writeJson(res, 400, { error: 'invalid JSON body' })
@@ -392,6 +416,21 @@ export function makeRoutes(db: DatabaseSync): WebRoute[] {
           return writeJson(res, 201, { ok: true, reminderId: addReminder(db, id, offset, methodCode) })
         }
         return writeJson(res, 404, { error: 'not found' })
+      },
+    },
+    // ------------------------------------------------------------------ maintenance
+    {
+      kind: 'exact',
+      path: '/api/workbench/maintenance/repair-parents',
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) return writeJson(res, 403, { error: 'forbidden: loopback-only' })
+        if ((req.method ?? 'GET') !== 'POST') return writeJson(res, 405, { error: 'method not allowed' })
+        try {
+          const changed = repairParentCompletion(db)
+          return writeJson(res, 200, { ok: true, changed })
+        } catch (error) {
+          return writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
+        }
       },
     },
     // ------------------------------------------------------------------ drafts
@@ -465,12 +504,16 @@ export function makeRoutes(db: DatabaseSync): WebRoute[] {
               if (taskId === undefined) return writeJson(res, 400, { error: 'completion draft requires taskId' })
               const task = getTask(db, taskId)
               if (task === undefined) return writeJson(res, 404, { error: 'task not found' })
-              updateTask(db, taskId, { statusCode: 'done' }, 'user')
               const sessionId = typeof draft.payload.sessionId === 'string' ? draft.payload.sessionId : null
+              const completedTask = completeTaskCascade(db, taskId, 'user')
               if (sessionId !== null) linkTaskSession(db, { taskId, sessionId, roleCode: 'execute' })
+              const summary = typeof draft.payload.summary === 'string' ? draft.payload.summary.trim() : ''
+              if (summary !== '') {
+                addTaskMemory(db, { taskId, kind: 'summary', content: summary, sourceSessionId: sessionId })
+              }
               const now = new Date().toISOString()
               db.prepare('UPDATE task_drafts SET status_code = ?, updated_at = ? WHERE id = ?').run('confirmed', now, id)
-              return writeJson(res, 200, { ok: true, task: publicTask(getTask(db, taskId)!) })
+              return writeJson(res, 200, { ok: true, task: publicTask(completedTask ?? getTask(db, taskId)!) })
             }
             return writeJson(res, 400, { error: `unknown draft kind ${draft.kindCode}` })
           } catch (error) {

@@ -337,6 +337,136 @@ export function updateTask(db: DatabaseSync, id: string, patch: TaskPatch, actor
   return next
 }
 
+// ---------------------------------------------------------------------------
+// status aggregation / cascade completion
+// ---------------------------------------------------------------------------
+
+function isClosedStatus(statusCode: string): boolean {
+  return statusCode === 'done' || statusCode === 'cancelled'
+}
+
+function allDirectChildrenClosed(db: DatabaseSync, parentId: string): boolean {
+  const children = listChildren(db, parentId)
+  return children.length > 0 && children.every((child) => isClosedStatus(child.statusCode))
+}
+
+/** 事务内执行级联/聚合；调用方必须已开启事务。 */
+function completeTaskCascadeInTx(db: DatabaseSync, taskId: string, actor: string, at: string): void {
+  const markDone = (id: string): void => {
+    const current = getTask(db, id)
+    if (current === undefined || isClosedStatus(current.statusCode)) return
+    updateTask(db, id, { statusCode: 'done' }, actor, at)
+  }
+  markDone(taskId)
+
+  // 父任务直接完成时级联完成后代；叶子任务无子节点时此循环为空。
+  const stack = [...listChildren(db, taskId)]
+  while (stack.length > 0) {
+    const child = stack.pop()!
+    markDone(child.id)
+    stack.push(...listChildren(db, child.id))
+  }
+
+  // 向上聚合：只要父节点的直接子节点全部 closed，就自动完成父节点。
+  let cursor = getTask(db, taskId)?.parentId ?? null
+  let guard = 0
+  while (cursor !== null && guard < 64) {
+    const parent = getTask(db, cursor)
+    if (parent === undefined) break
+    if (isClosedStatus(parent.statusCode)) {
+      // 已关闭的父节点不再向上传播；但如果它仍有未完成后代（旧数据），仍先补齐后代。
+      const stack2 = [...listChildren(db, parent.id)]
+      while (stack2.length > 0) {
+        const child = stack2.pop()!
+        markDone(child.id)
+        stack2.push(...listChildren(db, child.id))
+      }
+      break
+    }
+    if (allDirectChildrenClosed(db, parent.id)) {
+      updateTask(db, parent.id, { statusCode: 'done' }, actor, at)
+      cursor = parent.parentId ?? null
+    } else {
+      break
+    }
+    guard += 1
+  }
+}
+
+/**
+ * 完成任务并处理级联/聚合：
+ * - 把 taskId 标记为 done；
+ * - 若 taskId 是父任务（直接完成），级联把所有未完成后代标记为 done；
+ * - 完成后向上递归检查：某个父节点的直接子节点全部 closed 时，自动把该父节点标记为 done。
+ * 使用事务保证幂等与并发安全；重复调用不会重复写已完成任务。
+ */
+export function completeTaskCascade(db: DatabaseSync, taskId: string, actor = 'user', at = nowIso()): TaskRow | undefined {
+  const task = getTask(db, taskId)
+  if (task === undefined) return undefined
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    completeTaskCascadeInTx(db, taskId, actor, at)
+    db.exec('COMMIT')
+    return getTask(db, taskId)
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
+  }
+}
+
+/**
+ * 原子地应用任务更新；若 patch 把任务标记为 done，则在同一事务内级联/聚合。
+ * 避免“任务已 done 但后代未级联”的中间状态。
+ */
+export function updateTaskWithCompletion(
+  db: DatabaseSync,
+  id: string,
+  patch: TaskPatch,
+  actor = 'user',
+  at = nowIso(),
+): TaskRow | undefined {
+  const before = getTask(db, id)
+  if (before === undefined) return undefined
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    const task = updateTask(db, id, patch, actor, at)
+    if (task !== undefined && patch.statusCode === 'done') {
+      completeTaskCascadeInTx(db, id, actor, at)
+    }
+    db.exec('COMMIT')
+    return getTask(db, id)
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
+  }
+}
+
+/**
+ * 存量数据修复：扫描所有“有子任务但未完成”的父节点，若其直接子节点已全部 closed，
+ * 则递归补完成。幂等：第二次执行返回 0。
+ */
+export function repairParentCompletion(db: DatabaseSync, at = nowIso()): number {
+  const before = new Map(
+    listTasks(db, { includeArchived: true })
+      .filter((task) => !isClosedStatus(task.statusCode))
+      .map((task) => [task.id, task.statusCode] as const),
+  )
+  const parents = listTasks(db, { includeArchived: true }).filter((task) => listChildren(db, task.id).length > 0)
+  for (const parent of parents) {
+    const current = getTask(db, parent.id)
+    if (current === undefined || isClosedStatus(current.statusCode)) continue
+    if (allDirectChildrenClosed(db, parent.id)) {
+      completeTaskCascade(db, parent.id, 'system', at)
+    }
+  }
+  let changed = 0
+  for (const [id, status] of before) {
+    const current = getTask(db, id)
+    if (current !== undefined && current.statusCode !== status) changed += 1
+  }
+  return changed
+}
+
 export function archiveTask(db: DatabaseSync, id: string, actor = 'user'): TaskRow | undefined {
   return updateTask(db, id, { archived: true }, actor)
 }
@@ -602,6 +732,109 @@ export function linkTaskSession(db: DatabaseSync, input: TaskSessionLinkInput, a
 
 export function listTaskSessions(db: DatabaseSync, taskId: string): Array<Record<string, unknown>> {
   return db.prepare('SELECT * FROM task_sessions WHERE task_id = ? ORDER BY created_at').all(taskId) as Array<Record<string, unknown>>
+}
+
+// ---------------------------------------------------------------------------
+// task shared memory（任务/子树共享上下文，跨会话续作）
+// ---------------------------------------------------------------------------
+
+export interface TaskMemoryInput {
+  taskId: string
+  kind?: string
+  content: string
+  sourceSessionId?: string | null
+}
+
+export interface TaskMemoryRow {
+  id: string
+  rootTaskId: string
+  taskId: string
+  kind: string
+  content: string
+  sourceSessionId: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+interface RawTaskMemoryRow {
+  id: string
+  root_task_id: string
+  task_id: string
+  kind: string
+  content: string
+  source_session_id: string | null
+  created_at: string
+  updated_at: string
+}
+
+function parseTaskMemory(row: RawTaskMemoryRow | undefined): TaskMemoryRow | undefined {
+  if (row === undefined) return undefined
+  return {
+    id: row.id,
+    rootTaskId: row.root_task_id,
+    taskId: row.task_id,
+    kind: row.kind,
+    content: row.content,
+    sourceSessionId: row.source_session_id,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }
+}
+
+export function getTaskRootId(db: DatabaseSync, taskId: string): string | undefined {
+  let cursor = getTask(db, taskId)
+  let guard = 0
+  while (cursor !== undefined && cursor.parentId !== null && guard < 64) {
+    cursor = getTask(db, cursor.parentId)
+    guard += 1
+  }
+  return cursor?.id
+}
+
+export function getTaskMemory(db: DatabaseSync, id: string): TaskMemoryRow | undefined {
+  return parseTaskMemory(db.prepare('SELECT * FROM task_memories WHERE id = ?').get(id) as RawTaskMemoryRow | undefined)
+}
+
+export function listTaskMemories(
+  db: DatabaseSync,
+  opts: { rootTaskId?: string; taskId?: string; limit?: number } = {},
+): TaskMemoryRow[] {
+  const conditions: string[] = []
+  const params: Array<string | number> = []
+  if (opts.rootTaskId !== undefined) { conditions.push('root_task_id = ?'); params.push(opts.rootTaskId) }
+  if (opts.taskId !== undefined) { conditions.push('task_id = ?'); params.push(opts.taskId) }
+  const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
+  const limit = Math.max(1, Math.min(opts.limit ?? 100, 300))
+  const rows = db.prepare(`SELECT * FROM task_memories ${where} ORDER BY created_at DESC, id DESC LIMIT ?`).all(...params, limit) as unknown as RawTaskMemoryRow[]
+  return rows.map((row) => parseTaskMemory(row)).filter((memory): memory is TaskMemoryRow => memory !== undefined)
+}
+
+export function addTaskMemory(db: DatabaseSync, input: TaskMemoryInput, at = nowIso()): TaskMemoryRow | undefined {
+  const task = getTask(db, input.taskId)
+  if (task === undefined) return undefined
+  const content = typeof input.content === 'string' ? input.content.trim() : ''
+  if (content === '') throw new Error('memory content is required')
+  const rootTaskId = getTaskRootId(db, input.taskId) ?? input.taskId
+  const id = randomUUID()
+  const kind = typeof input.kind === 'string' && input.kind.trim() !== '' ? input.kind.trim() : 'note'
+  db.prepare(`
+    INSERT INTO task_memories (id, root_task_id, task_id, kind, content, source_session_id, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(id, rootTaskId, input.taskId, kind, content, input.sourceSessionId ?? null, at, at)
+  appendEvent(db, input.taskId, 'memory_added', { actor: 'system', note: `${kind}:${id}`, at })
+  return getTaskMemory(db, id)
+}
+
+/** 格式化任务共享记忆，用于注入 AI 会话 prompt。按整棵任务树（root）共享。 */
+export function getTaskMemoryContext(db: DatabaseSync, taskId: string, limit = 30): string {
+  const rootTaskId = getTaskRootId(db, taskId)
+  if (rootTaskId === undefined) return ''
+  const memories = listTaskMemories(db, { rootTaskId, limit })
+  if (memories.length === 0) return ''
+  return memories.map((memory, index) => {
+    const scope = memory.taskId === taskId ? '当前任务' : `任务 ${memory.taskId}`
+    return `${index + 1}. [${memory.kind}]（${scope}）${memory.content}`
+  }).join('\n')
 }
 
 // ---------------------------------------------------------------------------
