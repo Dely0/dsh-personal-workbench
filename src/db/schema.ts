@@ -1,5 +1,5 @@
 /**
- * dsh-workbench DB schema（对应 docs/DSH个人工作台/01_数据模型.md）
+ * dsh-personal-workbench DB schema（对应 docs/DSH个人工作台/01_数据模型.md）
  * 迁移只前向；所有“枚举”都走 dictionaries 表。
  */
 import type { DatabaseSync } from 'node:sqlite'

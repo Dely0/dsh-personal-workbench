@@ -759,8 +759,8 @@ export function makeRoutes(db: DatabaseSync): WebRoute[] {
         const versionRow = db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as { value: string } | undefined
         writeJson(res, 200, {
           ok: true,
-          name: 'dsh-workbench',
-          version: '1.1.3',
+          name: '@dely0/dsh-personal-workbench',
+          version: '1.2.0',
           db: {
             schemaVersion: versionRow?.value ?? 'unknown',
             taskCount: listTasks(db, { includeArchived: true }).length,

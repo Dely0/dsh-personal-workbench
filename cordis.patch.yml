@@ -1,5 +1,5 @@
-# dsh-workbench bundle layer: 把工作台插件行插入 profile 组合。
+# dsh-personal-workbench bundle layer: 把工作台插件行插入 profile 组合。
 - insert:
-    - id: workbench
-      name: 'dsh-workbench'
+    - id: personal-workbench
+      name: '@dely0/dsh-personal-workbench'
       config: {}

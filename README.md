@@ -1,4 +1,4 @@
-# dsh-workbench
+# dsh-personal-workbench
 
 A personal workbench plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH) Web.
 Turn your DSH into a **calendar + task list + AI assistant workbench**.
@@ -11,7 +11,7 @@ Turn your DSH into a **calendar + task list + AI assistant workbench**.
 
 ## 这是什么
 
-`dsh-workbench` 是一个 **DSH 个人工作台插件**：
+`dsh-personal-workbench` 是一个 **DSH 个人工作台插件**：
 
 - 📅 日历（周/月可切换）+ 任务列表（树状层级）
 - ✨ 自然语言快速录入，AI 澄清后自动生成任务
@@ -73,7 +73,7 @@ Turn your DSH into a **calendar + task list + AI assistant workbench**.
 ### 从 GitHub 安装（推荐）
 
 ```sh
-dsh plugin --profile web add git+https://github.com/<your-account>/dsh-workbench.git
+dsh plugin --profile web add git+https://github.com/Dely0/dsh-workbench.git
 ```
 
 或安装 Release tarball：
@@ -87,7 +87,7 @@ dsh plugin --profile web add file:/path/to/dsh-workbench-<version>.tgz
 ### 从源码开发
 
 ```sh
-git clone https://github.com/<your-account>/dsh-workbench.git
+git clone https://github.com/Dely0/dsh-workbench.git
 cd dsh-workbench
 pnpm install
 pnpm check      # 类型检查 + 构建
@@ -142,7 +142,7 @@ dsh plugin --profile web add link:/path/to/dsh-workbench
 
 ## What is this
 
-`dsh-workbench` is a personal workbench plugin for DeepSeek Harness Web:
+`dsh-personal-workbench` is a personal workbench plugin for DeepSeek Harness Web:
 calendar + hierarchical task list, natural-language task intake with AI clarification,
 multiple AI sessions per task (clarify / consult / break down / execute / review),
 execution with user acceptance, AI prioritization for any date, daily/weekly reports,
@@ -154,7 +154,7 @@ All task data is stored locally under `~/.dsh/workbench`.
 
 ```sh
 # From source or release tarball
-dsh plugin --profile web add git+https://github.com/<your-account>/dsh-workbench.git
+dsh plugin --profile web add git+https://github.com/Dely0/dsh-workbench.git
 dsh plugin --profile web add file:/path/to/dsh-workbench-<version>.tgz
 ```
 

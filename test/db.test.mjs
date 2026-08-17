@@ -16,7 +16,7 @@ import {
 } from '../lib/db/repo.js'
 
 test('db migrations, dictionaries and task tree', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'dsh-workbench-db-'))
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-personal-workbench-db-'))
   try {
     const db = openWorkbenchDb({ dbPath: join(dir, 'workbench.db') })
     seedDictionaries(db)

@@ -9,7 +9,7 @@ import { proposeDailyPlanTool, proposeIdeaClustersTool, submitIdeaTasksTool, sub
 import { createIdea, createTask, getTask, getDraftBySession, getPendingDailyPlanDraft, getPendingDraftForSession, getPendingDraftForTask, getPendingReportDraft, updateTask } from '../lib/db/repo.js'
 
 test('agent tools write pending drafts and update tasks', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'dsh-workbench-tools-'))
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-personal-workbench-tools-'))
   try {
     const db = openWorkbenchDb({ dbPath: join(dir, 'workbench.db') })
     seedDictionaries(db)

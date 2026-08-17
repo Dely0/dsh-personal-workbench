@@ -1,6 +1,6 @@
 import type { UserConfig } from 'tsdown'
 
-const ID = 'dsh-workbench'
+const ID = '@dely0/dsh-personal-workbench'
 
 /**
  * DSH client 插件协议：lib/client.js 必须是一个

@@ -1,5 +1,5 @@
 /**
- * dsh-workbench — host half.
+ * dsh-personal-workbench — host half.
  * V1/V1.5 能力已闭环；V2 起提供每日 AI 智能排序（daily_plans）。
  */
 import type { Context } from '@deepseek-ai/cordis'
@@ -11,12 +11,12 @@ import { openWorkbenchDb, type WorkbenchDbConfig } from './db/database.js'
 import { seedDictionaries } from './db/seed.js'
 import { proposeDailyPlanTool, proposeIdeaClustersTool, proposeSubtasksTool, requestCompletionTool, submitIdeaTasksTool, submitKnowledgeTool, submitReportTool, submitReviewTool, submitTaskTool, updateTaskTool } from './tools.js'
 
-export const name = 'workbench'
+export const name = 'personal-workbench'
 
 export const inject = ['webServer', 'systemPrompt', 'tools']
 
 const WORKBENCH_GUIDANCE = [
-  '本机已安装 dsh-workbench 插件（个人工作台）：侧边栏「工作台」入口；',
+  '本机已安装 dsh-personal-workbench 插件（个人工作台）：侧边栏「工作台」入口；',
   'V1 能力：日历 + 任务列表、自然语言快速录入与 AI 澄清、子任务拆解（AI 提案 + 用户确认）、任务关联多个 Harness 会话。',
   'V1.5 已提供叶子任务“执行”：执行会话完成后应调用 workbench_request_completion 提交验收申请，由用户验收后完成；AI 不得直接把任务标记为完成/取消。',
   'V2 AI 智能排序：请调用 workbench_propose_daily_plan(plan_date, summary, items) 提交指定日期的执行顺序提案（只写草稿，用户确认后生效），不要修改任务字段；同一父子链不要同时入列。',
@@ -43,7 +43,7 @@ export function apply(ctx: Context, config: Config = {}): void {
       const disposers = routes.map((route) => ctx.webServer.register(route))
       return () => { for (const dispose of disposers) dispose() }
     },
-    'dsh-workbench: routes',
+    'dsh-personal-workbench: routes',
   )
 
   ctx.effect(
@@ -51,7 +51,7 @@ export function apply(ctx: Context, config: Config = {}): void {
       const disposers = [submitTaskTool(db), proposeSubtasksTool(db), proposeDailyPlanTool(db), submitReportTool(db), submitKnowledgeTool(db), proposeIdeaClustersTool(db), submitIdeaTasksTool(db), updateTaskTool(db), requestCompletionTool(db), submitReviewTool(db)].map((tool) => ctx.tools.register(tool))
       return () => { for (const dispose of disposers) dispose() }
     },
-    'dsh-workbench: tools',
+    'dsh-personal-workbench: tools',
   )
 
   ctx.effect(() => {
@@ -61,7 +61,7 @@ export function apply(ctx: Context, config: Config = {}): void {
       order: SECTION_ORDER,
       text: WORKBENCH_GUIDANCE,
     })
-  }, 'dsh-workbench: prompt')
+  }, 'dsh-personal-workbench: prompt')
 
-  ctx.effect(() => () => { db.close() }, 'dsh-workbench: db')
+  ctx.effect(() => () => { db.close() }, 'dsh-personal-workbench: db')
 }
