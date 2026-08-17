@@ -73,13 +73,13 @@ Turn your DSH into a **calendar + task list + AI assistant workbench**.
 ### 从 GitHub 安装（推荐）
 
 ```sh
-dsh plugin --profile web add git+https://github.com/Dely0/dsh-workbench.git
+dsh plugin --profile web add git+https://github.com/Dely0/dsh-personal-workbench.git
 ```
 
 或安装 Release tarball：
 
 ```sh
-dsh plugin --profile web add file:/path/to/dsh-workbench-<version>.tgz
+dsh plugin --profile web add file:/path/to/dsh-personal-workbench-<version>.tgz
 ```
 
 安装后重启 `dsh web`，浏览器硬刷新（Ctrl+Shift+R）。
@@ -87,8 +87,8 @@ dsh plugin --profile web add file:/path/to/dsh-workbench-<version>.tgz
 ### 从源码开发
 
 ```sh
-git clone https://github.com/Dely0/dsh-workbench.git
-cd dsh-workbench
+git clone https://github.com/Dely0/dsh-personal-workbench.git
+cd dsh-personal-workbench
 pnpm install
 pnpm check      # 类型检查 + 构建
 pnpm test       # 最小回归测试（使用构建产物）
@@ -98,7 +98,7 @@ pnpm test       # 最小回归测试（使用构建产物）
 
 ```sh
 pnpm build
-dsh plugin --profile web add link:/path/to/dsh-workbench
+dsh plugin --profile web add link:/path/to/dsh-personal-workbench
 ```
 
 > 开发模式修改代码后需要重新 `pnpm build` 并重启 `dsh web`。
@@ -154,8 +154,8 @@ All task data is stored locally under `~/.dsh/workbench`.
 
 ```sh
 # From source or release tarball
-dsh plugin --profile web add git+https://github.com/Dely0/dsh-workbench.git
-dsh plugin --profile web add file:/path/to/dsh-workbench-<version>.tgz
+dsh plugin --profile web add git+https://github.com/Dely0/dsh-personal-workbench.git
+dsh plugin --profile web add file:/path/to/dsh-personal-workbench-<version>.tgz
 ```
 
 Then restart `dsh web` and hard-refresh the browser.
