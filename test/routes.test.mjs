@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import http from 'node:http'
 import { openWorkbenchDb } from '../lib/db/database.js'
 import { makeRoutes } from '../lib/api/routes.js'
-import { createTask, localDateString } from '../lib/db/repo.js'
+import { createTask, localDateString, updateTask } from '../lib/db/repo.js'
 
 function startTestServer() {
   const db = openWorkbenchDb({ dbPath: ':memory:' })
@@ -72,5 +72,54 @@ test('manual plan editing PUT saves added task instead of returning not found', 
     assert.equal(get.status, 200)
     assert.equal(get.body.plan.items.length, 2)
     assert.equal(get.body.plan.items[1].note, 'added manually')
+  })
+})
+
+test('manual plan editing PUT removes an item and keeps remaining done task', async () => {
+  await withServer(async ({ db, request }) => {
+    const normal = createTask(db, { title: 'normal plan item', typeCode: 'code_impl', priorityCode: 'p2' })
+    const done = createTask(db, { title: 'done plan item', typeCode: 'code_impl', priorityCode: 'p2' })
+    updateTask(db, done.id, { statusCode: 'done' })
+    const planDate = localDateString()
+
+    // Build a plan containing a normal task and a completed task.
+    const initial = await request('PUT', `/api/workbench/plans/${planDate}`, {
+      items: [
+        { taskId: normal.id, order: 1, note: 'normal' },
+        { taskId: done.id, order: 2, note: 'done record' },
+      ],
+    })
+    assert.equal(initial.status, 200)
+    assert.equal(initial.body.plan.items.length, 2)
+
+    // Remove the normal item; the remaining done task must still be saved.
+    const removed = await request('PUT', `/api/workbench/plans/${planDate}`, {
+      items: [
+        { taskId: done.id, order: 1, note: 'done record' },
+      ],
+    })
+    assert.equal(removed.status, 200)
+    assert.equal(removed.body.ok, true)
+    assert.equal(removed.body.plan.items.length, 1)
+    assert.equal(removed.body.plan.items[0].taskId, done.id)
+    assert.equal(removed.body.plan.items[0].note, 'done record')
+
+    const after = await request('GET', `/api/workbench/plans?date=${planDate}`)
+    assert.equal(after.status, 200)
+    assert.equal(after.body.plan.items.length, 1)
+    assert.equal(after.body.plan.items[0].taskId, done.id)
+    assert.equal(after.body.plan.items.some((item) => item.taskId === normal.id), false)
+
+    // Removing the done item as well is also allowed; only an empty plan is rejected.
+    const onlyNormal = await request('PUT', `/api/workbench/plans/${planDate}`, {
+      items: [{ taskId: normal.id, order: 1, note: 'normal' }],
+    })
+    assert.equal(onlyNormal.status, 200)
+    assert.equal(onlyNormal.body.plan.items.length, 1)
+    assert.equal(onlyNormal.body.plan.items[0].taskId, normal.id)
+
+    const empty = await request('PUT', `/api/workbench/plans/${planDate}`, { items: [] })
+    assert.equal(empty.status, 400)
+    assert.match(empty.body.error, /at least one item/)
   })
 })
