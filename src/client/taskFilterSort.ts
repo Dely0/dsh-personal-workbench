@@ -28,6 +28,8 @@ export interface TaskLike {
   priorityCode: string
   typeCode: string
   dueAt: string | null
+  /** 动态有效截止时间：未设置 own dueAt 时由后端继承最近祖先的 dueAt。 */
+  effectiveDueAt?: string | null
   completedAt: string | null
   createdAt: string
 }
@@ -60,11 +62,12 @@ export function compareTasks<T extends TaskLike>(
   switch (key) {
     case 'dueAt': {
       const at = (t: T): number | null => {
-        if (t.dueAt !== null) {
-          const n = Date.parse(t.dueAt)
+        const due = t.effectiveDueAt ?? t.dueAt
+        if (due !== null) {
+          const n = Date.parse(due)
           if (!Number.isNaN(n)) return n
         }
-        // 已完成任务未设置截止时间时，列表右侧展示的是完成时间，排序也按它参与。
+        // 已完成任务无有效截止时间时，列表右侧展示的是完成时间，排序也按它参与。
         if (t.statusCode === 'done' && t.completedAt !== null) {
           const n = Date.parse(t.completedAt)
           if (!Number.isNaN(n)) return n

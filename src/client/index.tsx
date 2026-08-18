@@ -163,6 +163,7 @@ interface Task {
   priorityCode: string
   aiPolicyCode: string
   dueAt: string | null
+  effectiveDueAt: string | null
   allDay: boolean
   estimatedMinutes: number | null
   source: string
@@ -394,23 +395,23 @@ function TaskTreeRows({ roots, depth, expanded, toggle, dicts, onOpen, selectedI
 }
 
 function TaskRow({ task, dicts, onOpen, selected, bare = false }: { task: Task; dicts: Dict[]; onOpen: (task: Task) => void; selected?: boolean; bare?: boolean }): JSX.Element {
-  const due = task.dueAt === null ? null : new Date(task.dueAt)
+  const due = task.effectiveDueAt === null ? null : new Date(task.effectiveDueAt)
   const now = new Date()
   const dueText = task.statusCode === 'done'
-    ? task.dueAt !== null
-      ? fmtTime(task.dueAt)
+    ? task.effectiveDueAt !== null
+      ? fmtTime(task.effectiveDueAt)
       : task.completedAt !== null ? fmtTime(task.completedAt) : ''
     : task.statusCode === 'cancelled'
       ? '已取消'
       : due === null
         ? '无截止'
         : Number.isNaN(due.getTime())
-          ? fmtTime(task.dueAt!)
+          ? fmtTime(task.effectiveDueAt!)
           : due.toDateString() === now.toDateString()
-            ? `今天 ${fmtTime(task.dueAt!)}`
+            ? `今天 ${fmtTime(task.effectiveDueAt!)}`
             : due.getTime() < now.getTime()
-              ? `逾期 ${fmtTime(task.dueAt!)}`
-              : fmtTime(task.dueAt!)
+              ? `逾期 ${fmtTime(task.effectiveDueAt!)}`
+              : fmtTime(task.effectiveDueAt!)
   const content = (
     <>
       <div className="wb-row-title" style={{ fontWeight: 600 }}>{task.title}</div>
@@ -539,7 +540,7 @@ function PlanPanel({ plan, tasks, title, onComplete, onDefer, onRefresh, onClear
   const candidateTasks = tasks.filter((t) =>
     t.statusCode !== 'done' && t.statusCode !== 'cancelled' &&
     !editItems.some((item) => item.taskId === t.id) &&
-    ((t.dueAt !== null && sameDay(new Date(t.dueAt), planDay)) || (isToday && t.dueAt === null))
+    ((t.effectiveDueAt !== null && sameDay(new Date(t.effectiveDueAt), planDay)) || (isToday && t.effectiveDueAt === null))
   )
   const handleSave = async (): Promise<void> => {
     if (onSave === undefined) return
@@ -979,7 +980,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   const deferPlanTask = async (taskId: string): Promise<void> => {
     const task = tasks.find((t) => t.id === taskId)
     if (task === undefined) return
-    const base = task.dueAt !== null ? new Date(task.dueAt) : new Date()
+    const base = task.effectiveDueAt !== null ? new Date(task.effectiveDueAt) : new Date()
     const next = new Date(base)
     next.setDate(next.getDate() + 1)
     await patchTask(taskId, { dueAt: next.toISOString() })
@@ -1109,10 +1110,10 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
       const planCandidates = tasks
         .filter((t) => t.statusCode !== 'done' && t.statusCode !== 'cancelled')
         .filter((t) => t.recurrenceCode === null || t.recurrenceCode === 'none')
-        .filter((t) => (t.dueAt !== null && Date.parse(t.dueAt) < planDayEnd.getTime()) || (planAnchor === localDateString() && t.dueAt === null))
+        .filter((t) => (t.effectiveDueAt !== null && Date.parse(t.effectiveDueAt) < planDayEnd.getTime()) || (planAnchor === localDateString() && t.effectiveDueAt === null))
         .slice(0, 30)
       const planTaskLines = planCandidates
-        .map((t, i) => `${i + 1}. [${t.id}] ${t.title} | 优先级 ${t.priorityCode} | 状态 ${t.statusCode} | 截止 ${t.dueAt ?? '无'} | 预计耗时 ${t.estimatedMinutes ?? '未知'} 分钟 | 父任务 ${t.parentId ?? '无'}`)
+        .map((t, i) => `${i + 1}. [${t.id}] ${t.title} | 优先级 ${t.priorityCode} | 状态 ${t.statusCode} | 截止 ${t.effectiveDueAt ?? '无'} | 预计耗时 ${t.estimatedMinutes ?? '未知'} 分钟 | 父任务 ${t.parentId ?? '无'}`)
         .join('\n')
       // 任务/子树共享记忆：父任务会话会加载整棵子树上下文，子任务会话也能看到同树记忆。
       let memoryContext = ''
@@ -1152,12 +1153,12 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
         : mode === 'clarify'
         ? `你是“个人工作台”的任务澄清助手。请按 workbench-intake 规范执行。\n\n用户想创建的任务是：\n「${text}」\n\n当前时间：${new Date().toISOString()}\n默认 AI 工作区：${settings.defaultWorkspace || '未设置'}\n\n请先澄清必要信息（一次一个主题，最多5轮）。如果用户对该任务的 AI 会话有指定工作区，请询问具体路径，并在调用 workbench_submit_task 时传入 workspace_path；否则留空使用默认工作区。信息足够后调用 workbench_submit_task 提交结构化任务草稿。不要执行任务本身。`
         : mode === 'consult'
-          ? `你是“个人工作台”的任务协助助手。请针对下面这个任务提供咨询、拆解或复盘建议（咨询模式不执行）。\n\n任务 id：${task?.id}\n任务标题：${task?.title}\n任务描述：${task?.description || '（无）'}\n类型：${task?.typeCode} 优先级：${task?.priorityCode} 状态：${task?.statusCode}\n截止：${task?.dueAt ?? '无'}\n${memoryContext !== '' ? `\n任务共享记忆（同一任务/子树）：\n${memoryContext}` : ''}\n\n请先理解任务，再给出建议；如果信息不足，可以一次问一个问题。\n\n重要：如果用户要求把结论/补充信息保存回任务，请调用 workbench_update_task(task_id="${task?.id ?? ''}", description="...") 更新原任务；绝对不要调用 workbench_submit_task 新建任务。`
+          ? `你是“个人工作台”的任务协助助手。请针对下面这个任务提供咨询、拆解或复盘建议（咨询模式不执行）。\n\n任务 id：${task?.id}\n任务标题：${task?.title}\n任务描述：${task?.description || '（无）'}\n类型：${task?.typeCode} 优先级：${task?.priorityCode} 状态：${task?.statusCode}\n截止：${task?.effectiveDueAt ?? task?.dueAt ?? '无'}\n${memoryContext !== '' ? `\n任务共享记忆（同一任务/子树）：\n${memoryContext}` : ''}\n\n请先理解任务，再给出建议；如果信息不足，可以一次问一个问题。\n\n重要：如果用户要求把结论/补充信息保存回任务，请调用 workbench_update_task(task_id="${task?.id ?? ''}", description="...") 更新原任务；绝对不要调用 workbench_submit_task 新建任务。`
           : mode === 'breakdown'
-            ? `你是“个人工作台”的任务拆解助手。请分析下面这个任务，并调用 workbench_propose_subtasks 提交子任务提案。\n\n父任务 id：${task?.id}\n任务标题：${task?.title}\n任务描述：${task?.description || '（无）'}\n类型：${task?.typeCode} 优先级：${task?.priorityCode} 截止：${task?.dueAt ?? '无'}\n${memoryContext !== '' ? `\n任务共享记忆（同一任务/子树）：\n${memoryContext}` : ''}\n\n粒度规则：每层 2-6 个、最大深度 3 层、叶子 15-240 分钟且有可验证完成标准；子任务的 type_code/priority_code 默认继承父任务；若任务太小，设置 no_breakdown_needed=true。只提交提案，不要执行。如果用户对提案提出修改意见，请带上上一次工具返回的 draft_id 再次调用 workbench_propose_subtasks 更新同一份提案。`
+            ? `你是“个人工作台”的任务拆解助手。请分析下面这个任务，并调用 workbench_propose_subtasks 提交子任务提案。\n\n父任务 id：${task?.id}\n任务标题：${task?.title}\n任务描述：${task?.description || '（无）'}\n类型：${task?.typeCode} 优先级：${task?.priorityCode} 截止：${task?.effectiveDueAt ?? task?.dueAt ?? '无'}\n${memoryContext !== '' ? `\n任务共享记忆（同一任务/子树）：\n${memoryContext}` : ''}\n\n粒度规则：每层 2-6 个、最大深度 3 层、叶子 15-240 分钟且有可验证完成标准；子任务的 type_code/priority_code 默认继承父任务；若任务太小，设置 no_breakdown_needed=true。只提交提案，不要执行。如果用户对提案提出修改意见，请带上上一次工具返回的 draft_id 再次调用 workbench_propose_subtasks 更新同一份提案。`
             : mode === 'review'
               ? `你是“个人工作台”的任务复盘助手。请对下面这个已完成任务做复盘：\n\n任务 id：${task?.id}\n任务标题：${task?.title}\n任务描述：${task?.description || '（无）'}\n类型：${task?.typeCode} 优先级：${task?.priorityCode}\n${memoryContext !== '' ? `\n任务共享记忆（同一任务/子树）：\n${memoryContext}` : ''}\n\n请从“做得好 / 做得不好 / 下次改进”三个角度输出 Markdown，并调用 workbench_submit_review(task_id="${task?.id ?? ''}", summary_md="...", lessons=[{"title":"...","content":"..."}])。`
-              : `你是“个人工作台”的任务执行助手。请直接完成下面这个任务，不要反复确认已知信息。\n\n任务 id：${task?.id}\n任务标题：${task?.title}\n任务描述：${task?.description || '（无）'}\n类型：${task?.typeCode} 优先级：${task?.priorityCode}\n截止：${task?.dueAt ?? '无'}\n${memoryContext !== '' ? `\n任务共享记忆（同一任务/子树，父任务会话会看到整棵子树上下文）：\n${memoryContext}` : ''}\n${previousSessions.length > 0 ? `\n该任务此前已有执行会话：${previousSessions.map((s) => String(s.session_id ?? '')).filter((x) => x !== '').join('、')}\n若这些会话有未完成上下文，请先向用户索取上一会话的总结/未完成事项再继续，不要重复已完成工作。` : ''}\n\n执行过程中请遵守：\n- 如果有关键上下文、阶段性结论、决策或未完成事项，请调用 workbench_save_task_memory(task_id="${task?.id ?? ''}", content="...", kind="note|decision|summary") 写入任务共享记忆，便于后续会话续作。\n- 若当前任务是父任务，且你直接完成父任务，验收通过后系统会级联完成所有未完成子任务。\n- 完成后调用 workbench_request_completion(task_id="${task?.id ?? ''}", summary="2-4句完成总结")，等待用户在个人工作台验收；在用户验收通过前，任务不算完成，不要声称已经完成。若任务无法完成，如实说明原因，不要提交验收。`
+              : `你是“个人工作台”的任务执行助手。请直接完成下面这个任务，不要反复确认已知信息。\n\n任务 id：${task?.id}\n任务标题：${task?.title}\n任务描述：${task?.description || '（无）'}\n类型：${task?.typeCode} 优先级：${task?.priorityCode}\n截止：${task?.effectiveDueAt ?? task?.dueAt ?? '无'}\n${memoryContext !== '' ? `\n任务共享记忆（同一任务/子树，父任务会话会看到整棵子树上下文）：\n${memoryContext}` : ''}\n${previousSessions.length > 0 ? `\n该任务此前已有执行会话：${previousSessions.map((s) => String(s.session_id ?? '')).filter((x) => x !== '').join('、')}\n若这些会话有未完成上下文，请先向用户索取上一会话的总结/未完成事项再继续，不要重复已完成工作。` : ''}\n\n执行过程中请遵守：\n- 如果有关键上下文、阶段性结论、决策或未完成事项，请调用 workbench_save_task_memory(task_id="${task?.id ?? ''}", content="...", kind="note|decision|summary") 写入任务共享记忆，便于后续会话续作。\n- 若当前任务是父任务，且你直接完成父任务，验收通过后系统会级联完成所有未完成子任务。\n- 完成后调用 workbench_request_completion(task_id="${task?.id ?? ''}", summary="2-4句完成总结")，等待用户在个人工作台验收；在用户验收通过前，任务不算完成，不要声称已经完成。若任务无法完成，如实说明原因，不要提交验收。`
       if (mode === 'execute') {
         if (task === null) throw new Error('执行模式需要选择一个任务')
         if (task.statusCode === 'done' || task.statusCode === 'cancelled') throw new Error('该任务已完成或已取消，不能再次执行')
@@ -1302,8 +1303,8 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
     return Array.from({ length: 42 }, (_, i) => { const d = new Date(start); d.setDate(d.getDate() + i); return d })
   })()
   const moveMonth = (delta: number): void => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() + delta, 1))
-  const noDueOpen = tasks.filter((t) => t.dueAt === null && t.statusCode !== 'done' && t.statusCode !== 'cancelled')
-  const planKeep = (t: Task): boolean => (t.dueAt !== null && sameDay(new Date(t.dueAt), picked) && t.statusCode !== 'cancelled') || (sameDay(picked, now) && noDueOpen.some((x) => x.id === t.id))
+  const noDueOpen = tasks.filter((t) => t.effectiveDueAt === null && t.statusCode !== 'done' && t.statusCode !== 'cancelled')
+  const planKeep = (t: Task): boolean => (t.effectiveDueAt !== null && sameDay(new Date(t.effectiveDueAt), picked) && t.statusCode !== 'cancelled') || (sameDay(picked, now) && noDueOpen.some((x) => x.id === t.id))
   const doneKeep = (t: Task): boolean => t.completedAt !== null && sameDay(new Date(t.completedAt), picked)
   const pickedPlanOrder = useMemo(() => {
     if (pickedPlan === null || pickedPlan.items.length === 0) return undefined
@@ -1468,7 +1469,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
               {calMode === 'week' && (
                 <div className="wb-week">
                   {weekDays.map((d) => {
-                    const n = tasks.filter((t) => t.dueAt !== null && sameDay(new Date(t.dueAt), d) && t.statusCode !== 'cancelled').length
+                    const n = tasks.filter((t) => t.effectiveDueAt !== null && sameDay(new Date(t.effectiveDueAt), d) && t.statusCode !== 'cancelled').length
                     return (
                       <div key={d.toISOString()} className={`wb-day ${sameDay(d, now) ? 'today' : ''} ${sameDay(d, picked) ? 'selected' : ''}`} onClick={() => setPicked(startOfDay(d))}>
                         <div style={{ fontSize: 12, color: '#999' }}>{d.getMonth() + 1}/{d.getDate()}</div>
@@ -1483,7 +1484,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                   {monthGrid.map((d) => (
                     <div key={d.toISOString()} className={`wb-mday ${d.getMonth() !== cursor.getMonth() ? 'other' : ''} ${sameDay(d, now) ? 'today' : ''} ${sameDay(d, picked) ? 'selected' : ''}`} onClick={() => setPicked(startOfDay(d))}>
                       <div style={{ fontSize: 12 }}>{d.getDate()}</div>
-                      {tasks.some((t) => t.dueAt !== null && sameDay(new Date(t.dueAt), d)) && <div className="wb-chip" style={{ background: '#4f8ef7', marginTop: 2 }}>•</div>}
+                      {tasks.some((t) => t.effectiveDueAt !== null && sameDay(new Date(t.effectiveDueAt), d)) && <div className="wb-chip" style={{ background: '#4f8ef7', marginTop: 2 }}>•</div>}
                     </div>
                   ))}
                 </div>
@@ -1854,7 +1855,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                           </label>
                         </div>
                       )}
-                      <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>截止：{selected.task.dueAt === null ? '无' : fmtTime(selected.task.dueAt)}</div>
+                      <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>截止：{selected.task.effectiveDueAt === null ? '无' : fmtTime(selected.task.effectiveDueAt)}{selected.task.dueAt === null && selected.task.effectiveDueAt !== null ? '（继承父任务）' : ''}</div>
                       <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>AI 工作区：{selected.task.workspacePath ?? (settings.defaultWorkspace || '默认工作区未设置')}</div>
                       <div style={{ fontSize: 12, color: '#999', marginBottom: 10 }}>
                         重复：{dicts.find((d) => d.kind === 'recurrence' && d.code === (selected.task.recurrenceCode ?? 'none'))?.name ?? '不重复'}
@@ -1956,7 +1957,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                 <div className="wb-card">
                   <h4>提醒（{selected.reminders.length}）</h4>
                   {selected.reminders.map((r) => <div key={r.id} style={{ fontSize: 12, color: '#999', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 5 }}><Icon name="bell" size={13} />{r.offsetMinutes === 0 ? '准时（截止时间）' : `提前 ${r.offsetMinutes} 分钟`} · {r.methodCode === 'os' ? '系统通知' : '页面/桌面通知'} · {r.firedAt === null ? '未触发' : `已触发 ${fmtTime(r.firedAt)}`}</div>)}
-                  {selected.task.dueAt === null
+                  {selected.task.effectiveDueAt === null
                     ? <div style={{ fontSize: 12, color: '#999' }}>任务还没有截止时间，请先在详情里设置截止时间，再添加提醒。</div>
                     : selected.task.statusCode === 'done' || selected.task.statusCode === 'cancelled'
                       ? <div style={{ fontSize: 12, color: '#999' }}>已完成/已取消的任务不再提醒。</div>

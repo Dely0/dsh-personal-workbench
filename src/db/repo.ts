@@ -74,6 +74,8 @@ export interface TaskRow {
   priorityCode: string
   aiPolicyCode: string
   dueAt: string | null
+  /** 动态有效截止时间：优先自身 dueAt，未设置时向上继承最近一个有截止时间的祖先。 */
+  effectiveDueAt: string | null
   allDay: number
   estimatedMinutes: number | null
   source: string
@@ -130,9 +132,27 @@ interface RawTaskRow {
   cancelled_at: string | null
 }
 
-function parseTask(row: RawTaskRow | undefined): TaskRow | undefined {
+/** 递归向上查找最近一个有截止时间的祖先（含自身）。带深度/防环保护。 */
+function effectiveDueAtForTask(db: DatabaseSync, task: Pick<TaskRow, 'id' | 'parentId' | 'dueAt'>): string | null {
+  if (task.dueAt !== null) return task.dueAt
+  const seen = new Set<string>([task.id])
+  let cursorId = task.parentId
+  let guard = 0
+  while (cursorId !== null && guard < 64) {
+    if (seen.has(cursorId)) return null
+    seen.add(cursorId)
+    const row = db.prepare('SELECT id, parent_id, due_at FROM tasks WHERE id = ?').get(cursorId) as { id: string; parent_id: string | null; due_at: string | null } | undefined
+    if (row === undefined) return null
+    if (row.due_at !== null) return row.due_at
+    cursorId = row.parent_id
+    guard += 1
+  }
+  return null
+}
+
+function parseTask(row: RawTaskRow | undefined, db?: DatabaseSync): TaskRow | undefined {
   if (row === undefined) return undefined
-  return {
+  const task: TaskRow = {
     id: row.id,
     parentId: row.parent_id,
     title: row.title,
@@ -142,6 +162,7 @@ function parseTask(row: RawTaskRow | undefined): TaskRow | undefined {
     priorityCode: row.priority_code,
     aiPolicyCode: row.ai_policy_code,
     dueAt: row.due_at,
+    effectiveDueAt: db === undefined ? row.due_at : effectiveDueAtForTask(db, { id: row.id, parentId: row.parent_id, dueAt: row.due_at }),
     allDay: row.all_day,
     estimatedMinutes: row.estimated_minutes,
     source: row.source,
@@ -157,6 +178,7 @@ function parseTask(row: RawTaskRow | undefined): TaskRow | undefined {
     completedAt: row.completed_at,
     cancelledAt: row.cancelled_at,
   }
+  return task
 }
 
 export function appendEvent(
@@ -231,6 +253,7 @@ export function createTask(db: DatabaseSync, input: TaskInput, actor = 'user', a
     priorityCode: input.priorityCode,
     aiPolicyCode: input.aiPolicyCode ?? 'consult',
     dueAt: input.dueAt ?? null,
+    effectiveDueAt: null,
     allDay: input.allDay ? 1 : 0,
     estimatedMinutes: input.estimatedMinutes ?? null,
     source: input.source ?? 'manual',
@@ -246,6 +269,7 @@ export function createTask(db: DatabaseSync, input: TaskInput, actor = 'user', a
     completedAt: input.statusCode === 'done' ? at : null,
     cancelledAt: input.statusCode === 'cancelled' ? at : null,
   }
+  task.effectiveDueAt = effectiveDueAtForTask(db, task)
   db.prepare(`
     INSERT INTO tasks
       (id, parent_id, title, description, type_code, status_code, priority_code,
@@ -265,7 +289,7 @@ export function createTask(db: DatabaseSync, input: TaskInput, actor = 'user', a
 }
 
 export function getTask(db: DatabaseSync, id: string): TaskRow | undefined {
-  return parseTask(db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as RawTaskRow | undefined)
+  return parseTask(db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as RawTaskRow | undefined, db)
 }
 
 export function listTasks(db: DatabaseSync, opts: { includeArchived?: boolean; parentId?: string | null } = {}): TaskRow[] {
@@ -277,7 +301,7 @@ export function listTasks(db: DatabaseSync, opts: { includeArchived?: boolean; p
   const priorityWeights = new Map(listDictionaries(db, 'priority').map((entry) => [entry.code, Number(entry.config.weight ?? 99)]))
   return all
     .filter((row) => includeArchived || row.archived === 0)
-    .map((row) => parseTask(row))
+    .map((row) => parseTask(row, db))
     .filter((task): task is TaskRow => task !== undefined)
     .sort((a, b) => {
       const rank = (task: TaskRow): number => {
@@ -286,10 +310,10 @@ export function listTasks(db: DatabaseSync, opts: { includeArchived?: boolean; p
       }
       const rankDiff = rank(a) - rank(b)
       if (rankDiff !== 0) return rankDiff
-      if (a.dueAt === null && b.dueAt === null) return a.createdAt.localeCompare(b.createdAt)
-      if (a.dueAt === null) return 1
-      if (b.dueAt === null) return -1
-      return a.dueAt.localeCompare(b.dueAt)
+      if (a.effectiveDueAt === null && b.effectiveDueAt === null) return a.createdAt.localeCompare(b.createdAt)
+      if (a.effectiveDueAt === null) return 1
+      if (b.effectiveDueAt === null) return -1
+      return a.effectiveDueAt.localeCompare(b.effectiveDueAt)
     })
 }
 
@@ -320,6 +344,7 @@ export function updateTask(db: DatabaseSync, id: string, patch: TaskPatch, actor
     completedAt: patch.statusCode === 'done' ? at : patch.statusCode !== undefined ? null : before.completedAt,
     cancelledAt: patch.statusCode === 'cancelled' ? at : patch.statusCode !== undefined ? null : before.cancelledAt,
   }
+  next.effectiveDueAt = effectiveDueAtForTask(db, next)
   db.prepare(`
     UPDATE tasks SET
       title = ?, description = ?, type_code = ?, status_code = ?, priority_code = ?,
@@ -872,25 +897,40 @@ export interface DueReminder {
 export function listDueReminders(db: DatabaseSync, now = new Date()): DueReminder[] {
   const rows = db.prepare(`
     SELECT r.id AS reminder_id, r.task_id, r.offset_minutes, r.method_code,
-           t.title, t.due_at
+           t.title, t.due_at, t.parent_id
     FROM task_reminders r
     JOIN tasks t ON t.id = r.task_id
     WHERE r.enabled = 1 AND r.fired_at IS NULL
       AND t.archived = 0
       AND t.status_code NOT IN ('done', 'cancelled')
-      AND t.due_at IS NOT NULL
   `).all() as Array<{
     reminder_id: string
     task_id: string
     offset_minutes: number
     method_code: string
     title: string
-    due_at: string
+    due_at: string | null
+    parent_id: string | null
   }>
   const nowMs = now.getTime()
-  return rows
+  const candidates = rows
+    .map((row) => {
+      const effectiveDueAt = effectiveDueAtForTask(db, { id: row.task_id, parentId: row.parent_id, dueAt: row.due_at })
+      return { ...row, effectiveDueAt }
+    })
+    .filter((row): row is {
+      reminder_id: string
+      task_id: string
+      offset_minutes: number
+      method_code: string
+      title: string
+      due_at: string | null
+      parent_id: string | null
+      effectiveDueAt: string
+    } => row.effectiveDueAt !== null)
+  return candidates
     .filter((row) => {
-      const dueMs = Date.parse(row.due_at)
+      const dueMs = Date.parse(row.effectiveDueAt)
       if (!Number.isFinite(dueMs)) return false
       return nowMs >= dueMs - row.offset_minutes * 60_000
     })
@@ -898,7 +938,7 @@ export function listDueReminders(db: DatabaseSync, now = new Date()): DueReminde
       reminderId: row.reminder_id,
       taskId: row.task_id,
       title: row.title,
-      dueAt: row.due_at,
+      dueAt: row.effectiveDueAt,
       offsetMinutes: row.offset_minutes,
       methodCode: row.method_code,
     }))
@@ -1377,7 +1417,7 @@ export function ensureRecurringInstances(db: DatabaseSync, today = localDateStri
     SELECT * FROM tasks
     WHERE recurrence_code IN ('daily', 'weekly', 'monthly')
       AND archived = 0 AND status_code NOT IN ('done', 'cancelled')
-  `).all() as unknown as RawTaskRow[]).map((row) => parseTask(row)).filter((task): task is TaskRow => task !== undefined)
+  `).all() as unknown as RawTaskRow[]).map((row) => parseTask(row, db)).filter((task): task is TaskRow => task !== undefined)
 
   let created = 0
   db.exec('BEGIN')

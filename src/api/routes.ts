@@ -232,10 +232,10 @@ export function makeRoutes(db: DatabaseSync): WebRoute[] {
         ensureRecurringInstances(db, localDateString(now))
         const tasks = listTasks(db)
         const overdue = tasks.filter((task) =>
-          task.statusCode !== 'done' && task.statusCode !== 'cancelled' && task.dueAt !== null && Date.parse(task.dueAt) < now.getTime())
+          task.statusCode !== 'done' && task.statusCode !== 'cancelled' && task.effectiveDueAt !== null && Date.parse(task.effectiveDueAt) < now.getTime())
         const todayDue = tasks.filter((task) =>
-          task.statusCode !== 'done' && task.statusCode !== 'cancelled' && task.dueAt !== null &&
-          Date.parse(task.dueAt) >= Date.parse(start) && Date.parse(task.dueAt) < Date.parse(end))
+          task.statusCode !== 'done' && task.statusCode !== 'cancelled' && task.effectiveDueAt !== null &&
+          Date.parse(task.effectiveDueAt) >= Date.parse(start) && Date.parse(task.effectiveDueAt) < Date.parse(end))
         const doing = tasks.filter((task) => task.statusCode === 'doing' || task.statusCode === 'blocked')
         const plan = getDailyPlan(db, localDateString(now))
         const planView = plan === undefined ? null : {

@@ -144,6 +144,45 @@ test('db migrations, dictionaries and task tree', () => {
   }
 })
 
+test('effective due date dynamically inherits nearest ancestor due', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-personal-workbench-effective-due-'))
+  try {
+    const db = openWorkbenchDb({ dbPath: join(dir, 'workbench.db') })
+    seedDictionaries(db)
+
+    const parent = createTask(db, { title: 'parent', typeCode: 'code_impl', priorityCode: 'p1', dueAt: '2026-08-20T10:00:00+08:00' })
+    const child = createTask(db, { title: 'child', typeCode: 'code_impl', priorityCode: 'p1', parentId: parent.id })
+    const grandchild = createTask(db, { title: 'grandchild', typeCode: 'code_impl', priorityCode: 'p1', parentId: child.id })
+    assert.equal(getTask(db, child.id).effectiveDueAt, parent.dueAt)
+    assert.equal(getTask(db, grandchild.id).effectiveDueAt, parent.dueAt)
+    assert.ok(listTasks(db).every((t) => typeof t.effectiveDueAt === 'string' || t.effectiveDueAt === null))
+
+    // 父任务修改截止时间后，未单独设置截止时间的后代自动更新
+    updateTask(db, parent.id, { dueAt: '2026-08-21T09:00:00+08:00' })
+    assert.equal(getTask(db, child.id).effectiveDueAt, '2026-08-21T09:00:00+08:00')
+    assert.equal(getTask(db, grandchild.id).effectiveDueAt, '2026-08-21T09:00:00+08:00')
+
+    // 已单独设置截止时间的子任务不受父任务修改影响
+    const explicitChild = createTask(db, { title: 'explicit child', typeCode: 'code_impl', priorityCode: 'p1', parentId: parent.id, dueAt: '2026-08-22T08:00:00+08:00' })
+    updateTask(db, parent.id, { dueAt: '2026-08-23T08:00:00+08:00' })
+    assert.equal(getTask(db, explicitChild.id).effectiveDueAt, '2026-08-22T08:00:00+08:00')
+
+    // 父任务清空截止时间后，未单独设置截止时间的后代继续继承更上层祖先（如有）
+    const top = createTask(db, { title: 'top', typeCode: 'code_impl', priorityCode: 'p1', dueAt: '2026-08-24T08:00:00+08:00' })
+    const mid = createTask(db, { title: 'mid', typeCode: 'code_impl', priorityCode: 'p1', parentId: top.id, dueAt: '2026-08-25T08:00:00+08:00' })
+    const leaf = createTask(db, { title: 'leaf', typeCode: 'code_impl', priorityCode: 'p1', parentId: mid.id })
+    assert.equal(getTask(db, leaf.id).effectiveDueAt, mid.dueAt)
+    updateTask(db, mid.id, { dueAt: null })
+    assert.equal(getTask(db, leaf.id).effectiveDueAt, top.dueAt)
+    updateTask(db, top.id, { dueAt: null })
+    assert.equal(getTask(db, leaf.id).effectiveDueAt, null)
+
+    db.close()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('status cascade aggregation, repair and shared memory', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-personal-workbench-cascade-'))
   try {

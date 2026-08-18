@@ -77,6 +77,15 @@ test('task sorter: dueAt asc/desc uses dueAt, then completedAt for done tasks, n
   assert.deepEqual([early, none, late, doneNoDue].sort(createTaskSorter('dueAt', 'desc')).map((t) => t.id), ['b', 'd', 'a', 'c'])
 })
 
+test('task sorter: dueAt uses effectiveDueAt when own dueAt is null', () => {
+  const inheritedEarly = task('a', { dueAt: null, effectiveDueAt: '2024-01-01T00:00:00.000Z' })
+  const ownLate = task('b', { dueAt: '2024-06-01T00:00:00.000Z' })
+  const inheritedLater = task('c', { dueAt: null, effectiveDueAt: '2024-07-01T00:00:00.000Z' })
+
+  assert.deepEqual([inheritedLater, ownLate, inheritedEarly].sort(createTaskSorter('dueAt', 'asc')).map((t) => t.id), ['a', 'b', 'c'])
+  assert.deepEqual([inheritedEarly, inheritedLater, ownLate].sort(createTaskSorter('dueAt', 'desc')).map((t) => t.id), ['c', 'b', 'a'])
+})
+
 test('task sorter: priority asc means high priority first, desc means low priority first', () => {
   const weights = new Map([['p0', 0], ['p1', 1], ['p2', 2], ['p3', 3]])
   const p0 = task('a', { priorityCode: 'p0' })

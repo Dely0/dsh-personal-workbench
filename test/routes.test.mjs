@@ -75,6 +75,37 @@ test('manual plan editing PUT saves added task instead of returning not found', 
   })
 })
 
+test('task API returns effectiveDueAt inherited from ancestors and PATCH updates descendants dynamically', async () => {
+  await withServer(async ({ db, request }) => {
+    const parent = createTask(db, { title: 'due parent', typeCode: 'code_impl', priorityCode: 'p1', dueAt: '2026-08-20T10:00:00+08:00' })
+    const child = createTask(db, { title: 'no-due child', typeCode: 'code_impl', priorityCode: 'p1', parentId: parent.id })
+    const grandchild = createTask(db, { title: 'no-due grandchild', typeCode: 'code_impl', priorityCode: 'p1', parentId: child.id })
+
+    const list = await request('GET', '/api/workbench/tasks')
+    assert.equal(list.status, 200)
+    const byId = new Map(list.body.tasks.map((t) => [t.id, t]))
+    assert.equal(byId.get(child.id).effectiveDueAt, parent.dueAt)
+    assert.equal(byId.get(grandchild.id).effectiveDueAt, parent.dueAt)
+
+    const detail = await request('GET', `/api/workbench/tasks/${child.id}`)
+    assert.equal(detail.status, 200)
+    assert.equal(detail.body.task.effectiveDueAt, parent.dueAt)
+    assert.equal(detail.body.children[0].effectiveDueAt, parent.dueAt)
+
+    const patch = await request('PATCH', `/api/workbench/tasks/${parent.id}`, { dueAt: '2026-08-21T09:00:00+08:00' })
+    assert.equal(patch.status, 200)
+    assert.equal(patch.body.task.effectiveDueAt, '2026-08-21T09:00:00+08:00')
+    const after = await request('GET', `/api/workbench/tasks/${grandchild.id}`)
+    assert.equal(after.body.task.effectiveDueAt, '2026-08-21T09:00:00+08:00')
+
+    const clear = await request('PATCH', `/api/workbench/tasks/${parent.id}`, { dueAt: null })
+    assert.equal(clear.status, 200)
+    assert.equal(clear.body.task.effectiveDueAt, null)
+    const clearedChild = await request('GET', `/api/workbench/tasks/${grandchild.id}`)
+    assert.equal(clearedChild.body.task.effectiveDueAt, null)
+  })
+})
+
 test('manual plan editing PUT removes an item and keeps remaining done task', async () => {
   await withServer(async ({ db, request }) => {
     const normal = createTask(db, { title: 'normal plan item', typeCode: 'code_impl', priorityCode: 'p2' })
