@@ -1047,9 +1047,6 @@ export function updateDailyPlan(
     .map((item, index) => {
       const task = getTask(db, item.taskId)
       if (task === undefined) throw new Error(`daily_plan contains unknown task ${item.taskId}`)
-      if (task.archived === 1 || task.statusCode === 'done' || task.statusCode === 'cancelled') {
-        throw new Error(`daily_plan task「${task.title}」is archived or closed`)
-      }
       return {
         taskId: item.taskId,
         order: typeof item.order === 'number' && Number.isFinite(item.order) ? item.order : index + 1,
@@ -1099,9 +1096,6 @@ export function confirmDailyPlanDraft(db: DatabaseSync, draftId: string, at = no
     const taskId = typeof raw.taskId === 'string' ? raw.taskId : ''
     const task = getTask(db, taskId)
     if (task === undefined) throw new Error(`daily_plan contains unknown task ${taskId}`)
-    if (task.archived === 1 || task.statusCode === 'done' || task.statusCode === 'cancelled') {
-      throw new Error(`daily_plan task「${task.title}」is archived or closed`)
-    }
     items.push({ taskId, order: typeof raw.order === 'number' ? raw.order : items.length + 1, title: task.title, note: typeof raw.note === 'string' ? raw.note : '' })
   }
   db.exec('BEGIN')
