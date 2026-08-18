@@ -476,7 +476,26 @@ export function restoreTask(db: DatabaseSync, id: string, actor = 'user'): TaskR
 }
 
 export function listArchivedTasks(db: DatabaseSync): TaskRow[] {
-  return listTasks(db, { includeArchived: true }).filter((task) => task.archived === 1)
+  const all = listTasks(db, { includeArchived: true })
+  const archivedIds = all.filter((task) => task.archived === 1).map((task) => task.id)
+  if (archivedIds.length === 0) return []
+  const byParent = new Map<string | null, TaskRow[]>()
+  for (const task of all) {
+    const list = byParent.get(task.parentId) ?? []
+    list.push(task)
+    byParent.set(task.parentId, list)
+  }
+  const included = new Set<string>(archivedIds)
+  const stack = [...archivedIds]
+  while (stack.length > 0) {
+    const id = stack.pop()!
+    for (const child of byParent.get(id) ?? []) {
+      if (included.has(child.id)) continue
+      included.add(child.id)
+      stack.push(child.id)
+    }
+  }
+  return all.filter((task) => included.has(task.id))
 }
 
 export function listTaskEvents(db: DatabaseSync, taskId: string): Array<Record<string, unknown>> {

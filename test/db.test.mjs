@@ -41,6 +41,9 @@ test('db migrations, dictionaries and task tree', () => {
     updateTask(db, parent.id, { archived: true })
     assert.equal(listTasks(db).some((t) => t.id === parent.id), false)
     assert.equal(listArchivedTasks(db).some((t) => t.id === parent.id), true)
+    // 归档列表应能展示归档任务的整棵子树（子任务即使未单独归档也随父任务可见）
+    assert.equal(listArchivedTasks(db).some((t) => t.id === child.id), true)
+    assert.equal(listArchivedTasks(db).length, 2)
 
     // V2 daily plan: draft -> confirm -> persisted per date, replace & delete work
     const planDate = localDateString()

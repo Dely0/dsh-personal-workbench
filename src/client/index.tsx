@@ -1615,7 +1615,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
               </div>
               <div className="wb-list">
                 {archivedMode
-                  ? archivedTasks.map((t) => <TaskRow key={t.id} task={t} dicts={dicts} onOpen={openTask} selected={selected?.task.id === t.id} />)
+                  ? <TaskTreeRows roots={buildTaskTree(archivedTasks)} depth={0} expanded={expanded} toggle={toggleExpanded} dicts={dicts} onOpen={openTask} selectedId={selected?.task.id} />
                   : <TaskTreeRows roots={buildTaskTree(tasks)} depth={0} expanded={expanded} toggle={toggleExpanded} dicts={dicts} onOpen={openTask} selectedId={selected?.task.id} />}
                 {archivedMode && archivedTasks.length === 0 && <div className="wb-empty">没有归档任务</div>}
                 {!archivedMode && tasks.length === 0 && <div className="wb-empty">还没有任务，点“快速录入”或“新建”开始</div>}
