@@ -827,7 +827,7 @@ export function makeRoutes(db: DatabaseSync): WebRoute[] {
         writeJson(res, 200, {
           ok: true,
           name: '@dely0/dsh-personal-workbench',
-          version: '1.5.0',
+          version: '1.5.1',
           db: {
             schemaVersion: versionRow?.value ?? 'unknown',
             taskCount: listTasks(db, { includeArchived: true }).length,
