@@ -430,7 +430,7 @@ function TaskRow({ task, dicts, onOpen, selected, bare = false }: { task: Task; 
   )
 }
 
-function MultiSelectDropdown({ label, options, selected, open, onToggle, onClose, onChange }: {
+function MultiSelectDropdown({ label, options, selected, open, onToggle, onClose, onChange, alignRight = false }: {
   label: string
   options: Dict[]
   selected: string[]
@@ -438,6 +438,7 @@ function MultiSelectDropdown({ label, options, selected, open, onToggle, onClose
   onToggle: () => void
   onClose: () => void
   onChange: (codes: string[]) => void
+  alignRight?: boolean
 }): JSX.Element {
   const toggleCode = (code: string): void => {
     onChange(selected.includes(code) ? selected.filter((c) => c !== code) : [...selected, code])
@@ -456,7 +457,7 @@ function MultiSelectDropdown({ label, options, selected, open, onToggle, onClose
       {open && (
         <>
           <div style={{ position: 'fixed', inset: 0, zIndex: 20 }} onClick={onClose} />
-          <div style={{ position: 'absolute', top: 'calc(100% + 4px)', left: 0, zIndex: 30, minWidth: 240, maxHeight: 320, overflowY: 'auto', background: 'var(--dsw-alias-bg-layer-2, #1c1c1f)', border: '1px solid var(--dsw-alias-border-l1, rgba(255,255,255,.22))', borderRadius: 10, padding: 6, boxShadow: '0 12px 32px rgba(0,0,0,.45)' }}>
+          <div style={{ position: 'absolute', top: 'calc(100% + 4px)', left: alignRight ? undefined : 0, right: alignRight ? 0 : undefined, zIndex: 30, minWidth: 240, maxHeight: 320, overflowY: 'auto', background: 'var(--dsw-alias-bg-layer-2, #1c1c1f)', border: '1px solid var(--dsw-alias-border-l1, rgba(255,255,255,.22))', borderRadius: 10, padding: 6, boxShadow: '0 12px 32px rgba(0,0,0,.45)' }}>
             {selected.length > 0 && (
               <div style={{ padding: '6px 8px 8px', borderBottom: '1px solid var(--dsw-alias-border-l1, rgba(255,255,255,.12))', marginBottom: 6 }}>
                 <div style={{ fontSize: 11, color: 'var(--dsw-alias-label-secondary)', marginBottom: 4 }}>已选（{selected.length}）</div>
@@ -1687,6 +1688,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                   onToggle={() => setOpenFilter((prev) => prev === 'type' ? null : 'type')}
                   onClose={() => setOpenFilter(null)}
                   onChange={(codes) => setTaskFilter((prev) => ({ ...prev, typeCodes: codes }))}
+                  alignRight
                 />
               </div>
               <div style={{ display: 'flex', gap: 8, marginBottom: 8, alignItems: 'center', flexWrap: 'wrap' }}>
