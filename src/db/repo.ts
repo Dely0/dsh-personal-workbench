@@ -1014,6 +1014,55 @@ export function saveDailyPlan(db: DatabaseSync, input: DailyPlanInput, at = nowI
   return getDailyPlan(db, input.planDate)!
 }
 
+/** 手动编辑计划：更新顺序/备注/成员，并标记来源为 manual；不存在时按 manual 新建。 */
+export function updateDailyPlan(
+  db: DatabaseSync,
+  planDate: string,
+  input: { summary?: string; items: Array<{ taskId: string; order?: number; note?: string }>; sourceCode?: string; sessionId?: string | null },
+  at = nowIso(),
+): DailyPlanRow {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(planDate)) throw new Error('planDate must be YYYY-MM-DD')
+  if (input.items.length === 0) throw new Error('daily_plan requires at least one item')
+  const existing = getDailyPlan(db, planDate)
+  const items = input.items
+    .map((item, index) => {
+      const task = getTask(db, item.taskId)
+      if (task === undefined) throw new Error(`daily_plan contains unknown task ${item.taskId}`)
+      if (task.archived === 1 || task.statusCode === 'done' || task.statusCode === 'cancelled') {
+        throw new Error(`daily_plan task「${task.title}」is archived or closed`)
+      }
+      return {
+        taskId: item.taskId,
+        order: typeof item.order === 'number' && Number.isFinite(item.order) ? item.order : index + 1,
+        title: task.title,
+        note: item.note ?? '',
+      }
+    })
+    .sort((a, b) => a.order - b.order)
+  if (existing === undefined) {
+    return saveDailyPlan(db, {
+      planDate,
+      summary: input.summary ?? '',
+      items,
+      sourceCode: input.sourceCode ?? 'manual',
+      sessionId: input.sessionId ?? null,
+    }, at)
+  }
+  db.prepare(`
+    UPDATE daily_plans
+    SET summary = ?, items_json = ?, source_code = ?, session_id = ?, updated_at = ?
+    WHERE plan_date = ?
+  `).run(
+    input.summary ?? existing.summary,
+    JSON.stringify(items),
+    input.sourceCode ?? 'manual',
+    input.sessionId ?? null,
+    at,
+    planDate,
+  )
+  return getDailyPlan(db, planDate)!
+}
+
 export function deleteDailyPlan(db: DatabaseSync, planDate: string): boolean {
   return db.prepare('DELETE FROM daily_plans WHERE plan_date = ?').run(planDate).changes > 0
 }

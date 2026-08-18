@@ -63,7 +63,7 @@ html[${PENDING_ATTR}] [${ENTRY_ATTR}]::after { content:''; position:absolute; to
 .wb-plan-item { display:flex; align-items:center; margin:7px 0; font-size:13.5px; }
 .wb-plan-num { display:inline-flex; width:20px; height:20px; border-radius:50%; background: color-mix(in srgb, var(--dsw-alias-state-business-primary, #8fa8c8) 16%, transparent); border:1px solid color-mix(in srgb, var(--dsw-alias-state-business-primary, #8fa8c8) 40%, transparent); color:var(--dsw-alias-label-primary); font-size:11px; font-weight:700; align-items:center; justify-content:center; margin-right:8px; flex:none; }
 .wb-plan-note { color:var(--dsw-alias-label-secondary); margin-left:8px; font-size:12.5px; }
-.wb-plan-scroll { max-height:min(40vh,420px); overflow-y:auto; overscroll-behavior:contain; scrollbar-width:thin; scrollbar-color: color-mix(in srgb, var(--dsw-alias-label-primary, #888) 38%, transparent) transparent; padding-right:4px; }
+.wb-plan-scroll { max-height:min(27vh,280px); overflow-y:auto; overscroll-behavior:contain; scrollbar-width:thin; scrollbar-color: color-mix(in srgb, var(--dsw-alias-label-primary, #888) 38%, transparent) transparent; padding-right:4px; }
 .wb-plan-scroll::-webkit-scrollbar { width:8px; }
 .wb-plan-scroll::-webkit-scrollbar-track { background:transparent; }
 .wb-plan-scroll::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--dsw-alias-label-primary, #888) 38%, transparent); border-radius:4px; }
@@ -81,6 +81,16 @@ html[${PENDING_ATTR}] [${ENTRY_ATTR}]::after { content:''; position:absolute; to
 .wb-plan-act.defer { color:color-mix(in srgb, #d9a03f 85%, #fff); border-color:color-mix(in srgb, #d9a03f 45%, transparent); }
 .wb-plan-item.closed { opacity:.55; }
 .wb-plan-item.closed b { text-decoration:line-through; }
+.wb-plan-edit-note { flex:1 1 36%; min-width:0; background:var(--dsw-alias-bg-base,#17171a); border:1px solid var(--dsw-alias-border-l1, rgba(255,255,255,.18)); color:inherit; border-radius:6px; padding:3px 7px; font-size:12px; }
+.wb-plan-edit-actions { display:inline-flex; gap:4px; flex:none; margin-left:6px; }
+.wb-plan-edit-actions .wb-btn { padding:2px 7px; font-size:11px; }
+.wb-plan-add { max-width:220px; background:var(--dsw-alias-bg-base,#17171a); border:1px solid var(--dsw-alias-border-l1, rgba(255,255,255,.18)); color:inherit; border-radius:8px; padding:5px 8px; font-size:12px; }
+.wb-modal-mask { position:fixed; inset:0; z-index:200; background:rgba(0,0,0,.55); display:flex; align-items:center; justify-content:center; }
+.wb-modal { width:min(520px, 92vw); background:var(--dsw-alias-bg-layer-2, #1c1c1f); border:1px solid var(--dsw-alias-border-l1, rgba(255,255,255,.25)); border-radius:14px; padding:18px; box-shadow:0 18px 50px rgba(0,0,0,.4); color:var(--dsw-alias-label-primary, #eee); font-family:var(--dsw-font-family, system-ui); }
+.wb-modal h4 { margin:0 0 8px; }
+.wb-modal p { margin:0 0 12px; font-size:12.5px; color:var(--dsw-alias-label-secondary); }
+.wb-modal textarea { width:100%; min-height:110px; box-sizing:border-box; background:var(--dsw-alias-bg-base,#17171a); border:1px solid var(--dsw-alias-border-l1, rgba(255,255,255,.2)); color:inherit; border-radius:10px; padding:10px; font:inherit; resize:vertical; }
+.wb-modal-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:12px; }
 .wb-list { border:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.24)); border-radius:12px; overflow:hidden; background:var(--dsw-alias-bg-layer-1, rgba(255,255,255,.03)); }
 .wb-row { display:flex; align-items:center; gap:8px; padding:11px 12px; border-bottom:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.12)); cursor:pointer; transition:background .12s ease; }
 .wb-row:last-child { border-bottom:none; }
@@ -436,7 +446,7 @@ function TaskRow({ task, dicts, onOpen, selected, bare = false }: { task: Task; 
   )
 }
 
-function PlanPanel({ plan, tasks, title, onComplete, onDefer, onRefresh, onClear, canEdit = true }: {
+function PlanPanel({ plan, tasks, title, onComplete, onDefer, onRefresh, onClear, onSave, canEdit = true }: {
   plan: DailyPlanView
   tasks: Task[]
   title?: string
@@ -444,12 +454,16 @@ function PlanPanel({ plan, tasks, title, onComplete, onDefer, onRefresh, onClear
   onDefer: (taskId: string) => Promise<void>
   onRefresh?: () => void
   onClear?: () => void
+  onSave?: (items: Array<{ taskId: string; note: string }>) => Promise<void>
   canEdit?: boolean
 }): JSX.Element {
   const [expanded, setExpanded] = useState(false)
   const [actingId, setActingId] = useState<string | null>(null)
   const [overflowing, setOverflowing] = useState(false)
   const [visibleCount, setVisibleCount] = useState(plan.items.length)
+  const [editing, setEditing] = useState(false)
+  const [editItems, setEditItems] = useState<Array<{ taskId: string; title: string; note: string }>>([])
+  const [saving, setSaving] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const total = plan.items.length
   const taskById = (id: string): Task | undefined => tasks.find((t) => t.id === id)
@@ -457,6 +471,52 @@ function PlanPanel({ plan, tasks, title, onComplete, onDefer, onRefresh, onClear
     if (actingId !== null) return
     setActingId(taskId)
     try { await action() } finally { setActingId(null) }
+  }
+  const enterEdit = (): void => {
+    setEditItems(plan.items.map((item) => ({ taskId: item.taskId, title: item.title, note: item.note ?? '' })))
+    setEditing(true)
+  }
+  const moveItem = (index: number, delta: -1 | 1): void => {
+    setEditItems((prev) => {
+      const next = [...prev]
+      const target = index + delta
+      if (target < 0 || target >= next.length) return prev
+      ;[next[index], next[target]] = [next[target], next[index]]
+      return next
+    })
+  }
+  const updateNote = (index: number, note: string): void => {
+    setEditItems((prev) => prev.map((item, i) => (i === index ? { ...item, note } : item)))
+  }
+  const removeItem = (index: number): void => {
+    setEditItems((prev) => prev.filter((_, i) => i !== index))
+  }
+  const addTask = (taskId: string): void => {
+    const task = taskById(taskId)
+    if (task === undefined) return
+    setEditItems((prev) => (prev.some((item) => item.taskId === taskId) ? prev : [...prev, { taskId, title: task.title, note: '' }]))
+  }
+  const planDay = new Date(`${plan.planDate}T00:00:00`)
+  const isToday = plan.planDate === localDateString()
+  const candidateTasks = tasks.filter((t) =>
+    t.statusCode !== 'done' && t.statusCode !== 'cancelled' &&
+    !editItems.some((item) => item.taskId === t.id) &&
+    ((t.dueAt !== null && sameDay(new Date(t.dueAt), planDay)) || (isToday && t.dueAt === null))
+  )
+  const handleSave = async (): Promise<void> => {
+    if (onSave === undefined) return
+    if ((plan.sourceCode ?? '') !== 'manual' && !window.confirm('保存将覆盖当前 AI 生成计划并标记为手动编辑，确定继续？')) return
+    setSaving(true)
+    try {
+      await onSave(editItems.map((item, index) => ({ taskId: item.taskId, note: item.note.trim() })))
+      setEditing(false)
+    } catch {
+      // 父级 savePlan 已通过全局错误条展示原因；保持编辑模式让用户修正后重试。
+    } finally { setSaving(false) }
+  }
+  const handleRefresh = (): void => {
+    if ((plan.sourceCode ?? '') === 'manual' && !window.confirm('当前计划包含手动调整，重新生成会覆盖手动调整。确定继续？')) return
+    onRefresh?.()
   }
   const measureOverflow = useCallback(() => {
     const el = scrollRef.current
@@ -489,38 +549,77 @@ function PlanPanel({ plan, tasks, title, onComplete, onDefer, onRefresh, onClear
       <h4>
         <Icon name="sparkles" />
         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title ?? `${plan.planDate} 计划`}</span>
+        {editing && <span style={{ fontSize: 11, color: '#d9a03f', border: '1px solid rgba(217,160,63,.4)', borderRadius: 6, padding: '1px 6px' }}>编辑模式</span>}
         <span style={{ flex: 1 }} />
-        {overflowing && (
+        {!editing && overflowing && (
           <button className="wb-btn" onClick={() => setExpanded((v) => !v)}>
             {expanded ? '收起' : `展开全部（${total}）`}
           </button>
         )}
       </h4>
-      {plan.summary !== '' && <div style={{ fontSize: 14, lineHeight: 1.7, marginBottom: 6 }}>{plan.summary}</div>}
+      {plan.summary !== '' && !editing && <div style={{ fontSize: 14, lineHeight: 1.7, marginBottom: 6 }}>{plan.summary}</div>}
       <div ref={scrollRef} className="wb-plan-scroll">
-        {plan.items.map((item, index) => {
-          const task = taskById(item.taskId)
-          const closed = task !== undefined && (task.statusCode === 'done' || task.statusCode === 'cancelled')
-          return (
-            <div key={item.taskId} className={`wb-plan-item ${closed ? 'closed' : ''}`}>
-              <span className="wb-plan-num">{index + 1}</span>
-              <b>{item.title}</b>
-              {item.note !== '' && <span className="wb-plan-note">— {item.note}</span>}
-              {task !== undefined && !closed && (
-                <span className="wb-plan-item-actions">
-                  <button type="button" className="wb-plan-act done" disabled={actingId !== null} onClick={() => void runAction(item.taskId, () => onComplete(item.taskId))}>完成</button>
-                  <button type="button" className="wb-plan-act defer" disabled={actingId !== null} onClick={() => void runAction(item.taskId, () => onDefer(item.taskId))}>明天</button>
-                </span>
-              )}
-            </div>
+        {editing ? (
+          editItems.length === 0 ? (
+            <div style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)', padding: '6px 2px' }}>暂无计划项，可从下方添加任务。</div>
+          ) : (
+            editItems.map((item, index) => {
+              const task = taskById(item.taskId)
+              const closed = task !== undefined && (task.statusCode === 'done' || task.statusCode === 'cancelled')
+              return (
+                <div key={item.taskId} className={`wb-plan-item ${closed ? 'closed' : ''}`}>
+                  <span className="wb-plan-num">{index + 1}</span>
+                  <span style={{ flex: '0 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 600 }}>{item.title}</span>
+                  <input className="wb-plan-edit-note" value={item.note} onChange={(e) => updateNote(index, e.target.value)} placeholder="备注（可选）" />
+                  <span className="wb-plan-edit-actions">
+                    <button className="wb-btn" disabled={index === 0} onClick={() => moveItem(index, -1)}>↑</button>
+                    <button className="wb-btn" disabled={index === editItems.length - 1} onClick={() => moveItem(index, 1)}>↓</button>
+                    <button className="wb-btn" onClick={() => removeItem(index)}>移除</button>
+                  </span>
+                </div>
+              )
+            })
           )
-        })}
+        ) : (
+          plan.items.map((item, index) => {
+            const task = taskById(item.taskId)
+            const closed = task !== undefined && (task.statusCode === 'done' || task.statusCode === 'cancelled')
+            return (
+              <div key={item.taskId} className={`wb-plan-item ${closed ? 'closed' : ''}`}>
+                <span className="wb-plan-num">{index + 1}</span>
+                <b>{item.title}</b>
+                {item.note !== '' && <span className="wb-plan-note">— {item.note}</span>}
+                {task !== undefined && !closed && (
+                  <span className="wb-plan-item-actions">
+                    <button type="button" className="wb-plan-act done" disabled={actingId !== null} onClick={() => void runAction(item.taskId, () => onComplete(item.taskId))}>完成</button>
+                    <button type="button" className="wb-plan-act defer" disabled={actingId !== null} onClick={() => void runAction(item.taskId, () => onDefer(item.taskId))}>明天</button>
+                  </span>
+                )}
+              </div>
+            )
+          })
+        )}
       </div>
       <div className="wb-plan-footer">
-        <span>{overflowing ? `共 ${total} 项 · 默认展示前 ${visibleCount} 项，滚动/展开可查看全部` : `共 ${total} 项 · 已全部展示`}</span>
-        <span style={{ flex: 1 }} />
-        {canEdit && onRefresh !== undefined && <button className="wb-btn" onClick={onRefresh}><Icon name="refresh" />重新生成</button>}
-        {canEdit && onClear !== undefined && <button className="wb-btn" onClick={() => { if (window.confirm('确定要清除该日计划吗？清除后不可恢复。')) onClear() }}><Icon name="trash" />清除</button>}
+        {editing ? (
+          <>
+            <select className="wb-plan-add" defaultValue="" onChange={(e) => { const v = e.target.value; if (v !== '') { addTask(v); e.target.value = '' } }}>
+              <option value="">+ 添加任务…</option>
+              {candidateTasks.map((t) => <option key={t.id} value={t.id}>{t.title}</option>)}
+            </select>
+            <span style={{ flex: 1 }} />
+            <button className="wb-btn" disabled={saving} onClick={() => setEditing(false)}>取消</button>
+            <button className="wb-btn primary" disabled={saving || editItems.length === 0} onClick={() => void handleSave()}>保存</button>
+          </>
+        ) : (
+          <>
+            <span>{overflowing ? `共 ${total} 项 · 默认展示前 ${visibleCount} 项，滚动/展开可查看全部` : `共 ${total} 项 · 已全部展示`}</span>
+            <span style={{ flex: 1 }} />
+            {canEdit && onSave !== undefined && <button className="wb-btn" onClick={enterEdit}><Icon name="edit" />编辑</button>}
+            {canEdit && onRefresh !== undefined && <button className="wb-btn" onClick={handleRefresh}><Icon name="refresh" />重新生成</button>}
+            {canEdit && onClear !== undefined && <button className="wb-btn" onClick={() => { if (window.confirm('确定要清除该日计划吗？清除后不可恢复。')) onClear() }}><Icon name="trash" />清除</button>}
+          </>
+        )}
       </div>
     </div>
   )
@@ -719,6 +818,8 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   const [reportRefreshKey, setReportRefreshKey] = useState(0)
   const [todayPlanSession, setTodayPlanSession] = useState<{ sessionId: string } | null>(null)
   const [busy, setBusy] = useState(false)
+  const [promptModal, setPromptModal] = useState<{ title: string; value: string } | null>(null)
+  const promptResolveRef = useRef<((value: string | null) => void) | null>(null)
   const selectedRef = useRef<string | null>(null)
 
   const dicts = useMemo(() => bootstrap?.dictionaries ?? [], [bootstrap])
@@ -862,8 +963,37 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
     }
   }
 
+  const askUserPrompt = (title: string): Promise<string | null> => new Promise((resolve) => {
+    promptResolveRef.current = resolve
+    setPromptModal({ title, value: '' })
+  })
+  const confirmPrompt = (): void => {
+    const resolve = promptResolveRef.current
+    promptResolveRef.current = null
+    const value = promptModal?.value ?? ''
+    setPromptModal(null)
+    resolve?.(value)
+  }
+  const cancelPrompt = (): void => {
+    const resolve = promptResolveRef.current
+    promptResolveRef.current = null
+    setPromptModal(null)
+    resolve?.(null)
+  }
+  const AI_PROMPT_LABELS: Record<string, string> = {
+    plan: 'AI 智能排序 / 今日计划',
+    consult: 'AI 咨询',
+    breakdown: 'AI 拆解',
+    execute: 'AI 执行',
+    review: 'AI 复盘',
+    report: 'AI 日报 / 周报',
+    idea_association: 'AI 点子关联',
+    idea_brainstorm: 'AI 点子头脑风暴',
+  }
   const startAISession = async (mode: 'clarify' | 'consult' | 'breakdown' | 'execute' | 'review' | 'plan' | 'report' | 'idea_association' | 'idea_brainstorm', task: Task | null, text: string, previousSessions: Array<Record<string, unknown>> = []): Promise<void> => {
     if (mode === 'clarify' && text.trim() === '') return
+    const customPrompt = mode === 'clarify' ? '' : await askUserPrompt(AI_PROMPT_LABELS[mode] ?? 'AI 会话')
+    if (customPrompt === null) return
     const planAnchor = mode === 'plan' ? (/^\d{4}-\d{2}-\d{2}$/.test(text) ? text : localDateString()) : ''
     setBusy(true); setError(null)
     try {
@@ -996,7 +1126,8 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
         if (task.aiPolicyCode !== 'execute') throw new Error('该任务未开启“可执行”，请先在任务详情中把 AI 策略改为“可执行”')
       }
       if (mode === 'clarify') setShowQuick(false)
-      const result = await binding.session.prompt([{ type: 'text', text: prompt }], 'queue')
+      const finalPrompt = customPrompt.trim() === '' ? prompt : `${prompt}\n\n用户补充要求：\n${customPrompt.trim()}`
+      const result = await binding.session.prompt([{ type: 'text', text: finalPrompt }], 'queue')
       if (result.ok === false) throw new Error(result.error !== undefined ? String(result.error) : '发送失败')
       if (mode === 'plan') {
         await api('/api/workbench/ai-sessions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ scopeCode: 'daily_plan', anchor: planAnchor, sessionId: id, workspace: workspaceId }) })
@@ -1062,6 +1193,17 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   const clearTodayPlan = async (): Promise<void> => {
     await api(`/api/workbench/plans/${localDateString()}`, { method: 'DELETE' })
     await refresh()
+  }
+  const savePlan = async (date: string, items: Array<{ taskId: string; note: string }>): Promise<void> => {
+    try {
+      await api(`/api/workbench/plans/${date}`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ items: items.map((item, index) => ({ taskId: item.taskId, order: index + 1, note: item.note })) }) })
+      await refresh()
+      setPlanRefreshKey((v) => v + 1)
+      setNotice('计划已保存（来源：手动编辑）')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+      throw e
+    }
   }
 
   // 周/月日历
@@ -1142,6 +1284,19 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
 
       {error !== null && <div className="wb-banner error"><h4><Icon name="bell" />出错了</h4>{error} <button className="wb-btn" onClick={() => setError(null)}>关闭</button></div>}
       {notice !== null && <div className="wb-banner notice"><h4><Icon name="bell" />提示</h4>{notice} <button className="wb-btn" onClick={() => setNotice(null)}>关闭</button></div>}
+      {promptModal !== null && (
+        <div className="wb-modal-mask" onClick={cancelPrompt}>
+          <div className="wb-modal" onClick={(e) => e.stopPropagation()}>
+            <h4>补充 AI 提示词</h4>
+            <p>{promptModal.title}：可留空，留空则继续使用原有默认提示词；填写后会在默认提示词末尾追加你的补充要求。</p>
+            <textarea autoFocus value={promptModal.value} onChange={(e) => setPromptModal((prev) => prev === null ? prev : { ...prev, value: e.target.value })} placeholder="输入你想追加给 AI 的补充要求…" />
+            <div className="wb-modal-actions">
+              <button className="wb-btn" onClick={cancelPrompt}>取消</button>
+              <button className="wb-btn primary" onClick={confirmPrompt}>开始</button>
+            </div>
+          </div>
+        </div>
+      )}
       {reminders.length > 0 && (
         <div className="wb-banner reminder">
           <h4><Icon name="bell" />到期提醒（{reminders.length}）</h4>
@@ -1236,6 +1391,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                   onDefer={deferPlanTask}
                   onRefresh={() => void startAISession('plan', null, localDateString())}
                   onClear={() => void clearTodayPlan()}
+                  onSave={(items) => savePlan(localDateString(), items)}
                 />
               )}
               <div className="wb-list">
@@ -1302,12 +1458,14 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                       plan={pickedPlan}
                       tasks={tasks}
                       title={`${pickedPlan.planDate} 计划`}
+                      canEdit={pickedAnchor >= todayAnchor}
                       onComplete={completePlanTask}
                       onDefer={deferPlanTask}
                       onRefresh={pickedAnchor >= todayAnchor ? () => void startAISession('plan', null, pickedAnchor) : undefined}
                       onClear={() => {
                         void api(`/api/workbench/plans/${pickedAnchor}`, { method: 'DELETE' }).then(() => { setPlanRefreshKey((v) => v + 1); setNotice('该日计划已清除') }).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
                       }}
+                      onSave={(items) => savePlan(pickedAnchor, items)}
                     />
                   )}
                 </>

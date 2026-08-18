@@ -11,7 +11,7 @@ import {
   createDraft, createTask, deleteDailyPlan, deleteIdea, deleteIdeaCluster, deleteKnowledge, deleteTaskReport, ensureRecurringInstances, fireReminder, getAiSession, getDailyPlan, getDictionary, getDraft, getDraftBySession,
   getIdea, getIdeaCluster, getKnowledge, getLatestPendingDraft, getTask, getTaskMemoryContext, getTaskReport, getTaskRootId, linkTaskSession, listArchivedTasks, listChildren,
   listDictionaries, listDueReminders, listIdeas, listIdeaClusters, listIdeaClustersForIdea, listKnowledge, listReminders, listTaskEvents, listTaskMemories, listTaskReports, listTaskReviews,
-  listTaskSessions, listTasks, localDateString, registerAiSession, repairParentCompletion, restoreTask, updateIdea, updateKnowledge, updateTask, updateTaskWithCompletion, type ReportPeriodCode, type TaskInput,
+  listTaskSessions, listTasks, localDateString, registerAiSession, repairParentCompletion, restoreTask, updateDailyPlan, updateIdea, updateKnowledge, updateTask, updateTaskWithCompletion, type ReportPeriodCode, type TaskInput,
 } from '../db/repo.js'
 
 const TASKS_PREFIX = '/api/workbench/tasks'
@@ -786,6 +786,30 @@ export function makeRoutes(db: DatabaseSync): WebRoute[] {
           const plan = getDailyPlan(db, planDate)
           return writeJson(res, 200, { ok: true, plan: plan ?? null })
         }
+        if (segments.length === 1 && method === 'PUT') {
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(segments[0])) return writeJson(res, 400, { error: 'invalid plan date' })
+          if (segments[0] < localDateString()) return writeJson(res, 400, { error: 'past plan is read-only' })
+          const body = await readJsonBody(req)
+          if (body === undefined) return writeJson(res, 400, { error: 'invalid JSON body' })
+          try {
+            const items = Array.isArray(body.items)
+              ? (body.items as Array<Record<string, unknown>>).map((item) => ({
+                  taskId: typeof item.taskId === 'string' ? item.taskId : '',
+                  order: typeof item.order === 'number' ? item.order : 0,
+                  note: typeof item.note === 'string' ? item.note : '',
+                }))
+              : []
+            const plan = updateDailyPlan(db, segments[0], {
+              summary: typeof body.summary === 'string' ? body.summary : undefined,
+              items,
+              sourceCode: 'manual',
+              sessionId: null,
+            })
+            return writeJson(res, 200, { ok: true, plan })
+          } catch (error) {
+            return writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
+          }
+        }
         if (segments.length === 1 && method === 'DELETE') {
           if (!/^\d{4}-\d{2}-\d{2}$/.test(segments[0])) return writeJson(res, 400, { error: 'invalid plan date' })
           return writeJson(res, 200, { ok: true, deleted: deleteDailyPlan(db, segments[0]) })
@@ -803,7 +827,7 @@ export function makeRoutes(db: DatabaseSync): WebRoute[] {
         writeJson(res, 200, {
           ok: true,
           name: '@dely0/dsh-personal-workbench',
-          version: '1.4.0',
+          version: '1.5.0',
           db: {
             schemaVersion: versionRow?.value ?? 'unknown',
             taskCount: listTasks(db, { includeArchived: true }).length,

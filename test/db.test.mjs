@@ -7,7 +7,7 @@ import { openWorkbenchDb } from '../lib/db/database.js'
 import { seedDictionaries } from '../lib/db/seed.js'
 import {
   createTask, updateTask, getTask, listTasks, listArchivedTasks, listChildren,
-  createDraft, confirmTaskDraft, confirmDailyPlanDraft, confirmReportDraft, getDailyPlan, deleteDailyPlan,
+  createDraft, confirmTaskDraft, confirmDailyPlanDraft, confirmReportDraft, getDailyPlan, updateDailyPlan, deleteDailyPlan,
   getTaskReport, listTaskReports, deleteTaskReport,
   getAiSession, registerAiSession, listReminders, ensureRecurringInstances,
   createKnowledge, listKnowledge, getKnowledge, deleteKnowledge, confirmKnowledgeDraft,
@@ -53,6 +53,23 @@ test('db migrations, dictionaries and task tree', () => {
     const planDraft2 = createDraft(db, { kindCode: 'daily_plan', sessionId: 's-plan-2', payload: { planDate, summary: '第二版', items: [{ taskId: task.id, order: 1, note: '' }] } })
     confirmDailyPlanDraft(db, planDraft2.id)
     assert.equal(getDailyPlan(db, planDate).items[0].taskId, task.id)
+    // V2 manual plan update: reorder/notes saved and source marked manual
+    const updatedPlan = updateDailyPlan(db, planDate, { items: [
+      { taskId: planTask.id, order: 1, note: '改到前面' },
+      { taskId: task.id, order: 2, note: '手动备注' },
+    ] })
+    assert.equal(updatedPlan.sourceCode, 'manual')
+    assert.equal(updatedPlan.items.length, 2)
+    assert.equal(updatedPlan.items[0].taskId, planTask.id)
+    assert.equal(updatedPlan.items[0].note, '改到前面')
+    assert.equal(updatedPlan.items[1].note, '手动备注')
+    assert.equal(getDailyPlan(db, planDate).sourceCode, 'manual')
+    // validation: empty items, unknown task, archived/closed task
+    assert.throws(() => updateDailyPlan(db, planDate, { items: [] }), /at least one item/)
+    assert.throws(() => updateDailyPlan(db, planDate, { items: [{ taskId: 'no-such-task', order: 1 }] }), /unknown task/)
+    const donePlanTask = createTask(db, { title: 'done plan target', typeCode: 'code_impl', priorityCode: 'p2' })
+    updateTask(db, donePlanTask.id, { statusCode: 'done' })
+    assert.throws(() => updateDailyPlan(db, planDate, { items: [{ taskId: donePlanTask.id, order: 1 }] }), /archived or closed/)
     assert.equal(deleteDailyPlan(db, planDate), true)
     assert.equal(getDailyPlan(db, planDate), undefined)
 
