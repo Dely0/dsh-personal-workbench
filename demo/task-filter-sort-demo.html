@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>任务页筛选/排序 DEMO</title>
+<title>任务页筛选/排序 DEMO v3</title>
 <style>
   :root {
     --bg: #111114;
@@ -21,10 +21,12 @@
     color: var(--text);
     font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
   }
-  .page { max-width: 960px; margin: 0 auto; }
+  .page { max-width: 980px; margin: 0 auto; }
   h1 { font-size: 18px; margin: 0 0 4px; }
   .sub { color: var(--muted); font-size: 12px; margin: 0 0 18px; }
   .toolbar {
+    position: relative;
+    z-index: 25;
     display: flex;
     gap: 8px;
     flex-wrap: wrap;
@@ -67,6 +69,50 @@
     margin-bottom: 10px;
     color: var(--muted);
     font-size: 13px;
+  }
+  .dropdown { position: relative; }
+  .dropdown-trigger {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 260px;
+    overflow: hidden;
+    white-space: nowrap;
+  }
+  .dropdown-trigger .selected-tags {
+    display: inline-flex;
+    gap: 4px;
+    overflow: hidden;
+    flex-wrap: nowrap;
+  }
+  .dropdown-panel {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    z-index: 30;
+    min-width: 220px;
+    max-height: 280px;
+    overflow-y: auto;
+    background: #1c1c1f;
+    border: 1px solid rgba(255,255,255,.22);
+    border-radius: 10px;
+    padding: 6px;
+    box-shadow: 0 12px 32px rgba(0,0,0,.45);
+  }
+  .dropdown-option {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border-radius: 8px;
+    cursor: pointer;
+    border: 1px solid transparent;
+    font-size: 12.5px;
+    font-weight: 600;
+  }
+  .dropdown-option.checked {
+    border-color: var(--opt-color, #8a9aa8);
+    background: color-mix(in srgb, var(--opt-color, #8a9aa8) 12%, transparent);
   }
   .list {
     border: 1px solid var(--border);
@@ -116,14 +162,23 @@
 </head>
 <body>
 <div class="page">
-  <h1>任务页筛选 / 排序 DEMO</h1>
-  <p class="sub">纯 HTML/CSS/假数据：演示普通列表与“查看归档”共用的筛选栏、排序控件、树状任务列表。</p>
+  <h1>任务页筛选 / 排序 DEMO v3</h1>
+  <p class="sub">下拉多选 + 彩色标签 + 有效截止时间排序（已完成无截止按完成时间参与排序）。</p>
 
   <div class="toolbar">
     <input id="keyword" type="search" placeholder="搜索标题 / 描述">
-    <select id="status"><option value="">全部状态</option></select>
-    <select id="priority"><option value="">全部优先级</option></select>
-    <select id="type"><option value="">全部类型</option></select>
+    <div class="dropdown" id="statusDropdown">
+      <button class="dropdown-trigger" id="statusTrigger">状态 <span class="selected-tags"></span> <span class="arrow">▼</span></button>
+      <div class="dropdown-panel" id="statusPanel" style="display:none"></div>
+    </div>
+    <div class="dropdown" id="priorityDropdown">
+      <button class="dropdown-trigger" id="priorityTrigger">优先级 <span class="selected-tags"></span> <span class="arrow">▼</span></button>
+      <div class="dropdown-panel" id="priorityPanel" style="display:none"></div>
+    </div>
+    <div class="dropdown" id="typeDropdown">
+      <button class="dropdown-trigger" id="typeTrigger">类型 <span class="selected-tags"></span> <span class="arrow">▼</span></button>
+      <div class="dropdown-panel" id="typePanel" style="display:none"></div>
+    </div>
     <button id="clear" disabled>清空</button>
     <span class="spacer"></span>
     <button id="archiveToggle">查看归档</button>
@@ -170,50 +225,68 @@
   }
 
   const TASKS = [
-    { id: 't1', parentId: null, title: '完成任务页筛选功能', description: '关键词、状态、优先级、类型可组合', typeCode: 'feature_opt', statusCode: 'doing', priorityCode: 'p0', dueAt: '2025-01-10T18:00:00', createdAt: '2025-01-01T09:00:00', archived: false },
-    { id: 't1-1', parentId: 't1', title: '静态 DEMO 页面', description: '纯 HTML/CSS/假数据', typeCode: 'feature_opt', statusCode: 'done', priorityCode: 'p1', dueAt: '2025-01-03T18:00:00', createdAt: '2025-01-01T09:30:00', archived: false },
-    { id: 't1-2', parentId: 't1', title: '真实实现筛选排序', description: '树形保留父链，同级排序', typeCode: 'code_impl', statusCode: 'todo', priorityCode: 'p0', dueAt: '2025-01-08T18:00:00', createdAt: '2025-01-01T10:00:00', archived: false },
-    { id: 't1-3', parentId: 't1', title: '回归测试', description: 'pnpm check + test 通过', typeCode: 'code_impl', statusCode: 'todo', priorityCode: 'p2', dueAt: null, createdAt: '2025-01-02T08:00:00', archived: false },
-    { id: 't2', parentId: null, title: '客户需求沟通', description: '确认下版本范围', typeCode: 'client_meeting', statusCode: 'todo', priorityCode: 'p1', dueAt: '2025-01-12T10:00:00', createdAt: '2025-01-02T14:00:00', archived: false },
-    { id: 't3', parentId: null, title: '学习 TypeScript 高级类型', description: '整理笔记', typeCode: 'personal', statusCode: 'backlog', priorityCode: 'p3', dueAt: null, createdAt: '2025-01-03T20:00:00', archived: false },
-    { id: 'a1', parentId: null, title: '旧版报表导出', description: '已完成归档', typeCode: 'code_impl', statusCode: 'done', priorityCode: 'p2', dueAt: '2024-12-20T18:00:00', createdAt: '2024-12-10T09:00:00', archived: true },
-    { id: 'a1-1', parentId: 'a1', title: '导出 CSV 编码修复', description: '子任务', typeCode: 'code_impl', statusCode: 'done', priorityCode: 'p1', dueAt: '2024-12-18T18:00:00', createdAt: '2024-12-11T09:00:00', archived: true },
-    { id: 'a2', parentId: null, title: '旧版日历面板优化', description: '已完成归档', typeCode: 'feature_opt', statusCode: 'done', priorityCode: 'p3', dueAt: '2024-12-25T18:00:00', createdAt: '2024-12-15T09:00:00', archived: true },
+    { id: 't1', parentId: null, title: '完成任务页筛选功能', description: '关键词、状态、优先级、类型可组合', typeCode: 'feature_opt', statusCode: 'doing', priorityCode: 'p0', dueAt: '2025-01-10T18:00:00', completedAt: null, createdAt: '2025-01-01T09:00:00', archived: false },
+    { id: 't1-1', parentId: 't1', title: '静态 DEMO 页面', description: '纯 HTML/CSS/假数据', typeCode: 'feature_opt', statusCode: 'done', priorityCode: 'p1', dueAt: null, completedAt: '2025-01-03T18:00:00', createdAt: '2025-01-01T09:30:00', archived: false },
+    { id: 't1-2', parentId: 't1', title: '真实实现筛选排序', description: '树形保留父链，同级排序', typeCode: 'code_impl', statusCode: 'todo', priorityCode: 'p0', dueAt: '2025-01-08T18:00:00', completedAt: null, createdAt: '2025-01-01T10:00:00', archived: false },
+    { id: 't1-3', parentId: 't1', title: '回归测试', description: 'pnpm check + test 通过', typeCode: 'code_impl', statusCode: 'todo', priorityCode: 'p2', dueAt: null, completedAt: null, createdAt: '2025-01-02T08:00:00', archived: false },
+    { id: 't2', parentId: null, title: 'dsh-personal-workbench插件优化', description: '已完成无截止，按完成时间 8/18 参与排序', typeCode: 'feature_opt', statusCode: 'done', priorityCode: 'p2', dueAt: null, completedAt: '2025-08-18T00:00:00', createdAt: '2025-01-02T14:00:00', archived: false },
+    { id: 't3', parentId: null, title: '学习 TypeScript 高级类型', description: '整理笔记', typeCode: 'personal', statusCode: 'backlog', priorityCode: 'p3', dueAt: null, completedAt: null, createdAt: '2025-01-03T20:00:00', archived: false },
+    { id: 'a1', parentId: null, title: '旧版报表导出', description: '已完成归档', typeCode: 'code_impl', statusCode: 'done', priorityCode: 'p2', dueAt: null, completedAt: '2024-12-20T18:00:00', createdAt: '2024-12-10T09:00:00', archived: true },
+    { id: 'a1-1', parentId: 'a1', title: '导出 CSV 编码修复', description: '子任务', typeCode: 'code_impl', statusCode: 'done', priorityCode: 'p1', dueAt: null, completedAt: '2024-12-18T18:00:00', createdAt: '2024-12-11T09:00:00', archived: true },
+    { id: 'a2', parentId: null, title: '旧版日历面板优化', description: '已完成归档', typeCode: 'feature_opt', statusCode: 'done', priorityCode: 'p3', dueAt: '2024-12-25T18:00:00', completedAt: '2024-12-24T18:00:00', createdAt: '2024-12-15T09:00:00', archived: true },
   ]
 
   const state = {
     keyword: '',
-    status: '',
-    priority: '',
-    type: '',
+    statuses: new Set(),
+    priorities: new Set(),
+    types: new Set(),
     sortKey: 'dueAt',
     sortDir: 'asc',
     archived: false,
+    openMenu: null,
     expanded: new Set(),
     expandedInitialized: false,
   }
 
   const $ = (id) => document.getElementById(id)
   const weightOf = (code) => DICTS.priority.find((d) => d.code === code)?.weight ?? 99
+  const colorOf = (kind, code) => DICTS[kind].find((d) => d.code === code)?.color ?? '#8a9aa8'
 
-  function populateSelects() {
-    for (const [kind, id] of [['status', 'status'], ['priority', 'priority'], ['type', 'type']]) {
-      const sel = $(id)
+  function populateDropdowns() {
+    for (const [kind, panelId] of [['status', 'statusPanel'], ['priority', 'priorityPanel'], ['type', 'typePanel']]) {
+      const panel = $(panelId)
+      panel.innerHTML = ''
       for (const d of DICTS[kind]) {
-        const opt = document.createElement('option')
-        opt.value = d.code
-        opt.textContent = d.name
-        sel.appendChild(opt)
+        const label = document.createElement('label')
+        label.className = 'dropdown-option'
+        label.dataset.kind = kind
+        label.dataset.code = d.code
+        label.style.setProperty('--opt-color', d.color)
+        label.innerHTML = `<input type="checkbox" value="${d.code}"><span style="color:${d.color}">${d.name}</span>`
+        panel.appendChild(label)
       }
     }
+  }
+
+  function effectiveTime(task) {
+    if (task.dueAt) {
+      const n = Date.parse(task.dueAt)
+      if (!Number.isNaN(n)) return n
+    }
+    if (task.statusCode === 'done' && task.completedAt) {
+      const n = Date.parse(task.completedAt)
+      if (!Number.isNaN(n)) return n
+    }
+    return null
   }
 
   function matches(task) {
     const kw = state.keyword.trim().toLowerCase()
     if (kw && !`${task.title}\n${task.description}`.toLowerCase().includes(kw)) return false
-    if (state.status && task.statusCode !== state.status) return false
-    if (state.priority && task.priorityCode !== state.priority) return false
-    if (state.type && task.typeCode !== state.type) return false
+    if (state.statuses.size > 0 && !state.statuses.has(task.statusCode)) return false
+    if (state.priorities.size > 0 && !state.priorities.has(task.priorityCode)) return false
+    if (state.types.size > 0 && !state.types.has(task.typeCode)) return false
     return true
   }
 
@@ -221,8 +294,8 @@
     const factor = state.sortDir === 'asc' ? 1 : -1
     let diff = 0
     if (state.sortKey === 'dueAt') {
-      const av = a.dueAt ? Date.parse(a.dueAt) : null
-      const bv = b.dueAt ? Date.parse(b.dueAt) : null
+      const av = effectiveTime(a)
+      const bv = effectiveTime(b)
       if (av === null && bv === null) diff = 0
       else if (av === null) diff = 1
       else if (bv === null) diff = -1
@@ -271,9 +344,36 @@
   }
 
   function dueText(task) {
-    if (!task.dueAt) return '无截止'
-    const d = new Date(task.dueAt)
+    const t = effectiveTime(task)
+    if (t === null) return '无截止'
+    const d = new Date(t)
     return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+  }
+
+  function renderTrigger(kind, set, triggerId) {
+    const trigger = $(triggerId)
+    const tags = trigger.querySelector('.selected-tags')
+    const arrow = trigger.querySelector('.arrow')
+    if (set.size === 0) {
+      tags.innerHTML = '<span style="color:var(--muted)">全部</span>'
+    } else {
+      tags.innerHTML = [...set].map((code) => badge(kind, code)).join('')
+    }
+    arrow.textContent = state.openMenu === kind ? '▲' : '▼'
+  }
+
+  function renderPanels() {
+    for (const [kind, panelId] of [['status', 'statusPanel'], ['priority', 'priorityPanel'], ['type', 'typePanel']]) {
+      const panel = $(panelId)
+      const set = kind === 'status' ? state.statuses : kind === 'priority' ? state.priorities : state.types
+      panel.style.display = state.openMenu === kind ? 'block' : 'none'
+      for (const opt of panel.querySelectorAll('.dropdown-option')) {
+        const code = opt.dataset.code
+        const checked = set.has(code)
+        opt.classList.toggle('checked', checked)
+        opt.querySelector('input').checked = checked
+      }
+    }
   }
 
   function render() {
@@ -297,7 +397,7 @@
         const hasKids = node.children.length > 0
         const open = state.expanded.has(node.task.id)
         html += `<div class="row" style="padding-left:${12 + depth * 18}px">`
-        html += `<button class="toggle" data-id="${node.task.id}" data-depth="${depth}">${hasKids ? (open ? '▼' : '▶') : '·'}</button>`
+        html += `<button class="toggle" data-id="${node.task.id}">${hasKids ? (open ? '▼' : '▶') : '·'}</button>`
         html += `<span class="title">${node.task.title}</span>`
         html += `<span class="meta">${badge('type', node.task.typeCode)}${badge('priority', node.task.priorityCode)}${badge('status', node.task.statusCode)}</span>`
         html += `<span class="due">${dueText(node.task)}</span>`
@@ -306,14 +406,18 @@
       }
     }
     walk(tree, 0)
-
     if (tree.length === 0) html = '<div class="empty">没有符合条件的任务，点“清空”恢复完整列表</div>'
+
     $('list').innerHTML = html
     $('count').textContent = `共 ${countTree(tree)} 条`
-    $('clear').disabled = !(state.keyword.trim() || state.status || state.priority || state.type)
+    $('clear').disabled = !(state.keyword.trim() || state.statuses.size > 0 || state.priorities.size > 0 || state.types.size > 0)
     $('archiveToggle').textContent = state.archived ? '返回任务' : '查看归档'
     $('list').classList.toggle('archived', state.archived)
     $('sortDir').textContent = state.sortDir === 'asc' ? '↑ 升序' : '↓ 降序'
+    renderTrigger('status', state.statuses, 'statusTrigger')
+    renderTrigger('priority', state.priorities, 'priorityTrigger')
+    renderTrigger('type', state.types, 'typeTrigger')
+    renderPanels()
 
     for (const btn of document.querySelectorAll('.toggle')) {
       btn.addEventListener('click', () => {
@@ -325,13 +429,15 @@
     }
   }
 
+  function closeMenus() {
+    state.openMenu = null
+    render()
+  }
+
   $('keyword').addEventListener('input', (e) => { state.keyword = e.target.value; render() })
-  $('status').addEventListener('change', (e) => { state.status = e.target.value; render() })
-  $('priority').addEventListener('change', (e) => { state.priority = e.target.value; render() })
-  $('type').addEventListener('change', (e) => { state.type = e.target.value; render() })
   $('clear').addEventListener('click', () => {
-    state.keyword = ''; state.status = ''; state.priority = ''; state.type = ''
-    $('keyword').value = ''; $('status').value = ''; $('priority').value = ''; $('type').value = ''
+    state.keyword = ''; state.statuses.clear(); state.priorities.clear(); state.types.clear()
+    $('keyword').value = ''
     render()
   })
   $('sortKey').addEventListener('change', (e) => { state.sortKey = e.target.value; render() })
@@ -343,7 +449,25 @@
     render()
   })
 
-  populateSelects()
+  for (const [kind, triggerId, panelId] of [['status', 'statusTrigger', 'statusPanel'], ['priority', 'priorityTrigger', 'priorityPanel'], ['type', 'typeTrigger', 'typePanel']]) {
+    $(triggerId).addEventListener('click', (e) => {
+      e.stopPropagation()
+      state.openMenu = state.openMenu === kind ? null : kind
+      render()
+    })
+    $(panelId).addEventListener('click', (e) => e.stopPropagation())
+    $(panelId).addEventListener('change', (e) => {
+      const code = e.target.closest('.dropdown-option').dataset.code
+      const set = kind === 'status' ? state.statuses : kind === 'priority' ? state.priorities : state.types
+      if (e.target.checked) set.add(code)
+      else set.delete(code)
+      render()
+    })
+  }
+
+  document.addEventListener('click', closeMenus)
+
+  populateDropdowns()
   render()
 </script>
 </body>

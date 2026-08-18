@@ -430,6 +430,53 @@ function TaskRow({ task, dicts, onOpen, selected, bare = false }: { task: Task; 
   )
 }
 
+function MultiSelectDropdown({ label, options, selected, open, onToggle, onClose, onChange }: {
+  label: string
+  options: Dict[]
+  selected: string[]
+  open: boolean
+  onToggle: () => void
+  onClose: () => void
+  onChange: (codes: string[]) => void
+}): JSX.Element {
+  const toggleCode = (code: string): void => {
+    onChange(selected.includes(code) ? selected.filter((c) => c !== code) : [...selected, code])
+  }
+  return (
+    <div style={{ position: 'relative' }}>
+      <button type="button" className="wb-btn" onClick={onToggle} style={{ position: 'relative', zIndex: 25, maxWidth: 260, overflow: 'hidden' }}>
+        <span style={{ whiteSpace: 'nowrap' }}>{label}</span>
+        {selected.length === 0 ? (
+          <span style={{ color: 'var(--dsw-alias-label-secondary)', whiteSpace: 'nowrap' }}>全部</span>
+        ) : (
+          <span style={{ display: 'inline-flex', gap: 4, overflow: 'hidden', flexWrap: 'nowrap' }}>
+            {selected.map((code) => <Badge key={code} dict={options} code={code} />)}
+          </span>
+        )}
+        <span style={{ flex: 'none' }}>{open ? '▲' : '▼'}</span>
+      </button>
+      {open && (
+        <>
+          <div style={{ position: 'fixed', inset: 0, zIndex: 20 }} onClick={onClose} />
+          <div style={{ position: 'absolute', top: 'calc(100% + 4px)', left: 0, zIndex: 30, minWidth: 220, maxHeight: 280, overflowY: 'auto', background: 'var(--dsw-alias-bg-layer-2, #1c1c1f)', border: '1px solid var(--dsw-alias-border-l1, rgba(255,255,255,.22))', borderRadius: 10, padding: 6, boxShadow: '0 12px 32px rgba(0,0,0,.45)' }}>
+            {options.map((d) => {
+              const color = String(d.config.color ?? '#8a9aa8')
+              const checked = selected.includes(d.code)
+              return (
+                <label key={d.code} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px', borderRadius: 8, cursor: 'pointer', border: `1px solid ${checked ? color : 'transparent'}`, background: checked ? `color-mix(in srgb, ${color} 12%, transparent)` : 'transparent' }}>
+                  <input type="checkbox" checked={checked} onChange={() => toggleCode(d.code)} />
+                  <span style={{ color, fontWeight: 600, fontSize: 12.5 }}>{d.name}</span>
+                </label>
+              )
+            })}
+            {options.length === 0 && <div style={{ padding: '6px 8px', color: 'var(--dsw-alias-label-secondary)', fontSize: 12 }}>无选项</div>}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
 function PlanPanel({ plan, tasks, title, onComplete, onDefer, onRefresh, onClear, onSave, canEdit = true }: {
   plan: DailyPlanView
   tasks: Task[]
@@ -1152,9 +1199,10 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   // 树展开状态（列表树记住用户展开）
   const [archivedTasks, setArchivedTasks] = useState<Task[]>([])
   const [archivedMode, setArchivedMode] = useState(false)
-  const [taskFilter, setTaskFilter] = useState<TaskFilterState>({ keyword: '', statusCode: '', priorityCode: '', typeCode: '' })
+  const [taskFilter, setTaskFilter] = useState<TaskFilterState>({ keyword: '', statusCodes: [], priorityCodes: [], typeCodes: [] })
   const [taskSortKey, setTaskSortKey] = useState<TaskSortKey>('dueAt')
   const [taskSortDir, setTaskSortDir] = useState<TaskSortDir>('asc')
+  const [openFilter, setOpenFilter] = useState<'status' | 'priority' | 'type' | null>(null)
   const [expanded, setExpanded] = useState<Set<string>>(() => {
     try { return new Set(JSON.parse(localStorage.getItem('dsh.personal-workbench.treeExpanded') ?? '[]') as string[]) } catch { return new Set() }
   })
@@ -1600,40 +1648,43 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
 
           {view === 'list' && (
             <>
-              <div style={{ display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+              <div style={{ position: 'relative', zIndex: 25, display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap', alignItems: 'center' }}>
                 <input
-                  style={{ flex: 1, minWidth: 140, background: 'var(--dsw-alias-bg-base,#17171a)', border: '1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.15))', color: 'inherit', borderRadius: 8, padding: '7px 10px' }}
+                  style={{ position: 'relative', zIndex: 25, flex: 1, minWidth: 140, background: 'var(--dsw-alias-bg-base,#17171a)', border: '1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.15))', color: 'inherit', borderRadius: 8, padding: '7px 10px' }}
                   placeholder="搜索标题 / 描述"
                   value={taskFilter.keyword}
                   onChange={(e) => setTaskFilter((prev) => ({ ...prev, keyword: e.target.value }))}
                 />
-                <select
-                  style={{ background: 'var(--dsw-alias-bg-base,#17171a)', border: '1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.15))', color: 'inherit', borderRadius: 8, padding: '7px 10px' }}
-                  value={taskFilter.statusCode}
-                  onChange={(e) => setTaskFilter((prev) => ({ ...prev, statusCode: e.target.value }))}
-                >
-                  <option value="">全部状态</option>
-                  {dictOf('status').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}
-                </select>
-                <select
-                  style={{ background: 'var(--dsw-alias-bg-base,#17171a)', border: '1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.15))', color: 'inherit', borderRadius: 8, padding: '7px 10px' }}
-                  value={taskFilter.priorityCode}
-                  onChange={(e) => setTaskFilter((prev) => ({ ...prev, priorityCode: e.target.value }))}
-                >
-                  <option value="">全部优先级</option>
-                  {dictOf('priority').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}
-                </select>
-                <select
-                  style={{ background: 'var(--dsw-alias-bg-base,#17171a)', border: '1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.15))', color: 'inherit', borderRadius: 8, padding: '7px 10px' }}
-                  value={taskFilter.typeCode}
-                  onChange={(e) => setTaskFilter((prev) => ({ ...prev, typeCode: e.target.value }))}
-                >
-                  <option value="">全部类型</option>
-                  {dictOf('type').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}
-                </select>
-                <button className="wb-btn" disabled={isTaskFilterEmpty(taskFilter)} onClick={() => setTaskFilter({ keyword: '', statusCode: '', priorityCode: '', typeCode: '' })}><Icon name="refresh" />清空</button>
+                <MultiSelectDropdown
+                  label="状态"
+                  options={dictOf('status')}
+                  selected={taskFilter.statusCodes}
+                  open={openFilter === 'status'}
+                  onToggle={() => setOpenFilter((prev) => prev === 'status' ? null : 'status')}
+                  onClose={() => setOpenFilter(null)}
+                  onChange={(codes) => setTaskFilter((prev) => ({ ...prev, statusCodes: codes }))}
+                />
+                <MultiSelectDropdown
+                  label="优先级"
+                  options={dictOf('priority')}
+                  selected={taskFilter.priorityCodes}
+                  open={openFilter === 'priority'}
+                  onToggle={() => setOpenFilter((prev) => prev === 'priority' ? null : 'priority')}
+                  onClose={() => setOpenFilter(null)}
+                  onChange={(codes) => setTaskFilter((prev) => ({ ...prev, priorityCodes: codes }))}
+                />
+                <MultiSelectDropdown
+                  label="类型"
+                  options={dictOf('type')}
+                  selected={taskFilter.typeCodes}
+                  open={openFilter === 'type'}
+                  onToggle={() => setOpenFilter((prev) => prev === 'type' ? null : 'type')}
+                  onClose={() => setOpenFilter(null)}
+                  onChange={(codes) => setTaskFilter((prev) => ({ ...prev, typeCodes: codes }))}
+                />
+                <button className="wb-btn" style={{ position: 'relative', zIndex: 25 }} disabled={isTaskFilterEmpty(taskFilter)} onClick={() => setTaskFilter({ keyword: '', statusCodes: [], priorityCodes: [], typeCodes: [] })}><Icon name="refresh" />清空</button>
                 <div style={{ flex: 1 }} />
-                <button className="wb-btn" onClick={() => {
+                <button className="wb-btn" style={{ position: 'relative', zIndex: 25 }} onClick={() => {
                   const next = !archivedMode
                   setArchivedMode(next)
                   if (next) { void api<{ tasks: Task[] }>('/api/workbench/tasks?archived=true').then((r) => setArchivedTasks(r.tasks)).catch(() => undefined) }

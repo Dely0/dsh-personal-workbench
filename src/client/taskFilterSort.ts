@@ -8,15 +8,15 @@ export type TaskSortDir = 'asc' | 'desc'
 
 export interface TaskFilterState {
   keyword: string
-  statusCode: string
-  priorityCode: string
-  typeCode: string
+  statusCodes: string[]
+  priorityCodes: string[]
+  typeCodes: string[]
 }
 
-export const EMPTY_TASK_FILTER: TaskFilterState = Object.freeze({ keyword: '', statusCode: '', priorityCode: '', typeCode: '' })
+export const EMPTY_TASK_FILTER: TaskFilterState = Object.freeze({ keyword: '', statusCodes: [], priorityCodes: [], typeCodes: [] })
 
 export function isTaskFilterEmpty(filter: TaskFilterState): boolean {
-  return filter.keyword.trim() === '' && filter.statusCode === '' && filter.priorityCode === '' && filter.typeCode === ''
+  return filter.keyword.trim() === '' && filter.statusCodes.length === 0 && filter.priorityCodes.length === 0 && filter.typeCodes.length === 0
 }
 
 export interface TaskLike {
@@ -28,6 +28,7 @@ export interface TaskLike {
   priorityCode: string
   typeCode: string
   dueAt: string | null
+  completedAt: string | null
   createdAt: string
 }
 
@@ -42,9 +43,9 @@ export function matchesTaskFilter(task: TaskLike, filter: TaskFilterState): bool
     const haystack = `${task.title}\n${task.description ?? ''}`.toLowerCase()
     if (!haystack.includes(keyword)) return false
   }
-  if (filter.statusCode !== '' && task.statusCode !== filter.statusCode) return false
-  if (filter.priorityCode !== '' && task.priorityCode !== filter.priorityCode) return false
-  if (filter.typeCode !== '' && task.typeCode !== filter.typeCode) return false
+  if (filter.statusCodes.length > 0 && !filter.statusCodes.includes(task.statusCode)) return false
+  if (filter.priorityCodes.length > 0 && !filter.priorityCodes.includes(task.priorityCode)) return false
+  if (filter.typeCodes.length > 0 && !filter.typeCodes.includes(task.typeCode)) return false
   return true
 }
 
@@ -59,9 +60,16 @@ export function compareTasks<T extends TaskLike>(
   switch (key) {
     case 'dueAt': {
       const at = (t: T): number | null => {
-        if (t.dueAt === null) return null
-        const n = Date.parse(t.dueAt)
-        return Number.isNaN(n) ? null : n
+        if (t.dueAt !== null) {
+          const n = Date.parse(t.dueAt)
+          if (!Number.isNaN(n)) return n
+        }
+        // 已完成任务未设置截止时间时，列表右侧展示的是完成时间，排序也按它参与。
+        if (t.statusCode === 'done' && t.completedAt !== null) {
+          const n = Date.parse(t.completedAt)
+          if (!Number.isNaN(n)) return n
+        }
+        return null
       }
       const av = at(a)
       const bv = at(b)

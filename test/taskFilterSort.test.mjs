@@ -19,6 +19,7 @@ const task = (id, overrides = {}) => ({
   priorityCode: 'p2',
   typeCode: 'feature_opt',
   dueAt: null,
+  completedAt: null,
   createdAt: '2024-01-01T00:00:00.000Z',
   ...overrides,
 })
@@ -31,11 +32,12 @@ test('task filter: keyword matches title/description and conditions combine', ()
   assert.equal(matchesTaskFilter(a, { ...EMPTY_TASK_FILTER, keyword: '登录' }), true)
   assert.equal(matchesTaskFilter(b, { ...EMPTY_TASK_FILTER, keyword: '闪退' }), true)
   assert.equal(matchesTaskFilter(a, { ...EMPTY_TASK_FILTER, keyword: '不存在的词' }), false)
-  assert.equal(matchesTaskFilter(c, { ...EMPTY_TASK_FILTER, statusCode: 'doing', priorityCode: 'p1', typeCode: 'code_impl' }), true)
-  assert.equal(matchesTaskFilter(c, { ...EMPTY_TASK_FILTER, statusCode: 'doing', priorityCode: 'p2' }), false)
+  assert.equal(matchesTaskFilter(c, { ...EMPTY_TASK_FILTER, statusCodes: ['doing'], priorityCodes: ['p1'], typeCodes: ['code_impl'] }), true)
+  assert.equal(matchesTaskFilter(c, { ...EMPTY_TASK_FILTER, statusCodes: ['doing'], priorityCodes: ['p2'] }), false)
+  assert.equal(matchesTaskFilter(c, { ...EMPTY_TASK_FILTER, statusCodes: ['todo', 'doing'] }), true)
   assert.equal(isTaskFilterEmpty(EMPTY_TASK_FILTER), true)
   assert.equal(isTaskFilterEmpty({ ...EMPTY_TASK_FILTER, keyword: '  ' }), true)
-  assert.equal(isTaskFilterEmpty({ ...EMPTY_TASK_FILTER, statusCode: 'todo' }), false)
+  assert.equal(isTaskFilterEmpty({ ...EMPTY_TASK_FILTER, statusCodes: ['todo'] }), false)
 })
 
 test('task tree filter keeps parent chain when a descendant matches', () => {
@@ -65,13 +67,14 @@ test('task tree filter drops non-matching children under a matching parent', () 
   assert.equal(filtered[0].children.length, 0)
 })
 
-test('task sorter: dueAt asc/desc with nulls last', () => {
+test('task sorter: dueAt asc/desc uses dueAt, then completedAt for done tasks, nulls last', () => {
   const early = task('a', { dueAt: '2024-01-01T00:00:00.000Z' })
   const late = task('b', { dueAt: '2024-06-01T00:00:00.000Z' })
   const none = task('c', { dueAt: null })
+  const doneNoDue = task('d', { dueAt: null, statusCode: 'done', completedAt: '2024-02-01T00:00:00.000Z' })
 
-  assert.deepEqual([late, none, early].sort(createTaskSorter('dueAt', 'asc')).map((t) => t.id), ['a', 'b', 'c'])
-  assert.deepEqual([early, none, late].sort(createTaskSorter('dueAt', 'desc')).map((t) => t.id), ['b', 'a', 'c'])
+  assert.deepEqual([late, none, early, doneNoDue].sort(createTaskSorter('dueAt', 'asc')).map((t) => t.id), ['a', 'd', 'b', 'c'])
+  assert.deepEqual([early, none, late, doneNoDue].sort(createTaskSorter('dueAt', 'desc')).map((t) => t.id), ['b', 'd', 'a', 'c'])
 })
 
 test('task sorter: priority asc means high priority first, desc means low priority first', () => {
