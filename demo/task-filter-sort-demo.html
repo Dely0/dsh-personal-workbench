@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>任务页筛选/排序 DEMO</title>
+<style>
+  :root {
+    --bg: #111114;
+    --panel: #18181c;
+    --border: rgba(255,255,255,.14);
+    --text: #eee;
+    --muted: #9aa3ad;
+    --accent: #4f8ef7;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 24px;
+    background: var(--bg);
+    color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  .page { max-width: 960px; margin: 0 auto; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 12px; margin: 0 0 18px; }
+  .toolbar {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    align-items: center;
+    padding: 12px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    margin-bottom: 10px;
+  }
+  .toolbar input, .toolbar select {
+    background: #101014;
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 8px;
+    padding: 8px 10px;
+    font: inherit;
+    font-size: 13px;
+    min-width: 0;
+  }
+  .toolbar input { flex: 1; min-width: 160px; }
+  .toolbar button, .sortbar button {
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text);
+    border-radius: 8px;
+    padding: 8px 12px;
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .toolbar button:hover, .sortbar button:hover { background: rgba(255,255,255,.06); }
+  .toolbar button:disabled { opacity: .4; cursor: default; }
+  .spacer { flex: 1; }
+  .sortbar {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+    margin-bottom: 10px;
+    color: var(--muted);
+    font-size: 13px;
+  }
+  .list {
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+    background: var(--panel);
+  }
+  .row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    border-bottom: 1px solid rgba(255,255,255,.08);
+    cursor: pointer;
+  }
+  .row:last-child { border-bottom: none; }
+  .row:hover { background: rgba(255,255,255,.04); }
+  .toggle {
+    width: 24px;
+    height: 24px;
+    flex: none;
+    border: none;
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 12px;
+    border-radius: 6px;
+  }
+  .toggle:hover { background: rgba(255,255,255,.08); color: var(--text); }
+  .title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; font-size: 14px; }
+  .meta { display: flex; gap: 6px; flex: none; align-items: center; }
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 6px;
+    padding: 2px 7px;
+    font-size: 11px;
+    white-space: nowrap;
+    font-weight: 600;
+  }
+  .due { color: var(--muted); font-size: 12px; min-width: 92px; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .empty { padding: 24px; text-align: center; color: var(--muted); }
+  .archived .row .title { color: #b8c0c8; }
+  .archived .row { opacity: .92; }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>任务页筛选 / 排序 DEMO</h1>
+  <p class="sub">纯 HTML/CSS/假数据：演示普通列表与“查看归档”共用的筛选栏、排序控件、树状任务列表。</p>
+
+  <div class="toolbar">
+    <input id="keyword" type="search" placeholder="搜索标题 / 描述">
+    <select id="status"><option value="">全部状态</option></select>
+    <select id="priority"><option value="">全部优先级</option></select>
+    <select id="type"><option value="">全部类型</option></select>
+    <button id="clear" disabled>清空</button>
+    <span class="spacer"></span>
+    <button id="archiveToggle">查看归档</button>
+  </div>
+
+  <div class="sortbar">
+    <span>排序</span>
+    <select id="sortKey">
+      <option value="dueAt">截止时间</option>
+      <option value="priority">优先级</option>
+      <option value="createdAt">创建时间</option>
+      <option value="title">标题</option>
+    </select>
+    <button id="sortDir">↑ 升序</button>
+    <span id="count"></span>
+  </div>
+
+  <div class="list" id="list"></div>
+</div>
+
+<script>
+  const DICTS = {
+    status: [
+      { code: 'backlog', name: '待规划', color: '#95A5A6' },
+      { code: 'todo', name: '待办', color: '#3498DB' },
+      { code: 'doing', name: '进行中', color: '#F39C12' },
+      { code: 'blocked', name: '被阻塞', color: '#E74C3C' },
+      { code: 'done', name: '已完成', color: '#2E9B7B' },
+      { code: 'cancelled', name: '已取消', color: '#7F8C8D' },
+    ],
+    priority: [
+      { code: 'p0', name: '紧急', color: '#E74C3C', weight: 0 },
+      { code: 'p1', name: '高', color: '#F39C12', weight: 1 },
+      { code: 'p2', name: '普通', color: '#3498DB', weight: 2 },
+      { code: 'p3', name: '低', color: '#95A5A6', weight: 3 },
+    ],
+    type: [
+      { code: 'client_meeting', name: '客户交流', color: '#4F86F7' },
+      { code: 'code_impl', name: '代码实现', color: '#2E9B7B' },
+      { code: 'feature_opt', name: '功能优化', color: '#6C5CE7' },
+      { code: 'solution_design', name: '方案设计', color: '#F39C12' },
+      { code: 'personal', name: '个人生活', color: '#95A5A6' },
+    ],
+  }
+
+  const TASKS = [
+    { id: 't1', parentId: null, title: '完成任务页筛选功能', description: '关键词、状态、优先级、类型可组合', typeCode: 'feature_opt', statusCode: 'doing', priorityCode: 'p0', dueAt: '2025-01-10T18:00:00', createdAt: '2025-01-01T09:00:00', archived: false },
+    { id: 't1-1', parentId: 't1', title: '静态 DEMO 页面', description: '纯 HTML/CSS/假数据', typeCode: 'feature_opt', statusCode: 'done', priorityCode: 'p1', dueAt: '2025-01-03T18:00:00', createdAt: '2025-01-01T09:30:00', archived: false },
+    { id: 't1-2', parentId: 't1', title: '真实实现筛选排序', description: '树形保留父链，同级排序', typeCode: 'code_impl', statusCode: 'todo', priorityCode: 'p0', dueAt: '2025-01-08T18:00:00', createdAt: '2025-01-01T10:00:00', archived: false },
+    { id: 't1-3', parentId: 't1', title: '回归测试', description: 'pnpm check + test 通过', typeCode: 'code_impl', statusCode: 'todo', priorityCode: 'p2', dueAt: null, createdAt: '2025-01-02T08:00:00', archived: false },
+    { id: 't2', parentId: null, title: '客户需求沟通', description: '确认下版本范围', typeCode: 'client_meeting', statusCode: 'todo', priorityCode: 'p1', dueAt: '2025-01-12T10:00:00', createdAt: '2025-01-02T14:00:00', archived: false },
+    { id: 't3', parentId: null, title: '学习 TypeScript 高级类型', description: '整理笔记', typeCode: 'personal', statusCode: 'backlog', priorityCode: 'p3', dueAt: null, createdAt: '2025-01-03T20:00:00', archived: false },
+    { id: 'a1', parentId: null, title: '旧版报表导出', description: '已完成归档', typeCode: 'code_impl', statusCode: 'done', priorityCode: 'p2', dueAt: '2024-12-20T18:00:00', createdAt: '2024-12-10T09:00:00', archived: true },
+    { id: 'a1-1', parentId: 'a1', title: '导出 CSV 编码修复', description: '子任务', typeCode: 'code_impl', statusCode: 'done', priorityCode: 'p1', dueAt: '2024-12-18T18:00:00', createdAt: '2024-12-11T09:00:00', archived: true },
+    { id: 'a2', parentId: null, title: '旧版日历面板优化', description: '已完成归档', typeCode: 'feature_opt', statusCode: 'done', priorityCode: 'p3', dueAt: '2024-12-25T18:00:00', createdAt: '2024-12-15T09:00:00', archived: true },
+  ]
+
+  const state = {
+    keyword: '',
+    status: '',
+    priority: '',
+    type: '',
+    sortKey: 'dueAt',
+    sortDir: 'asc',
+    archived: false,
+    expanded: new Set(),
+    expandedInitialized: false,
+  }
+
+  const $ = (id) => document.getElementById(id)
+  const weightOf = (code) => DICTS.priority.find((d) => d.code === code)?.weight ?? 99
+
+  function populateSelects() {
+    for (const [kind, id] of [['status', 'status'], ['priority', 'priority'], ['type', 'type']]) {
+      const sel = $(id)
+      for (const d of DICTS[kind]) {
+        const opt = document.createElement('option')
+        opt.value = d.code
+        opt.textContent = d.name
+        sel.appendChild(opt)
+      }
+    }
+  }
+
+  function matches(task) {
+    const kw = state.keyword.trim().toLowerCase()
+    if (kw && !`${task.title}\n${task.description}`.toLowerCase().includes(kw)) return false
+    if (state.status && task.statusCode !== state.status) return false
+    if (state.priority && task.priorityCode !== state.priority) return false
+    if (state.type && task.typeCode !== state.type) return false
+    return true
+  }
+
+  function compare(a, b) {
+    const factor = state.sortDir === 'asc' ? 1 : -1
+    let diff = 0
+    if (state.sortKey === 'dueAt') {
+      const av = a.dueAt ? Date.parse(a.dueAt) : null
+      const bv = b.dueAt ? Date.parse(b.dueAt) : null
+      if (av === null && bv === null) diff = 0
+      else if (av === null) diff = 1
+      else if (bv === null) diff = -1
+      else diff = (av - bv) * factor
+    } else if (state.sortKey === 'priority') {
+      diff = (weightOf(a.priorityCode) - weightOf(b.priorityCode)) * factor
+    } else if (state.sortKey === 'createdAt') {
+      diff = a.createdAt.localeCompare(b.createdAt) * factor
+    } else if (state.sortKey === 'title') {
+      diff = a.title.localeCompare(b.title, 'zh-Hans-CN') * factor
+    }
+    return diff || a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)
+  }
+
+  function buildTree(tasks) {
+    const byParent = new Map()
+    for (const t of tasks) {
+      const list = byParent.get(t.parentId) ?? []
+      list.push(t)
+      byParent.set(t.parentId, list)
+    }
+    const walk = (parentId) => {
+      const list = (byParent.get(parentId) ?? []).slice().sort(compare)
+      return list.map((task) => ({ task, children: walk(task.id) }))
+    }
+    return walk(null)
+  }
+
+  function filterTree(nodes, keep) {
+    const out = []
+    for (const node of nodes) {
+      const children = filterTree(node.children, keep)
+      if (keep(node.task) || children.length > 0) out.push({ task: node.task, children })
+    }
+    return out
+  }
+
+  function countTree(nodes) {
+    return nodes.reduce((sum, n) => sum + 1 + countTree(n.children), 0)
+  }
+
+  function badge(kind, code) {
+    const d = DICTS[kind].find((x) => x.code === code)
+    const color = d?.color ?? '#8a9aa8'
+    return `<span class="chip" style="background:${color}22;color:${color};border:1px solid ${color}66">${d?.name ?? code}</span>`
+  }
+
+  function dueText(task) {
+    if (!task.dueAt) return '无截止'
+    const d = new Date(task.dueAt)
+    return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+  }
+
+  function render() {
+    const source = state.archived ? TASKS.filter((t) => t.archived) : TASKS.filter((t) => !t.archived)
+    const tree = filterTree(buildTree(source), matches)
+    if (!state.expandedInitialized) {
+      const collect = (nodes) => {
+        for (const n of nodes) {
+          if (n.children.length > 0) {
+            state.expanded.add(n.task.id)
+            collect(n.children)
+          }
+        }
+      }
+      collect(tree)
+      state.expandedInitialized = true
+    }
+    let html = ''
+    const walk = (nodes, depth) => {
+      for (const node of nodes) {
+        const hasKids = node.children.length > 0
+        const open = state.expanded.has(node.task.id)
+        html += `<div class="row" style="padding-left:${12 + depth * 18}px">`
+        html += `<button class="toggle" data-id="${node.task.id}" data-depth="${depth}">${hasKids ? (open ? '▼' : '▶') : '·'}</button>`
+        html += `<span class="title">${node.task.title}</span>`
+        html += `<span class="meta">${badge('type', node.task.typeCode)}${badge('priority', node.task.priorityCode)}${badge('status', node.task.statusCode)}</span>`
+        html += `<span class="due">${dueText(node.task)}</span>`
+        html += `</div>`
+        if (hasKids && open) walk(node.children, depth + 1)
+      }
+    }
+    walk(tree, 0)
+
+    if (tree.length === 0) html = '<div class="empty">没有符合条件的任务，点“清空”恢复完整列表</div>'
+    $('list').innerHTML = html
+    $('count').textContent = `共 ${countTree(tree)} 条`
+    $('clear').disabled = !(state.keyword.trim() || state.status || state.priority || state.type)
+    $('archiveToggle').textContent = state.archived ? '返回任务' : '查看归档'
+    $('list').classList.toggle('archived', state.archived)
+    $('sortDir').textContent = state.sortDir === 'asc' ? '↑ 升序' : '↓ 降序'
+
+    for (const btn of document.querySelectorAll('.toggle')) {
+      btn.addEventListener('click', () => {
+        const id = btn.dataset.id
+        if (btn.textContent === '▼') state.expanded.delete(id)
+        else state.expanded.add(id)
+        render()
+      })
+    }
+  }
+
+  $('keyword').addEventListener('input', (e) => { state.keyword = e.target.value; render() })
+  $('status').addEventListener('change', (e) => { state.status = e.target.value; render() })
+  $('priority').addEventListener('change', (e) => { state.priority = e.target.value; render() })
+  $('type').addEventListener('change', (e) => { state.type = e.target.value; render() })
+  $('clear').addEventListener('click', () => {
+    state.keyword = ''; state.status = ''; state.priority = ''; state.type = ''
+    $('keyword').value = ''; $('status').value = ''; $('priority').value = ''; $('type').value = ''
+    render()
+  })
+  $('sortKey').addEventListener('change', (e) => { state.sortKey = e.target.value; render() })
+  $('sortDir').addEventListener('click', () => { state.sortDir = state.sortDir === 'asc' ? 'desc' : 'asc'; render() })
+  $('archiveToggle').addEventListener('click', () => {
+    state.archived = !state.archived
+    state.expanded = new Set()
+    state.expandedInitialized = false
+    render()
+  })
+
+  populateSelects()
+  render()
+</script>
+</body>
+</html>

@@ -6,6 +6,17 @@
  */
 import { createRoot, type Root } from 'react-dom/client'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  buildTaskTree,
+  createTaskSorter,
+  filterTaskTree,
+  isTaskFilterEmpty,
+  matchesTaskFilter,
+  type TaskFilterState,
+  type TaskSortDir,
+  type TaskSortKey,
+  type TaskTreeNode,
+} from './taskFilterSort.js'
 
 const PANEL_NAME = 'personal-workbench'
 const ACTIVE_ATTR = 'data-dsh-personal-workbench-active'
@@ -355,39 +366,12 @@ function MarkdownText({ text }: { text: string }): JSX.Element {
   return <div style={{ lineHeight: 1.7, fontSize: 13 }}>{blocks}</div>
 }
 
-interface TaskTreeNode { task: Task; children: TaskTreeNode[] }
-
-function filterTaskTree(roots: TaskTreeNode[], keep: (task: Task) => boolean): TaskTreeNode[] {
-  const walk = (nodes: TaskTreeNode[]): TaskTreeNode[] => {
-    const out: TaskTreeNode[] = []
-    for (const node of nodes) {
-      const children = walk(node.children)
-      if (keep(node.task) || children.length > 0) out.push({ task: node.task, children })
-    }
-    return out
-  }
-  return walk(roots)
-}
-
-function countTaskTree(roots: TaskTreeNode[]): number {
+function countTaskTree(roots: TaskTreeNode<Task>[]): number {
   return roots.reduce((sum, node) => sum + 1 + countTaskTree(node.children), 0)
-}
-function buildTaskTree(tasks: Task[], orderOf?: Map<string, number>): TaskTreeNode[] {
-  const byParent = new Map<string | null, Task[]>()
-  for (const task of tasks) {
-    const list = byParent.get(task.parentId) ?? []
-    list.push(task)
-    byParent.set(task.parentId, list)
-  }
-  const unlisted = Number.MAX_SAFE_INTEGER
-  const walk = (id: string | null): TaskTreeNode[] => (byParent.get(id) ?? [])
-    .sort((a, b) => (orderOf?.get(a.id) ?? unlisted) - (orderOf?.get(b.id) ?? unlisted) || a.createdAt.localeCompare(b.createdAt))
-    .map((task) => ({ task, children: walk(task.id) }))
-  return walk(null)
 }
 
 function TaskTreeRows({ roots, depth, expanded, toggle, dicts, onOpen, selectedId }: {
-  roots: TaskTreeNode[]; depth: number; expanded: Set<string>; toggle: (id: string) => void
+  roots: TaskTreeNode<Task>[]; depth: number; expanded: Set<string>; toggle: (id: string) => void
   dicts: Dict[]; onOpen: (task: Task) => void; selectedId?: string
 }): JSX.Element {
   return (
@@ -1168,6 +1152,9 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   // 树展开状态（列表树记住用户展开）
   const [archivedTasks, setArchivedTasks] = useState<Task[]>([])
   const [archivedMode, setArchivedMode] = useState(false)
+  const [taskFilter, setTaskFilter] = useState<TaskFilterState>({ keyword: '', statusCode: '', priorityCode: '', typeCode: '' })
+  const [taskSortKey, setTaskSortKey] = useState<TaskSortKey>('dueAt')
+  const [taskSortDir, setTaskSortDir] = useState<TaskSortDir>('asc')
   const [expanded, setExpanded] = useState<Set<string>>(() => {
     try { return new Set(JSON.parse(localStorage.getItem('dsh.personal-workbench.treeExpanded') ?? '[]') as string[]) } catch { return new Set() }
   })
@@ -1178,6 +1165,13 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   const toggleTodayExpanded = (id: string): void => setTodayExpanded((prev) => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next })
   const toggleCalendarExpanded = (id: string): void => setCalendarExpanded((prev) => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next })
   const collapseAll = (): void => { setExpanded(new Set()); setTodayExpanded(new Set()); setCalendarExpanded(new Set()) }
+
+  const priorityWeights = useMemo(() => new Map(dictOf('priority').map((d) => [d.code, Number(d.config.weight ?? 99)])), [dicts])
+  const taskSorter = useMemo(() => createTaskSorter(taskSortKey, taskSortDir, priorityWeights), [taskSortKey, taskSortDir, priorityWeights])
+  const visibleTaskTree = useMemo(() => {
+    const source = archivedMode ? archivedTasks : tasks
+    return filterTaskTree(buildTaskTree(source, undefined, taskSorter), (t) => matchesTaskFilter(t, taskFilter))
+  }, [archivedMode, archivedTasks, tasks, taskSorter, taskFilter])
 
   const now = new Date()
   const todayStart = startOfDay(now)
@@ -1606,19 +1600,67 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
 
           {view === 'list' && (
             <>
-              <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+              <div style={{ display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                <input
+                  style={{ flex: 1, minWidth: 140, background: 'var(--dsw-alias-bg-base,#17171a)', border: '1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.15))', color: 'inherit', borderRadius: 8, padding: '7px 10px' }}
+                  placeholder="搜索标题 / 描述"
+                  value={taskFilter.keyword}
+                  onChange={(e) => setTaskFilter((prev) => ({ ...prev, keyword: e.target.value }))}
+                />
+                <select
+                  style={{ background: 'var(--dsw-alias-bg-base,#17171a)', border: '1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.15))', color: 'inherit', borderRadius: 8, padding: '7px 10px' }}
+                  value={taskFilter.statusCode}
+                  onChange={(e) => setTaskFilter((prev) => ({ ...prev, statusCode: e.target.value }))}
+                >
+                  <option value="">全部状态</option>
+                  {dictOf('status').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}
+                </select>
+                <select
+                  style={{ background: 'var(--dsw-alias-bg-base,#17171a)', border: '1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.15))', color: 'inherit', borderRadius: 8, padding: '7px 10px' }}
+                  value={taskFilter.priorityCode}
+                  onChange={(e) => setTaskFilter((prev) => ({ ...prev, priorityCode: e.target.value }))}
+                >
+                  <option value="">全部优先级</option>
+                  {dictOf('priority').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}
+                </select>
+                <select
+                  style={{ background: 'var(--dsw-alias-bg-base,#17171a)', border: '1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.15))', color: 'inherit', borderRadius: 8, padding: '7px 10px' }}
+                  value={taskFilter.typeCode}
+                  onChange={(e) => setTaskFilter((prev) => ({ ...prev, typeCode: e.target.value }))}
+                >
+                  <option value="">全部类型</option>
+                  {dictOf('type').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}
+                </select>
+                <button className="wb-btn" disabled={isTaskFilterEmpty(taskFilter)} onClick={() => setTaskFilter({ keyword: '', statusCode: '', priorityCode: '', typeCode: '' })}><Icon name="refresh" />清空</button>
+                <div style={{ flex: 1 }} />
                 <button className="wb-btn" onClick={() => {
                   const next = !archivedMode
                   setArchivedMode(next)
                   if (next) { void api<{ tasks: Task[] }>('/api/workbench/tasks?archived=true').then((r) => setArchivedTasks(r.tasks)).catch(() => undefined) }
                 }}>{archivedMode ? '返回任务' : '查看归档'}</button>
               </div>
+              <div style={{ display: 'flex', gap: 8, marginBottom: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)' }}>排序</span>
+                <select
+                  style={{ background: 'var(--dsw-alias-bg-base,#17171a)', border: '1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.15))', color: 'inherit', borderRadius: 8, padding: '7px 10px' }}
+                  value={taskSortKey}
+                  onChange={(e) => setTaskSortKey(e.target.value as TaskSortKey)}
+                >
+                  <option value="dueAt">截止时间</option>
+                  <option value="priority">优先级</option>
+                  <option value="createdAt">创建时间</option>
+                  <option value="title">标题</option>
+                </select>
+                <button className="wb-btn" onClick={() => setTaskSortDir((prev) => prev === 'asc' ? 'desc' : 'asc')} title={taskSortDir === 'asc' ? '当前升序，点击切换为降序' : '当前降序，点击切换为升序'}>
+                  {taskSortDir === 'asc' ? '↑ 升序' : '↓ 降序'}
+                </button>
+                <span style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)' }}>共 {countTaskTree(visibleTaskTree)} 条</span>
+              </div>
               <div className="wb-list">
-                {archivedMode
-                  ? <TaskTreeRows roots={buildTaskTree(archivedTasks)} depth={0} expanded={expanded} toggle={toggleExpanded} dicts={dicts} onOpen={openTask} selectedId={selected?.task.id} />
-                  : <TaskTreeRows roots={buildTaskTree(tasks)} depth={0} expanded={expanded} toggle={toggleExpanded} dicts={dicts} onOpen={openTask} selectedId={selected?.task.id} />}
+                <TaskTreeRows roots={visibleTaskTree} depth={0} expanded={expanded} toggle={toggleExpanded} dicts={dicts} onOpen={openTask} selectedId={selected?.task.id} />
                 {archivedMode && archivedTasks.length === 0 && <div className="wb-empty">没有归档任务</div>}
                 {!archivedMode && tasks.length === 0 && <div className="wb-empty">还没有任务，点“快速录入”或“新建”开始</div>}
+                {!isTaskFilterEmpty(taskFilter) && visibleTaskTree.length === 0 && <div className="wb-empty">没有符合条件的任务，点“清空”恢复完整列表</div>}
               </div>
             </>
           )}
