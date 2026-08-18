@@ -444,21 +444,27 @@ function MultiSelectDropdown({ label, options, selected, open, onToggle, onClose
   }
   return (
     <div style={{ position: 'relative' }}>
-      <button type="button" className="wb-btn" onClick={onToggle} style={{ position: 'relative', zIndex: 25, maxWidth: 260, overflow: 'hidden' }}>
+      <button type="button" className="wb-btn" onClick={onToggle} style={{ position: 'relative', zIndex: 25, flex: '0 0 auto', minWidth: 118, maxWidth: 180, overflow: 'hidden' }}>
         <span style={{ whiteSpace: 'nowrap' }}>{label}</span>
         {selected.length === 0 ? (
           <span style={{ color: 'var(--dsw-alias-label-secondary)', whiteSpace: 'nowrap' }}>全部</span>
         ) : (
-          <span style={{ display: 'inline-flex', gap: 4, overflow: 'hidden', flexWrap: 'nowrap' }}>
-            {selected.map((code) => <Badge key={code} dict={options} code={code} />)}
-          </span>
+          <span style={{ color: 'var(--dsw-alias-label-secondary)', whiteSpace: 'nowrap' }}>已选 {selected.length} 项</span>
         )}
         <span style={{ flex: 'none' }}>{open ? '▲' : '▼'}</span>
       </button>
       {open && (
         <>
           <div style={{ position: 'fixed', inset: 0, zIndex: 20 }} onClick={onClose} />
-          <div style={{ position: 'absolute', top: 'calc(100% + 4px)', left: 0, zIndex: 30, minWidth: 220, maxHeight: 280, overflowY: 'auto', background: 'var(--dsw-alias-bg-layer-2, #1c1c1f)', border: '1px solid var(--dsw-alias-border-l1, rgba(255,255,255,.22))', borderRadius: 10, padding: 6, boxShadow: '0 12px 32px rgba(0,0,0,.45)' }}>
+          <div style={{ position: 'absolute', top: 'calc(100% + 4px)', left: 0, zIndex: 30, minWidth: 240, maxHeight: 320, overflowY: 'auto', background: 'var(--dsw-alias-bg-layer-2, #1c1c1f)', border: '1px solid var(--dsw-alias-border-l1, rgba(255,255,255,.22))', borderRadius: 10, padding: 6, boxShadow: '0 12px 32px rgba(0,0,0,.45)' }}>
+            {selected.length > 0 && (
+              <div style={{ padding: '6px 8px 8px', borderBottom: '1px solid var(--dsw-alias-border-l1, rgba(255,255,255,.12))', marginBottom: 6 }}>
+                <div style={{ fontSize: 11, color: 'var(--dsw-alias-label-secondary)', marginBottom: 4 }}>已选（{selected.length}）</div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                  {selected.map((code) => <Badge key={code} dict={options} code={code} />)}
+                </div>
+              </div>
+            )}
             {options.map((d) => {
               const color = String(d.config.color ?? '#8a9aa8')
               const checked = selected.includes(d.code)
@@ -1682,13 +1688,6 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                   onClose={() => setOpenFilter(null)}
                   onChange={(codes) => setTaskFilter((prev) => ({ ...prev, typeCodes: codes }))}
                 />
-                <button className="wb-btn" style={{ position: 'relative', zIndex: 25 }} disabled={isTaskFilterEmpty(taskFilter)} onClick={() => setTaskFilter({ keyword: '', statusCodes: [], priorityCodes: [], typeCodes: [] })}><Icon name="refresh" />清空</button>
-                <div style={{ flex: 1 }} />
-                <button className="wb-btn" style={{ position: 'relative', zIndex: 25 }} onClick={() => {
-                  const next = !archivedMode
-                  setArchivedMode(next)
-                  if (next) { void api<{ tasks: Task[] }>('/api/workbench/tasks?archived=true').then((r) => setArchivedTasks(r.tasks)).catch(() => undefined) }
-                }}>{archivedMode ? '返回任务' : '查看归档'}</button>
               </div>
               <div style={{ display: 'flex', gap: 8, marginBottom: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                 <span style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)' }}>排序</span>
@@ -1706,6 +1705,13 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                   {taskSortDir === 'asc' ? '↑ 升序' : '↓ 降序'}
                 </button>
                 <span style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)' }}>共 {countTaskTree(visibleTaskTree)} 条</span>
+                <div style={{ flex: 1 }} />
+                <button className="wb-btn" disabled={isTaskFilterEmpty(taskFilter)} onClick={() => setTaskFilter({ keyword: '', statusCodes: [], priorityCodes: [], typeCodes: [] })}><Icon name="refresh" />清空</button>
+                <button className="wb-btn" onClick={() => {
+                  const next = !archivedMode
+                  setArchivedMode(next)
+                  if (next) { void api<{ tasks: Task[] }>('/api/workbench/tasks?archived=true').then((r) => setArchivedTasks(r.tasks)).catch(() => undefined) }
+                }}>{archivedMode ? '返回任务' : '查看归档'}</button>
               </div>
               <div className="wb-list">
                 <TaskTreeRows roots={visibleTaskTree} depth={0} expanded={expanded} toggle={toggleExpanded} dicts={dicts} onOpen={openTask} selectedId={selected?.task.id} />
