@@ -1,5 +1,7 @@
 # dsh-personal-workbench
 
+[![npm version](https://img.shields.io/npm/v/@dely0/dsh-personal-workbench)](https://www.npmjs.com/package/@dely0/dsh-personal-workbench)
+
 A personal workbench plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH) Web.
 Turn your DSH into a **calendar + task list + AI assistant workbench**.
 
@@ -75,7 +77,19 @@ Turn your DSH into a **calendar + task list + AI assistant workbench**.
 - pnpm `>=11.7.0 <12`
 - 网络可访问 npm registry（或使用镜像）
 
-### 从 GitHub 安装（推荐）
+### 从 npm 安装（推荐）
+
+```sh
+dsh plugin --profile web add @dely0/dsh-personal-workbench
+```
+
+或使用 npm 直接安装到项目：
+
+```sh
+npm install @dely0/dsh-personal-workbench
+```
+
+### 从 GitHub 安装
 
 ```sh
 dsh plugin --profile web add git+https://github.com/Dely0/dsh-personal-workbench.git
@@ -164,6 +178,9 @@ All task data is stored locally under `~/.dsh/workbench`.
 ## Install
 
 ```sh
+# From npm (recommended)
+dsh plugin --profile web add @dely0/dsh-personal-workbench
+
 # From source or release tarball
 dsh plugin --profile web add git+https://github.com/Dely0/dsh-personal-workbench.git
 dsh plugin --profile web add file:/path/to/dsh-personal-workbench-<version>.tgz
