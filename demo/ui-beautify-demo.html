@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>UI 美化 Demo · 个人工作台</title>
+<style>
+  :root {
+    --bg: #111;
+    --layer1: rgba(255,255,255,.03);
+    --layer2: rgba(255,255,255,.06);
+    --border: color-mix(in srgb, #ddd 26%, transparent);
+    --border-soft: color-mix(in srgb, #ddd 15%, transparent);
+    --text: #eee;
+    --text-secondary: rgba(238,238,238,.72);
+    --primary: #4f8ef7;
+    --accent: #8fa8c8;
+    --radius: 14px;
+    --radius-sm: 10px;
+    --shadow: 0 8px 22px rgba(0,0,0,.22);
+    --shadow-hover: 0 12px 30px rgba(0,0,0,.30);
+    --transition: .16s ease;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); padding: 28px 32px; }
+  .page-title { font-size: 22px; font-weight: 800; margin-bottom: 6px; }
+  .page-sub { color: var(--text-secondary); font-size: 13px; margin-bottom: 24px; }
+  .section { margin-bottom: 34px; }
+  .section-title { font-size: 15px; font-weight: 700; margin: 0 0 12px; display: flex; align-items: center; gap: 8px; }
+  .section-title::before { content:''; width: 4px; height: 16px; border-radius: 4px; background: var(--primary); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+  .card { border: 1px solid var(--border); background: var(--layer1); border-radius: var(--radius); padding: 16px; box-shadow: var(--shadow); transition: border-color var(--transition), box-shadow var(--transition), transform var(--transition); }
+  .card:hover { border-color: color-mix(in srgb, var(--primary) 55%, transparent); box-shadow: var(--shadow-hover); transform: translateY(-1px); }
+  .card.selected { border-color: color-mix(in srgb, var(--primary) 70%, transparent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary) 35%, transparent), var(--shadow-hover); transform: translateY(-1px); }
+  .card h4 { margin: 0 0 10px; padding-bottom: 10px; border-bottom: 1px solid var(--border-soft); font-size: 14px; font-weight: 700; }
+  .card p { margin: 0; font-size: 12.5px; color: var(--text-secondary); line-height: 1.6; }
+  .stat-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 12px; }
+  .stat { border: 1px solid var(--border); background: var(--layer1); border-radius: var(--radius); padding: 12px 14px; box-shadow: 0 2px 8px rgba(0,0,0,.06); transition: border-color var(--transition); }
+  .stat:hover { border-color: color-mix(in srgb, var(--primary) 45%, transparent); }
+  .stat b { font-size: 20px; }
+  .stat span { display: block; color: var(--text-secondary); font-size: 12px; margin-top: 2px; }
+  .list { border: 1px solid var(--border); border-radius: 12px; overflow: hidden; background: var(--layer1); }
+  .row { display: flex; align-items: center; gap: 10px; padding: 11px 12px; border-bottom: 1px solid var(--border-soft); cursor: pointer; transition: background var(--transition); }
+  .row:last-child { border-bottom: none; }
+  .row:hover { background: color-mix(in srgb, #fff 6%, transparent); }
+  .row.selected { background: color-mix(in srgb, var(--primary) 13%, transparent); box-shadow: inset 3px 0 0 var(--primary); }
+  .row.done { opacity: .58; }
+  .row.done .row-title { text-decoration: line-through; }
+  .row-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+  .row-meta { display: flex; gap: 6px; align-items: center; flex: none; }
+  .chip { display: inline-flex; align-items: center; justify-content: center; border-radius: 7px; padding: 2px 8px; font-size: 11px; white-space: nowrap; font-weight: 600; }
+  .chip.type { color: #fff; }
+  .chip.status { color: #fff; }
+  .chip.priority { color: #fff; }
+  .tag { color: var(--text-secondary); font-size: 11px; }
+  .form { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; border: 1px solid var(--border); background: var(--layer1); border-radius: var(--radius); padding: 14px; }
+  .form label { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: var(--text-secondary); }
+  .form .full { grid-column: 1 / -1; }
+  .form input, .form select, .form textarea { background: rgba(0,0,0,.25); border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 8px 10px; font: inherit; outline: none; transition: border-color var(--transition), box-shadow var(--transition); }
+  .form input:focus, .form select:focus, .form textarea:focus { border-color: color-mix(in srgb, var(--primary) 65%, transparent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 18%, transparent); }
+  .btn { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border); background: transparent; color: var(--text-secondary); border-radius: 9px; padding: 7px 12px; cursor: pointer; font: inherit; font-size: 13px; transition: background var(--transition), border-color var(--transition), color var(--transition); }
+  .btn:hover { background: color-mix(in srgb, #fff 7%, transparent); color: var(--text); border-color: color-mix(in srgb, #fff 35%, transparent); }
+  .btn.primary { background: color-mix(in srgb, var(--primary) 18%, transparent); border-color: color-mix(in srgb, var(--primary) 42%, transparent); color: var(--text); }
+  .btn.primary:hover { background: color-mix(in srgb, var(--primary) 28%, transparent); }
+  .btn-row { display: flex; gap: 8px; margin-top: 12px; }
+  .idea-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; }
+  .idea-card { border: 1px solid var(--border); background: var(--layer1); border-radius: var(--radius); padding: 12px; cursor: pointer; transition: border-color var(--transition), box-shadow var(--transition), transform var(--transition); }
+  .idea-card:hover { border-color: color-mix(in srgb, var(--primary) 50%, transparent); box-shadow: var(--shadow-hover); transform: translateY(-1px); }
+  .idea-card.selected { border-color: color-mix(in srgb, var(--primary) 70%, transparent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary) 35%, transparent), var(--shadow-hover); }
+  .idea-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .idea-head b { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+  .idea-summary { font-size: 12px; color: var(--text-secondary); min-height: 34px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.5; }
+  .idea-foot { display: flex; gap: 5px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
+  .cluster-row { display: flex; align-items: center; gap: 10px; }
+  .cluster-count { font-size: 11px; color: var(--text-secondary); background: var(--layer2); border: 1px solid var(--border-soft); border-radius: 99px; padding: 1px 8px; }
+  .file-chip { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--border); background: rgba(0,0,0,.2); border-radius: 99px; padding: 3px 10px; font-size: 12px; color: var(--text-secondary); }
+  .empty { border: 1px dashed var(--border); border-radius: 12px; padding: 26px; text-align: center; color: var(--text-secondary); font-size: 13px; }
+  .kbd { color: var(--text-secondary); font-size: 11px; }
+  code { font-size: 12px; color: var(--text-secondary); word-break: break-all; background: rgba(0,0,0,.25); border: 1px solid var(--border-soft); border-radius: 6px; padding: 3px 6px; }
+</style>
+</head>
+<body>
+  <div class="page-title">✨ UI 美化 Demo</div>
+  <div class="page-sub">以下为拟落地样式：统一卡片/列表/表单视觉，点子卡片与关联展示更清晰。主题变量跟随 DSH，亮/暗主题自动适配。</div>
+
+  <div class="section">
+    <div class="section-title">统计卡</div>
+    <div class="stat-row">
+      <div class="stat"><b>3</b><span>逾期</span></div>
+      <div class="stat"><b>5</b><span>今天到期</span></div>
+      <div class="stat"><b>2</b><span>进行中</span></div>
+      <div class="stat"><b>12</b><span>总数</span></div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">任务列表行（类型/状态/优先级 chip 使用字典颜色，已完成行弱化）</div>
+    <div class="list">
+      <div class="row selected">
+        <div class="row-title">周五前完成插件 UI 美化 Demo</div>
+        <div class="row-meta">
+          <span class="chip type" style="background:#6C5CE7">功能优化</span>
+          <span class="chip status" style="background:#F39C12">进行中</span>
+          <span class="chip priority" style="background:#E74C3C">紧急</span>
+        </div>
+      </div>
+      <div class="row">
+        <div class="row-title">整理 Windows DSH 验收清单</div>
+        <div class="row-meta">
+          <span class="chip type" style="background:#4F86F7">客户交流</span>
+          <span class="chip status" style="background:#3498DB">待办</span>
+          <span class="chip priority" style="background:#3498DB">普通</span>
+        </div>
+      </div>
+      <div class="row done">
+        <div class="row-title">发布 v1.2.0 优化项清单</div>
+        <div class="row-meta">
+          <span class="chip type" style="background:#2E9B7B">代码实现</span>
+          <span class="chip status" style="background:#2E9B7B">已完成</span>
+          <span class="chip priority" style="background:#95A5A6">低</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">表单（统一样式、焦点态、按钮层级）</div>
+    <form class="form" onsubmit="return false">
+      <label class="full">标题<input value="编写 UI 美化验收说明" /></label>
+      <label>类型
+        <select><option>功能优化</option><option>代码实现</option><option>方案设计</option></select>
+      </label>
+      <label>优先级
+        <select><option>高</option><option>普通</option><option>低</option></select>
+      </label>
+      <label>状态
+        <select><option>待办</option><option>进行中</option><option>已完成</option></select>
+      </label>
+      <label>截止时间<input type="datetime-local" /></label>
+      <label>工作区<input placeholder="D:\Code\AI-Workspace" /></label>
+      <label class="full">描述<textarea rows="2" placeholder="背景 / 目标 / 验收标准（Markdown）"></textarea></label>
+      <div class="full btn-row">
+        <button class="btn primary">保存任务</button>
+        <button class="btn">取消</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="section">
+    <div class="section-title">点子卡片（类型 badge + 标签对齐、摘要两行截断、选中/多选态清晰）</div>
+    <div class="idea-grid">
+      <div class="idea-card selected">
+        <div class="idea-head">
+          <input type="checkbox" checked style="width:16px;height:16px;accent-color:#4f8ef7;flex:none" />
+          <b>语音笔记自动转知识卡片</b>
+        </div>
+        <div class="idea-summary">把本地语音录音用 AI 转写并自动总结为知识条目，支持 file_link 追溯原音频。</div>
+        <div class="idea-foot">
+          <span class="chip type" style="background:#8E44AD;color:#fff">插件点子</span>
+          <span class="tag">#AI</span>
+          <span class="tag">#语音</span>
+          <span class="tag">#知识库</span>
+        </div>
+      </div>
+      <div class="idea-card">
+        <div class="idea-head">
+          <input type="checkbox" style="width:16px;height:16px;accent-color:#4f8ef7;flex:none" />
+          <b>任务看板拖拽排序</b>
+        </div>
+        <div class="idea-summary">为任务列表增加看板视图，支持拖拽改变状态与排序。</div>
+        <div class="idea-foot">
+          <span class="chip type" style="background:#F39C12;color:#fff">项目点子</span>
+          <span class="tag">#拖拽</span>
+          <span class="tag">#看板</span>
+        </div>
+      </div>
+      <div class="idea-card">
+        <div class="idea-head">
+          <input type="checkbox" style="width:16px;height:16px;accent-color:#4f8ef7;flex:none" />
+          <b>周报自动汇总本周踩坑</b>
+        </div>
+        <div class="idea-summary">每周自动从复盘 lessons 汇总“本周踩坑”，生成周报草稿。</div>
+        <div class="idea-foot">
+          <span class="chip type" style="background:#16A085;color:#fff">技能点子</span>
+          <span class="tag">#周报</span>
+          <span class="tag">#复盘</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">点子王列表（展示关联数量与类型分布）</div>
+    <div class="list">
+      <div class="row selected">
+        <div style="flex:1;min-width:0">
+          <div style="font-weight:600">👑 AI 语音方向 <span class="cluster-count">3 个点子</span></div>
+          <div style="font-size:12px;color:var(--text-secondary)">插件点子 2 · 技能点子 1</div>
+        </div>
+      </div>
+      <div class="row">
+        <div style="flex:1;min-width:0">
+          <div style="font-weight:600">👑 工作台效率工具 <span class="cluster-count">4 个点子</span></div>
+          <div style="font-size:12px;color:var(--text-secondary)">项目点子 1 · 插件点子 3</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">知识/点子详情（文件链接 chip 化、关联任务清晰）</div>
+    <div class="card">
+      <h4>DSH 使用注意事项</h4>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin:8px 0">
+        <span class="chip status" style="background:#8E44AD;color:#fff">经验教训</span>
+        <span class="tag">#DSH</span>
+        <span class="tag">#注意</span>
+      </div>
+      <div style="margin:8px 0;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <span style="font-size:13px">📎 本地文件：</span>
+        <code>D:\docs\DSH注意事项.md</code>
+        <button class="btn">打开文件</button>
+      </div>
+      <p>背景：DSH 升级后部分 DOM 选择器可能变化……结论：升级前先跑回归测试。</p>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">空状态（统一文案与样式）</div>
+    <div class="empty">还没有知识条目，点“新建”或让 AI 在复盘后提交</div>
+  </div>
+</body>
+</html>

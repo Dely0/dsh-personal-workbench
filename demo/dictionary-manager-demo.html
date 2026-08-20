@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>任务类型自定义 UI Demo · 个人工作台</title>
+<style>
+  :root {
+    --bg: #111;
+    --layer1: rgba(255,255,255,.03);
+    --layer2: rgba(255,255,255,.06);
+    --border: color-mix(in srgb, #ddd 26%, transparent);
+    --border-soft: color-mix(in srgb, #ddd 15%, transparent);
+    --text: #eee;
+    --text-secondary: rgba(238,238,238,.72);
+    --primary: #4f8ef7;
+    --danger: #E74C3C;
+    --success: #2E9B7B;
+    --radius: 14px;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); padding: 28px 32px; }
+  .page-title { font-size: 22px; font-weight: 800; margin-bottom: 6px; }
+  .page-sub { color: var(--text-secondary); font-size: 13px; margin-bottom: 24px; }
+  .panel { border: 1px solid var(--border); background: var(--layer1); border-radius: var(--radius); padding: 18px; max-width: 880px; }
+  .tabs { display: inline-flex; padding: 3px; border-radius: 10px; background: var(--bg); border: 1px solid var(--border-soft); gap: 2px; margin-bottom: 14px; }
+  .tab { display: inline-flex; align-items: center; gap: 6px; border: none; background: transparent; color: var(--text-secondary); padding: 7px 16px; border-radius: 8px; cursor: pointer; font: inherit; font-weight: 600; font-size: 13.5px; }
+  .tab.on { background: color-mix(in srgb, var(--primary) 16%, transparent); color: var(--text); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 32%, transparent); }
+  .toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+  .btn { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border); background: transparent; color: var(--text-secondary); border-radius: 9px; padding: 7px 12px; cursor: pointer; font: inherit; font-size: 13px; }
+  .btn:hover { background: color-mix(in srgb, #fff 7%, transparent); color: var(--text); }
+  .btn.primary { background: color-mix(in srgb, var(--primary) 18%, transparent); border-color: color-mix(in srgb, var(--primary) 42%, transparent); color: var(--text); }
+  .btn.danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, transparent); }
+  .list { border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+  .item { display: flex; align-items: center; gap: 12px; padding: 11px 14px; border-bottom: 1px solid var(--border-soft); transition: background .15s ease; }
+  .item:last-child { border-bottom: none; }
+  .item:hover { background: color-mix(in srgb, #fff 4%, transparent); }
+  .item.inactive { opacity: .5; }
+  .swatch { width: 18px; height: 18px; border-radius: 6px; flex: none; border: 1px solid rgba(255,255,255,.2); }
+  .info { flex: 1; min-width: 0; }
+  .info .name { font-weight: 600; font-size: 13.5px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .info .code { font-size: 11px; color: var(--text-secondary); background: var(--layer2); border: 1px solid var(--border-soft); border-radius: 5px; padding: 1px 6px; }
+  .info .desc { font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
+  .badge-builtin { font-size: 11px; color: var(--text-secondary); background: var(--layer2); border: 1px solid var(--border-soft); border-radius: 99px; padding: 1px 8px; }
+  .actions { display: flex; gap: 6px; flex: none; }
+  .switch { position: relative; width: 36px; height: 20px; flex: none; border-radius: 99px; background: rgba(255,255,255,.18); cursor: pointer; transition: background .15s ease; }
+  .switch.on { background: var(--success); }
+  .switch::after { content:''; position:absolute; top:2px; left:2px; width:16px; height:16px; border-radius:50%; background:#fff; transition: transform .15s ease; }
+  .switch.on::after { transform: translateX(16px); }
+  .add-form { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; border: 1px solid color-mix(in srgb, var(--primary) 40%, transparent); border-radius: 12px; padding: 14px; margin-bottom: 12px; background: color-mix(in srgb, var(--primary) 7%, transparent); }
+  .add-form label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-secondary); }
+  .add-form .full { grid-column: 1 / -1; }
+  .add-form input { background: rgba(0,0,0,.25); border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 8px 10px; font: inherit; outline: none; }
+  .add-form input:focus { border-color: color-mix(in srgb, var(--primary) 65%, transparent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 18%, transparent); }
+  .error { color: var(--danger); font-size: 12px; margin: 8px 0 0; }
+  .hint { color: var(--text-secondary); font-size: 12px; margin: 8px 0 0; }
+  .toast { position: fixed; right: 24px; bottom: 24px; background: var(--layer2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 16px; font-size: 13px; box-shadow: 0 10px 28px rgba(0,0,0,.35); opacity: 0; transform: translateY(8px); transition: opacity .2s, transform .2s; pointer-events: none; }
+  .toast.show { opacity: 1; transform: translateY(0); }
+</style>
+</head>
+<body>
+  <div class="page-title">🗂️ 任务类型自定义 UI Demo</div>
+  <div class="page-sub">设置页新增“字典管理”：类型/状态/优先级/点子类型可新增、编辑、停用；重复/非法 code 被拦截；默认项受保护不可误删。</div>
+
+  <div class="panel">
+    <div class="tabs" id="tabs">
+      <button class="tab on" data-kind="type">任务类型</button>
+      <button class="tab" data-kind="status">状态</button>
+      <button class="tab" data-kind="priority">优先级</button>
+      <button class="tab" data-kind="idea_kind">点子类型</button>
+    </div>
+
+    <div class="toolbar">
+      <button class="btn primary" id="addBtn">＋ 新增</button>
+      <span class="hint" style="margin:0">默认项显示“内置”标签，只能编辑名称/颜色/停用，不能删除。</span>
+    </div>
+
+    <form class="add-form" id="addForm" style="display:none">
+      <label>名称<input id="fName" placeholder="例如：客户沟通" /></label>
+      <label>code<input id="fCode" placeholder="例如：client_comm（小写英文/下划线/数字）" /></label>
+      <label>颜色<input id="fColor" type="color" value="#4F86F7" /></label>
+      <label>排序<input id="fSort" type="number" value="50" /></label>
+      <div class="full" style="display:flex;gap:8px">
+        <button class="btn primary" type="submit">保存</button>
+        <button class="btn" type="button" id="cancelAdd">取消</button>
+      </div>
+      <div class="error" id="formError" style="display:none"></div>
+    </form>
+
+    <div class="list" id="list"></div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+<script>
+  const DATA = {
+    type: [
+      { code:'client_meeting', name:'客户交流', color:'#4F86F7', builtin:true, active:true, desc:'默认提醒 30 分钟' },
+      { code:'code_impl', name:'代码实现', color:'#2E9B7B', builtin:true, active:true, desc:'' },
+      { code:'feature_opt', name:'功能优化', color:'#6C5CE7', builtin:true, active:true, desc:'' },
+      { code:'boss_request', name:'老板要求', color:'#E74C3C', builtin:true, active:true, desc:'' },
+      { code:'my_research', name:'个人研究', color:'#16A085', builtin:false, active:true, desc:'用户新增示例' }
+    ],
+    status: [
+      { code:'backlog', name:'待规划', color:'#95A5A6', builtin:true, active:true, desc:'open' },
+      { code:'todo', name:'待办', color:'#3498DB', builtin:true, active:true, desc:'open' },
+      { code:'doing', name:'进行中', color:'#F39C12', builtin:true, active:true, desc:'active' },
+      { code:'done', name:'已完成', color:'#2E9B7B', builtin:true, active:true, desc:'terminal' },
+      { code:'cancelled', name:'已取消', color:'#7F8C8D', builtin:true, active:true, desc:'terminal' }
+    ],
+    priority: [
+      { code:'p0', name:'紧急', color:'#E74C3C', builtin:true, active:true, desc:'今天必须处理' },
+      { code:'p1', name:'高', color:'#F39C12', builtin:true, active:true, desc:'本周内完成' },
+      { code:'p2', name:'普通', color:'#3498DB', builtin:true, active:true, desc:'按计划推进' },
+      { code:'p3', name:'低', color:'#95A5A6', builtin:true, active:true, desc:'有空再做' }
+    ],
+    idea_kind: [
+      { code:'project', name:'项目点子', color:'#F39C12', builtin:true, active:true, desc:'' },
+      { code:'skill', name:'技能点子', color:'#16A085', builtin:true, active:true, desc:'' },
+      { code:'plugin', name:'插件点子', color:'#8E44AD', builtin:true, active:true, desc:'' },
+      { code:'spark', name:'突发奇想', color:'#3498DB', builtin:true, active:true, desc:'' },
+      { code:'random', name:'莫名其妙的点子', color:'#95A5A6', builtin:true, active:true, desc:'' }
+    ]
+  };
+  let currentKind = 'type';
+  let adding = false;
+
+  const listEl = document.getElementById('list');
+  const addForm = document.getElementById('addForm');
+  const formError = document.getElementById('formError');
+  const toast = document.getElementById('toast');
+
+  function showToast(msg) {
+    toast.textContent = msg;
+    toast.classList.add('show');
+    clearTimeout(showToast._t);
+    showToast._t = setTimeout(() => toast.classList.remove('show'), 2200);
+  }
+
+  function render() {
+    const items = DATA[currentKind];
+    listEl.innerHTML = '';
+    for (const item of items) {
+      const div = document.createElement('div');
+      div.className = 'item' + (item.active ? '' : ' inactive');
+      const desc = item.desc ? `<div class="desc">${item.desc}</div>` : '';
+      div.innerHTML = `
+        <span class="swatch" style="background:${item.color}"></span>
+        <div class="info">
+          <div class="name">${item.name} <span class="code">${item.code}</span> ${item.builtin ? '<span class="badge-builtin">内置</span>' : ''}</div>
+          ${desc}
+        </div>
+        <div class="actions">
+          <button class="btn" data-act="edit">编辑</button>
+          <button class="btn" data-act="toggle">${item.active ? '停用' : '启用'}</button>
+          ${item.builtin ? '' : '<button class="btn danger" data-act="delete">删除</button>'}
+        </div>
+      `;
+      listEl.appendChild(div);
+    }
+  }
+
+  function showError(msg) {
+    formError.textContent = msg;
+    formError.style.display = 'block';
+  }
+
+  document.getElementById('tabs').addEventListener('click', (e) => {
+    const btn = e.target.closest('.tab');
+    if (!btn) return;
+    document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('on', t === btn));
+    currentKind = btn.dataset.kind;
+    adding = false;
+    addForm.style.display = 'none';
+    formError.style.display = 'none';
+    render();
+  });
+
+  document.getElementById('addBtn').addEventListener('click', () => {
+    adding = true;
+    formError.style.display = 'none';
+    document.getElementById('fName').value = '';
+    document.getElementById('fCode').value = '';
+    document.getElementById('fColor').value = '#4F86F7';
+    document.getElementById('fSort').value = '50';
+    addForm.style.display = 'grid';
+  });
+
+  document.getElementById('cancelAdd').addEventListener('click', () => {
+    adding = false;
+    addForm.style.display = 'none';
+    formError.style.display = 'none';
+  });
+
+  addForm.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const name = document.getElementById('fName').value.trim();
+    const code = document.getElementById('fCode').value.trim();
+    const color = document.getElementById('fColor').value;
+    const sort = Number(document.getElementById('fSort').value || 50);
+    if (!name) { showError('名称不能为空'); return; }
+    if (!/^[a-z][a-z0-9_]*$/.test(code)) { showError('code 必须是小写字母开头，只能包含小写字母/数字/下划线'); return; }
+    if (DATA[currentKind].some((d) => d.code === code)) { showError(`code “${code}” 已存在，请换一个`); return; }
+    DATA[currentKind].push({ code, name, color, builtin:false, active:true, desc:`排序 ${sort}` });
+    addForm.style.display = 'none';
+    formError.style.display = 'none';
+    render();
+    showToast(`已新增 ${currentKind}：${name}`);
+  });
+
+  listEl.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-act]');
+    if (!btn) return;
+    const itemEl = btn.closest('.item');
+    const index = [...listEl.children].indexOf(itemEl);
+    const item = DATA[currentKind][index];
+    if (!item) return;
+    const act = btn.dataset.act;
+    if (act === 'toggle') {
+      item.active = !item.active;
+      render();
+      showToast(item.active ? `已启用 ${item.name}` : `已停用 ${item.name}`);
+    } else if (act === 'delete') {
+      if (item.builtin) { showToast('内置默认项受保护，不能删除'); return; }
+      if (!confirm(`确认删除“${item.name}”？`)) return;
+      DATA[currentKind].splice(index, 1);
+      render();
+      showToast(`已删除 ${item.name}`);
+    } else if (act === 'edit') {
+      const newName = prompt('修改名称：', item.name);
+      if (newName && newName.trim()) {
+        item.name = newName.trim();
+        render();
+        showToast('已保存修改');
+      }
+    }
+  });
+
+  render();
+</script>
+</body>
+</html>

@@ -208,3 +208,47 @@ test('knowledge API supports file_link and local document reading', async () => 
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test('dictionary CRUD API creates, edits, deactivates, protects builtin and blocks invalid code', async () => {
+  await withServer(async ({ db, request }) => {
+    seedDictionaries(db)
+
+    const created = await request('POST', '/api/workbench/dictionaries', { kind: 'type', code: 'research', name: '研究', config: { color: '#16A085' }, sortOrder: 95 })
+    assert.equal(created.status, 200)
+    assert.equal(created.body.ok, true)
+    assert.equal(created.body.dictionary.name, '研究')
+    assert.equal(created.body.dictionary.code, 'research')
+
+    const dup = await request('POST', '/api/workbench/dictionaries', { kind: 'type', code: 'research', name: '重复' })
+    assert.equal(dup.status, 400)
+    assert.match(dup.body.error, /已存在/)
+
+    const invalid = await request('POST', '/api/workbench/dictionaries', { kind: 'type', code: 'Bad Code', name: '非法' })
+    assert.equal(invalid.status, 400)
+    assert.match(invalid.body.error, /小写字母/)
+
+    const patch = await request('PATCH', '/api/workbench/dictionaries/type/research', { name: '专项研究', active: false, config: { color: '#2E9B7B' } })
+    assert.equal(patch.status, 200)
+    assert.equal(patch.body.dictionary.name, '专项研究')
+    assert.equal(patch.body.dictionary.active, 0)
+
+    const del = await request('DELETE', '/api/workbench/dictionaries/type/research')
+    assert.equal(del.status, 200)
+    assert.equal(del.body.ok, true)
+
+    const delBuiltin = await request('DELETE', '/api/workbench/dictionaries/type/code_impl')
+    assert.equal(delBuiltin.status, 400)
+    assert.match(delBuiltin.body.error, /受保护/)
+
+    const inuse = await request('POST', '/api/workbench/dictionaries', { kind: 'type', code: 'inuse_type', name: '使用中', config: {} })
+    assert.equal(inuse.status, 200)
+    createTask(db, { title: 'uses custom type', typeCode: 'inuse_type', priorityCode: 'p2' })
+    const delInUse = await request('DELETE', '/api/workbench/dictionaries/type/inuse_type')
+    assert.equal(delInUse.status, 400)
+    assert.match(delInUse.body.error, /已被 1 条数据使用/)
+
+    const deactivate = await request('PATCH', '/api/workbench/dictionaries/type/code_impl', { active: false })
+    assert.equal(deactivate.status, 200)
+    assert.equal(deactivate.body.dictionary.active, 0)
+  })
+})

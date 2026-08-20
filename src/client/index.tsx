@@ -163,9 +163,28 @@ html[${PENDING_ATTR}] [${ENTRY_ATTR}]::after { content:''; position:absolute; to
 .wb-mday.today .wb-mday-date { color: var(--dsw-alias-state-business-primary, #4f8ef7); font-weight: 700; }
 .wb-mday.today.selected { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 70%, transparent); }
 .wb-mday.other.today { opacity: 1; }
+
+/* ---- UI 美化：统一卡片/列表/表单视觉，强化 hover/selected/focus 态 ---- */
+.wb-card { transition: border-color .16s ease, box-shadow .16s ease, transform .16s ease; }
+.wb-card:hover { border-color: color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 42%, transparent); box-shadow: 0 10px 26px rgba(0,0,0,.12); }
+.wb-card.selected { border-color: color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 70%, transparent) !important; box-shadow: 0 0 0 1px color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 35%, transparent), 0 10px 26px rgba(0,0,0,.14); transform: translateY(-1px); }
+.wb-stat { transition: border-color .16s ease, box-shadow .16s ease; }
+.wb-stat:hover { border-color: color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 42%, transparent); box-shadow: 0 4px 14px rgba(0,0,0,.10); }
+.wb-row { transition: background .14s ease, box-shadow .14s ease; }
+.wb-row.done { opacity: .58; }
+.wb-row.done .wb-row-title { text-decoration: line-through; }
+.wb-row.selected { box-shadow: inset 3px 0 0 var(--dsw-alias-state-business-primary, #4f8ef7); }
+.wb-form input:focus, .wb-form select:focus, .wb-form textarea:focus { border-color: color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 65%, transparent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 16%, transparent); outline: none; }
+.wb-idea-card { display: flex; flex-direction: column; margin-bottom: 0; padding: 12px; cursor: pointer; }
+.wb-idea-card .wb-idea-summary { font-size: 12px; color: var(--dsw-alias-label-secondary); line-height: 1.5; min-height: 36px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.wb-idea-card .wb-idea-foot { display: flex; gap: 5px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
+.wb-file-chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--wb-border, rgba(127,127,127,.22)); background: color-mix(in srgb, var(--dsw-alias-label-primary, #888) 5%, transparent); border-radius: 99px; padding: 3px 10px; font-size: 12px; color: var(--dsw-alias-label-secondary); }
+.wb-file-chip code { background: transparent; border: none; padding: 0; }
+.wb-cluster-meta { font-size: 12px; color: var(--dsw-alias-label-secondary); margin-top: 2px; }
+.wb-empty { border: 1px dashed var(--wb-border-soft, rgba(127,127,127,.16)); border-radius: 12px; margin: 4px; }
 `
 
-interface Dict { kind: string; code: string; name: string; config: Record<string, unknown> }
+interface Dict { kind: string; code: string; name: string; config: Record<string, unknown>; builtin?: number; active?: number; sortOrder?: number; createdAt?: string; updatedAt?: string }
 interface Task {
   id: string
   parentId: string | null
@@ -457,8 +476,9 @@ function TaskRow({ task, dicts, onOpen, selected, bare = false }: { task: Task; 
     </>
   )
   if (bare) return <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8 }}>{content}</div>
+  const closed = task.statusCode === 'done' || task.statusCode === 'cancelled'
   return (
-    <div className={`wb-row ${selected === true ? 'selected' : ''}`} style={{ flex: 1, minWidth: 0 }} onClick={() => onOpen(task)}>
+    <div className={`wb-row ${selected === true ? 'selected' : ''} ${closed ? 'done' : ''}`} style={{ flex: 1, minWidth: 0 }} onClick={() => onOpen(task)}>
       {content}
     </div>
   )
@@ -865,6 +885,10 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   const [settings, setSettings] = useState<{ defaultWorkspace: string; autoCreateTypeFolders: boolean; desktopNotify: boolean }>({ defaultWorkspace: '', autoCreateTypeFolders: true, desktopNotify: true })
   const [notifyPerm, setNotifyPerm] = useState<NotificationPermission | 'unsupported'>(() => typeof Notification === 'undefined' ? 'unsupported' : Notification.permission)
   const [showSettings, setShowSettings] = useState(false)
+  const [dictKind, setDictKind] = useState<'type' | 'status' | 'priority' | 'idea_kind'>('type')
+  const [dictForm, setDictForm] = useState<{ name: string; code: string; color: string; sortOrder: number } | null>(null)
+  const [dictEditCode, setDictEditCode] = useState<string | null>(null)
+  const [dictError, setDictError] = useState<string | null>(null)
   const [reportSubTab, setReportSubTab] = useState<'day' | 'week'>('day')
   const [currentReport, setCurrentReport] = useState<TaskReportView | null>(null)
   const [reportSession, setReportSession] = useState<{ sessionId: string } | null>(null)
@@ -1321,6 +1345,49 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
     }
   }
 
+  const saveDictionaryEntry = async (event: React.FormEvent<HTMLFormElement>): Promise<void> => {
+    event.preventDefault()
+    if (dictForm === null) return
+    const name = dictForm.name.trim()
+    if (name === '') { setDictError('名称不能为空'); return }
+    const code = (dictEditCode ?? dictForm.code).trim()
+    if (!/^[a-z][a-z0-9_]*$/.test(code)) { setDictError('code 必须是小写字母开头，只能包含小写字母/数字/下划线'); return }
+    const config = { ...(dictOf(dictKind).find((d) => d.code === code)?.config ?? {}), color: dictForm.color }
+    const base = { name, config, sortOrder: dictForm.sortOrder }
+    try {
+      if (dictEditCode !== null) {
+        await api(`/api/workbench/dictionaries/${dictKind}/${encodeURIComponent(dictEditCode)}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(base) })
+      } else {
+        await api('/api/workbench/dictionaries', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...base, kind: dictKind, code }) })
+      }
+      setDictForm(null); setDictEditCode(null); setDictError(null); setNotice('字典项已保存')
+      await refresh()
+    } catch (e) {
+      setDictError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  const toggleDictionaryEntry = async (entry: Dict): Promise<void> => {
+    try {
+      await api(`/api/workbench/dictionaries/${entry.kind}/${encodeURIComponent(entry.code)}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ active: entry.active !== 1 }) })
+      setNotice(entry.active === 1 ? `已停用 ${entry.name}` : `已启用 ${entry.name}`)
+      await refresh()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  const deleteDictionaryEntry = async (entry: Dict): Promise<void> => {
+    if (!window.confirm(`确认删除“${entry.name}”？`)) return
+    try {
+      await api(`/api/workbench/dictionaries/${entry.kind}/${encodeURIComponent(entry.code)}`, { method: 'DELETE' })
+      setNotice(`已删除 ${entry.name}`)
+      await refresh()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
   const createTask = async (event: React.FormEvent<HTMLFormElement>): Promise<void> => {
     event.preventDefault()
     const form = new FormData(event.currentTarget)
@@ -1571,6 +1638,46 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                 }}>发送测试通知</button>}
                 <span style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)' }}>DSH 页面保持打开（可最小化）即可收到</span>
               </div>
+              <div className="full" style={{ marginTop: 14, borderTop: '1px solid var(--wb-border-soft)', paddingTop: 12 }}>
+                <div style={{ fontWeight: 700, marginBottom: 8 }}><Icon name="settings" /> 字典管理</div>
+                <div className="wb-segmented wb-sub-segmented" style={{ marginBottom: 10 }}>
+                  {(['type', 'status', 'priority', 'idea_kind'] as const).map((k) => (
+                    <button key={k} className={`wb-seg ${dictKind === k ? 'on' : ''}`} onClick={() => { setDictKind(k); setDictForm(null); setDictEditCode(null); setDictError(null) }}>
+                      {k === 'type' ? '任务类型' : k === 'status' ? '状态' : k === 'priority' ? '优先级' : '点子类型'}
+                    </button>
+                  ))}
+                </div>
+                <div className="full" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, gap: 8, flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)' }}>默认项受保护，不可删除；可编辑名称/颜色/排序/停用</span>
+                  <button className="wb-btn primary" onClick={() => { setDictEditCode(null); setDictForm({ name: '', code: '', color: '#4F86F7', sortOrder: 50 }); setDictError(null) }}><Icon name="plus" />新增</button>
+                </div>
+                {dictForm !== null && (
+                  <form className="wb-form" style={{ borderColor: 'color-mix(in srgb, var(--dsw-alias-state-business-primary,#4f8ef7) 40%, transparent)', marginBottom: 10 }} onSubmit={(e) => void saveDictionaryEntry(e)}>
+                    <label>名称<input value={dictForm.name} onChange={(e) => setDictForm((prev) => prev === null ? prev : { ...prev, name: e.target.value })} placeholder="例如：客户沟通" /></label>
+                    <label>code{dictEditCode !== null ? <span style={{ fontWeight: 400, fontSize: 11 }}>（不可修改）</span> : null}<input value={dictEditCode ?? dictForm.code} disabled={dictEditCode !== null} onChange={(e) => setDictForm((prev) => prev === null ? prev : { ...prev, code: e.target.value })} placeholder="client_comm（小写英文/下划线/数字）" /></label>
+                    <label>颜色<input type="color" value={dictForm.color} onChange={(e) => setDictForm((prev) => prev === null ? prev : { ...prev, color: e.target.value })} /></label>
+                    <label>排序<input type="number" value={dictForm.sortOrder} onChange={(e) => setDictForm((prev) => prev === null ? prev : { ...prev, sortOrder: Number(e.target.value) })} /></label>
+                    <div className="full" style={{ display: 'flex', gap: 8 }}>
+                      <button className="wb-btn primary" type="submit">保存</button>
+                      <button className="wb-btn" type="button" onClick={() => { setDictForm(null); setDictEditCode(null); setDictError(null) }}>取消</button>
+                    </div>
+                  </form>
+                )}
+                {dictError !== null && <div className="full" style={{ color: '#E74C3C', fontSize: 12, margin: '6px 0' }}>{dictError}</div>}
+                <div className="wb-list">
+                  {dictOf(dictKind).map((d) => (
+                    <div key={d.code} className="wb-row" style={{ cursor: 'default', opacity: d.active === 0 ? 0.55 : undefined, flexWrap: 'wrap' }}>
+                      <span className="wb-chip" style={{ background: `color-mix(in srgb, ${String(d.config.color ?? '#8a9aa8')} 14%, transparent)`, color: String(d.config.color ?? '#8a9aa8'), border: `1px solid color-mix(in srgb, ${String(d.config.color ?? '#8a9aa8')} 45%, transparent)`, fontWeight: 600 }}>{d.name}</span>
+                      <code style={{ fontSize: 11, color: 'var(--dsw-alias-label-secondary)' }}>{d.code}</code>
+                      {d.builtin === 1 && <span className="wb-chip" style={{ background: 'color-mix(in srgb, #888 12%, transparent)', color: 'var(--dsw-alias-label-secondary)', border: '1px solid var(--wb-border-soft)' }}>内置</span>}
+                      <span style={{ flex: 1 }} />
+                      <button className="wb-btn" onClick={() => { setDictEditCode(d.code); setDictForm({ name: d.name, code: d.code, color: String(d.config.color ?? '#4F86F7'), sortOrder: d.sortOrder ?? 50 }); setDictError(null) }}>编辑</button>
+                      <button className="wb-btn" onClick={() => void toggleDictionaryEntry(d)}>{d.active === 1 ? '停用' : '启用'}</button>
+                      {d.builtin !== 1 && <button className="wb-btn" style={{ color: '#E74C3C', borderColor: 'color-mix(in srgb, #E74C3C 45%, transparent)' }} onClick={() => void deleteDictionaryEntry(d)}>删除</button>}
+                    </div>
+                  ))}
+                </div>
+              </div>
               <div className="full" style={{ display: 'flex', gap: 8 }}>
                 <button className="wb-btn primary lg" onClick={() => void api('/api/workbench/settings', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(settings) }).then(() => { setNotice('设置已保存'); setShowSettings(false) }).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))}><Icon name="check" />保存设置</button>
                 <button className="wb-btn" onClick={() => setShowSettings(false)}>取消</button>
@@ -1813,15 +1920,15 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                   </div>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(170px, 1fr))', gap: 8 }}>
                     {ideas.map((idea) => (
-                      <div key={idea.id} className={`wb-card ${selectedIdea?.id === idea.id || selectedIdeaIds.has(idea.id) ? 'selected' : ''}`} style={{ marginBottom: 0, padding: 12, cursor: 'pointer' }} onClick={() => { setSelectedCluster(null); setSelectedIdea(idea) }}>
+                      <div key={idea.id} className={`wb-card wb-idea-card ${selectedIdea?.id === idea.id || selectedIdeaIds.has(idea.id) ? 'selected' : ''}`} onClick={() => { setSelectedCluster(null); setSelectedIdea(idea) }}>
                         <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6 }}>
                           <input type="checkbox" checked={selectedIdeaIds.has(idea.id)} onClick={(e) => e.stopPropagation()} onChange={(e) => setSelectedIdeaIds((prev) => { const next = new Set(prev); if (e.target.checked) next.add(idea.id); else next.delete(idea.id); return next })} style={{ width: 18, height: 18, flex: 'none', accentColor: 'var(--dsw-alias-state-business-primary, #4f8ef7)', cursor: 'pointer' }} />
-                          <b style={{ flex: 1 }}>{idea.title}</b>
+                          <b style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{idea.title}</b>
                         </div>
-                        <div style={{ fontSize: 12, color: '#999', minHeight: 32 }}>{idea.contentMd.replace(/[#*`>]/g, '').slice(0, 60) || '（无内容）'}</div>
-                        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 6, alignItems: 'center' }}>
+                        <div className="wb-idea-summary">{idea.contentMd.replace(/[#*`>]/g, '').slice(0, 80) || '（无内容）'}</div>
+                        <div className="wb-idea-foot">
                           <Badge dict={dictOf('idea_kind')} code={idea.kindCode} />
-                          {idea.tags.slice(0, 4).map((tag) => <span key={tag} style={{ fontSize: 11, color: '#999' }}>#{tag}</span>)}
+                          {idea.tags.slice(0, 4).map((tag) => <span key={tag} style={{ fontSize: 11, color: 'var(--dsw-alias-label-secondary)' }}>#{tag}</span>)}
                         </div>
                       </div>
                     ))}
@@ -1834,7 +1941,15 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                     <div key={cluster.id} className={`wb-row ${selectedCluster?.id === cluster.id ? 'selected' : ''}`} onClick={() => { setSelectedIdea(null); setSelectedCluster(cluster) }}>
                       <div style={{ flex: 1 }}>
                         <div style={{ fontWeight: 600 }}>👑 {cluster.title} <span style={{ fontSize: 12, color: '#999' }}>（{cluster.ideas.length} 个点子）</span></div>
-                        <div style={{ fontSize: 12, color: '#999' }}>{cluster.summaryMd || cluster.ideas.map((idea) => idea.title).join(' / ')}</div>
+                        <div className="wb-cluster-meta">
+                          {cluster.summaryMd || cluster.ideas.map((idea) => idea.title).join(' / ')}
+                          {(() => {
+                            const counts = new Map<string, number>()
+                            for (const idea of cluster.ideas) counts.set(idea.kindCode, (counts.get(idea.kindCode) ?? 0) + 1)
+                            const parts = [...counts.entries()].map(([code, n]) => `${dictOf('idea_kind').find((d) => d.code === code)?.name ?? code} ${n}`)
+                            return parts.length > 0 ? ` · ${parts.join(' · ')}` : ''
+                          })()}
+                        </div>
                       </div>
                     </div>
                   ))}
@@ -2007,7 +2122,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                     {selectedKnowledge.fileLink !== null && selectedKnowledge.fileLink !== '' && (
                       <div style={{ margin: '8px 0', fontSize: 13, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                         <span>📎 本地文件：</span>
-                        <code style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)', wordBreak: 'break-all', background: 'var(--dsw-alias-bg-base,#17171a)', border: '1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.15))', borderRadius: 6, padding: '3px 6px' }}>{selectedKnowledge.fileLink}</code>
+                        <span className="wb-file-chip"><Icon name="file" size={12} /><code>{selectedKnowledge.fileLink}</code></span>
                         <button className="wb-btn" onClick={() => { void openKnowledgeFile(selectedKnowledge.fileLink!) }}><Icon name="file" />打开文件</button>
                       </div>
                     )}
