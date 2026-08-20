@@ -9,11 +9,11 @@ import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import type { DatabaseSync } from 'node:sqlite'
 import {
   abandonDraft, addReminder, addTaskMemory, archiveTask, assertValidFileLink, completeTaskCascade, confirmDailyPlanDraft, confirmIdeaClusterDraft, confirmIdeaTaskDraft, confirmKnowledgeDraft, confirmReportDraft, confirmSubtaskPlanDraft, confirmTaskDraft,
-  createDictionaryEntry, createIdea, createIdeaCluster, createKnowledge, createTaskReview,
-  createDraft, createTask, deleteDailyPlan, deleteDictionaryEntry, deleteIdea, deleteIdeaCluster, deleteKnowledge, deleteTaskReport, ensureRecurringInstances, fireReminder, getAiSession, getDailyPlan, getDictionary, getDraft, getDraftBySession,
+  createIdea, createIdeaCluster, createKnowledge, createTaskReview,
+  createDraft, createTask, deleteDailyPlan, deleteIdea, deleteIdeaCluster, deleteKnowledge, deleteTaskReport, ensureRecurringInstances, fireReminder, getAiSession, getDailyPlan, getDictionary, getDraft, getDraftBySession,
   getIdea, getIdeaCluster, getKnowledge, getLatestPendingDraft, getTask, getTaskMemoryContext, getTaskReport, getTaskRootId, linkTaskSession, listArchivedTasks, listChildren,
   listDictionaries, listDueReminders, listIdeas, listIdeaClusters, listIdeaClustersForIdea, listKnowledge, listReminders, listTaskEvents, listTaskMemories, listTaskReports, listTaskReviews,
-  listTaskSessions, listTasks, localDateString, registerAiSession, repairParentCompletion, restoreTask, updateDailyPlan, updateDictionaryEntry, updateIdea, updateKnowledge, updateTask, updateTaskWithCompletion, type ReportPeriodCode, type TaskInput,
+  listTaskSessions, listTasks, localDateString, registerAiSession, repairParentCompletion, restoreTask, updateDailyPlan, updateIdea, updateKnowledge, updateTask, updateTaskWithCompletion, type ReportPeriodCode, type TaskInput,
 } from '../db/repo.js'
 
 const TASKS_PREFIX = '/api/workbench/tasks'
@@ -25,7 +25,6 @@ const AI_SESSIONS_PREFIX = '/api/workbench/ai-sessions'
 const KNOWLEDGE_PREFIX = '/api/workbench/knowledge'
 const IDEAS_PREFIX = '/api/workbench/ideas'
 const IDEA_CLUSTERS_PREFIX = '/api/workbench/idea-clusters'
-const DICTIONARIES_PREFIX = '/api/workbench/dictionaries'
 
 function isLoopbackRequest(req: IncomingMessage): boolean {
   const address = req.socket.remoteAddress
@@ -252,70 +251,6 @@ export function makeRoutes(db: DatabaseSync): WebRoute[] {
           } })
         }
         return writeJson(res, 405, { error: 'method not allowed' })
-      },
-    },
-    // ------------------------------------------------------------------ dictionaries
-    {
-      kind: 'prefix',
-      path: DICTIONARIES_PREFIX,
-      handler: async (req, res) => {
-        if (!isLoopbackRequest(req)) return writeJson(res, 403, { error: 'forbidden: loopback-only' })
-        const url = new URL(req.url ?? '/', 'http://localhost')
-        const segments = pathSegments(url, DICTIONARIES_PREFIX)
-        const method = req.method ?? 'GET'
-        if (segments.length === 0) {
-          if (method === 'GET') {
-            const kind = url.searchParams.get('kind') ?? undefined
-            return writeJson(res, 200, { ok: true, dictionaries: listDictionaries(db, kind) })
-          }
-          if (method === 'POST') {
-            const body = await readJsonBody(req)
-            if (body === undefined) return writeJson(res, 400, { error: 'invalid JSON body' })
-            try {
-              const entry = createDictionaryEntry(db, {
-                kind: typeof body.kind === 'string' ? body.kind : '',
-                code: typeof body.code === 'string' ? body.code : '',
-                name: typeof body.name === 'string' ? body.name : '',
-                config: typeof body.config === 'object' && body.config !== null ? body.config as Record<string, unknown> : {},
-                sortOrder: typeof body.sortOrder === 'number' ? body.sortOrder : undefined,
-                active: typeof body.active === 'boolean' ? body.active : undefined,
-              })
-              return writeJson(res, 200, { ok: true, dictionary: entry })
-            } catch (error) {
-              return writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
-            }
-          }
-          return writeJson(res, 405, { error: 'method not allowed' })
-        }
-        if (segments.length >= 2) {
-          const kind = decodeURIComponent(segments[0])
-          const code = decodeURIComponent(segments[1])
-          if (method === 'PATCH') {
-            const body = await readJsonBody(req)
-            if (body === undefined) return writeJson(res, 400, { error: 'invalid JSON body' })
-            try {
-              const entry = updateDictionaryEntry(db, kind, code, {
-                name: typeof body.name === 'string' ? body.name : undefined,
-                config: typeof body.config === 'object' && body.config !== null ? body.config as Record<string, unknown> : undefined,
-                sortOrder: typeof body.sortOrder === 'number' ? body.sortOrder : undefined,
-                active: typeof body.active === 'boolean' ? body.active : undefined,
-              })
-              return writeJson(res, 200, { ok: true, dictionary: entry })
-            } catch (error) {
-              return writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
-            }
-          }
-          if (method === 'DELETE') {
-            try {
-              deleteDictionaryEntry(db, kind, code)
-              return writeJson(res, 200, { ok: true })
-            } catch (error) {
-              return writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
-            }
-          }
-          return writeJson(res, 405, { error: 'method not allowed' })
-        }
-        return writeJson(res, 400, { error: 'invalid path' })
       },
     },
     // ------------------------------------------------------------------ bootstrap

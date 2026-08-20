@@ -6,6 +6,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-tools'
+import { makeDictionaryRoute } from './api/dictionaryRoute.js'
 import { makeLocalDirRoute } from './api/localDirRoute.js'
 import { makeOpenFileRoute } from './api/openFileRoute.js'
 import { makeRoutes } from './api/routes.js'
@@ -40,8 +41,8 @@ export function apply(ctx: Context, config: Config = {}): void {
   const db = openWorkbenchDb(config)
   seedDictionaries(db)
   const routes = makeRoutes(db)
-  // 独立路由文件：保证热重载时新增/修复的“选择文件”与“打开文件”接口能随入口模块一起重新加载。
-  routes.unshift(makeLocalDirRoute(), makeOpenFileRoute())
+  // 独立路由文件：保证热重载时新增/修复的“选择文件”“打开文件”“字典管理”接口能随入口模块一起重新加载。
+  routes.unshift(makeDictionaryRoute(db), makeLocalDirRoute(), makeOpenFileRoute())
 
   ctx.effect(
     () => {

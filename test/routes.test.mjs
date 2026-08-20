@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openWorkbenchDb } from '../lib/db/database.js'
 import { seedDictionaries } from '../lib/db/seed.js'
+import { makeDictionaryRoute } from '../lib/api/dictionaryRoute.js'
 import { makeLocalDirRoute } from '../lib/api/localDirRoute.js'
 import { makeOpenFileRoute } from '../lib/api/openFileRoute.js'
 import { makeRoutes } from '../lib/api/routes.js'
@@ -13,7 +14,7 @@ import { createKnowledge, createTask, localDateString, updateTask } from '../lib
 
 function startTestServer() {
   const db = openWorkbenchDb({ dbPath: ':memory:' })
-  const routes = [makeLocalDirRoute(), makeOpenFileRoute(), ...makeRoutes(db)]
+  const routes = [makeDictionaryRoute(db), makeLocalDirRoute(), makeOpenFileRoute(), ...makeRoutes(db)]
   const server = http.createServer((req, res) => {
     const url = new URL(req.url ?? '/', 'http://localhost')
     for (const route of routes) {
