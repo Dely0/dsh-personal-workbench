@@ -216,6 +216,7 @@ interface WorkbenchRuntime {
     list: { getSnapshot(): { items: readonly { workspaceId: string; path?: string }[]; recentWorkspaceId?: string } }
     connectWorkspace(workspaceId: string): Promise<string>
     create?(input: { path: string }): Promise<{ workspaceId?: string }>
+    openPath?(path: string): Promise<void>
   }
   connection?: {
     hostDescription: {
@@ -234,6 +235,18 @@ const api = async <T,>(path: string, init?: RequestInit): Promise<T> => {
 const folderForText = (text: string): string => {
   const cleaned = text.trim().replace(/[\\/:*?"<>|]/g, '').replace(/\s+/g, ' ').slice(0, 24).trim()
   return cleaned === '' ? '未命名任务' : cleaned
+}
+const clientFileLinkToPath = (link: string): string => {
+  const trimmed = link.trim()
+  if (!/^file:/i.test(trimmed)) return trimmed
+  try {
+    const url = new URL(trimmed)
+    let pathname = decodeURIComponent(url.pathname)
+    if (/^\/[A-Za-z]:[\\/]/.test(pathname)) pathname = pathname.slice(1)
+    return pathname
+  } catch {
+    return trimmed
+  }
 }
 const localDateString = (d = new Date()): string => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 const toLocalInput = (iso: string | null): string => {
@@ -273,6 +286,7 @@ function Icon({ name, size = 16 }: { name: string; size?: number }): JSX.Element
     case 'archive': return <svg {...common}><rect x="2.5" y="3" width="11" height="3.5" rx="1" /><path d="M4 6.5h8v6H4v-6zM6.5 9h3" /></svg>
     case 'book': return <svg {...common}><path d="M3 2.5h6.5v11H3zM9.5 2.5H13v11H9.5z" /><path d="M3 2.5v11M13 2.5v11" /></svg>
     case 'file': return <svg {...common}><path d="M4 1.5h5.5L13 5v9.5H4z" /><path d="M9.5 1.5V5H13" /></svg>
+    case 'folder': return <svg {...common}><path d="M2.5 4h4l1.5 2h5.5v7h-11z" /></svg>
     case 'idea': return <svg {...common}><path d="M8 2a4 4 0 0 0-1 7.8V12h2V9.8A4 4 0 0 0 8 2z" /><path d="M6.5 14h3" /></svg>
     case 'chevron': return <svg {...common}><path d="M6 3l5 5-5 5" /></svg>
     default: return <svg {...common}><circle cx="8" cy="8" r="5" /></svg>
@@ -865,6 +879,12 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   const [knowledgeEditId, setKnowledgeEditId] = useState<string | null>(null)
   const [knowledgeRefreshKey, setKnowledgeRefreshKey] = useState(0)
   const [localDocPath, setLocalDocPath] = useState('')
+  const [filePickerOpen, setFilePickerOpen] = useState(false)
+  const [filePickerDir, setFilePickerDir] = useState('')
+  const [filePickerParent, setFilePickerParent] = useState<string | null>(null)
+  const [filePickerEntries, setFilePickerEntries] = useState<Array<{ name: string; path: string; isDirectory: boolean; isFile: boolean; hidden: boolean }>>([])
+  const [filePickerLoading, setFilePickerLoading] = useState(false)
+  const [filePickerError, setFilePickerError] = useState<string | null>(null)
   const [taskKnowledge, setTaskKnowledge] = useState<KnowledgeEntry[]>([])
   const [ideas, setIdeas] = useState<Idea[]>([])
   const [ideaClusters, setIdeaClusters] = useState<IdeaClusterView[]>([])
@@ -1226,8 +1246,8 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
     } finally { setBusy(false) }
   }
 
-  const summarizeLocalDoc = async (): Promise<void> => {
-    const path = localDocPath.trim()
+  const summarizeLocalDoc = async (pathOverride?: string): Promise<void> => {
+    const path = (pathOverride ?? localDocPath).trim()
     if (path === '') {
       setError('请输入本地文档路径')
       return
@@ -1240,6 +1260,64 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
       setError(e instanceof Error ? e.message : String(e))
     } finally {
       setBusy(false)
+    }
+  }
+
+  const loadFilePickerDir = async (path?: string): Promise<void> => {
+    setFilePickerLoading(true); setFilePickerError(null)
+    try {
+      const qs = path === undefined || path === '' ? '' : `?path=${encodeURIComponent(path)}`
+      const res = await api<{ path: string; parent: string | null; entries: Array<{ name: string; path: string; isDirectory: boolean; isFile: boolean; hidden: boolean }> }>(`/api/workbench/knowledge/list-local-dir${qs}`)
+      setFilePickerDir(res.path)
+      setFilePickerParent(res.parent)
+      setFilePickerEntries(res.entries)
+    } catch (e) {
+      setFilePickerError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setFilePickerLoading(false)
+    }
+  }
+
+  const openFilePicker = (): void => {
+    setFilePickerOpen(true)
+    void loadFilePickerDir()
+  }
+
+  const pickLocalFile = (entry: { path: string; isDirectory: boolean; isFile: boolean }): void => {
+    if (entry.isDirectory) {
+      void loadFilePickerDir(entry.path)
+      return
+    }
+    setLocalDocPath(entry.path)
+    setFilePickerOpen(false)
+    setNotice('已选择本地文件，可点击“AI 总结本地文档”')
+  }
+
+  const pickAndSummarizeLocalFile = (entry: { path: string; isDirectory: boolean; isFile: boolean }): void => {
+    if (entry.isDirectory) {
+      void loadFilePickerDir(entry.path)
+      return
+    }
+    setLocalDocPath(entry.path)
+    setFilePickerOpen(false)
+    void summarizeLocalDoc(entry.path)
+  }
+
+  const openKnowledgeFile = async (fileLink: string): Promise<void> => {
+    try {
+      if (runtime.workspaces.openPath) {
+        await runtime.workspaces.openPath(clientFileLinkToPath(fileLink))
+        setNotice('已调用系统打开文件')
+        return
+      }
+    } catch {
+      // 原生 openPath 不可用时回退到后端打开接口
+    }
+    try {
+      await api('/api/workbench/knowledge/open-file', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ fileLink }) })
+      setNotice('已调用系统打开文件')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
     }
   }
 
@@ -1410,6 +1488,45 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
             <div className="wb-modal-actions">
               <button className="wb-btn" onClick={cancelPrompt}>取消</button>
               <button className="wb-btn primary" onClick={confirmPrompt}>开始</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {filePickerOpen && (
+        <div className="wb-modal-mask" onClick={() => setFilePickerOpen(false)}>
+          <div className="wb-modal" style={{ width: 'min(640px, 94vw)' }} onClick={(e) => e.stopPropagation()}>
+            <h4><Icon name="folder" />选择本地文档</h4>
+            <p>浏览并选择一个文件；目录可点击进入，文件可“选择”或“选择并 AI 总结”。</p>
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
+              <button className="wb-btn" disabled={filePickerParent === null || filePickerLoading} onClick={() => filePickerParent !== null && void loadFilePickerDir(filePickerParent)}>上级</button>
+              <code style={{ flex: 1, fontSize: 12, wordBreak: 'break-all', color: 'var(--dsw-alias-label-secondary)', background: 'var(--dsw-alias-bg-base,#17171a)', border: '1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.15))', borderRadius: 6, padding: '4px 8px' }}>{filePickerDir || '加载中…'}</code>
+              <button className="wb-btn" onClick={() => void loadFilePickerDir()}>主页</button>
+            </div>
+            {filePickerError !== null && <div style={{ color: '#E74C3C', fontSize: 12, marginBottom: 6 }}>{filePickerError}</div>}
+            {filePickerLoading ? (
+              <div style={{ padding: 16, color: '#999', fontSize: 13 }}>加载中…</div>
+            ) : (
+              <div style={{ maxHeight: 320, overflow: 'auto', border: '1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.15))', borderRadius: 8 }}>
+                {filePickerEntries.length === 0 && <div style={{ padding: 12, color: '#999', fontSize: 12 }}>此目录没有可选择的文件</div>}
+                {filePickerEntries.map((entry) => (
+                  <div key={entry.path} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px', cursor: 'pointer', borderBottom: '1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.06))' }} onClick={() => entry.isDirectory ? void loadFilePickerDir(entry.path) : undefined}>
+                    <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 13 }}>
+                      <Icon name={entry.isDirectory ? 'folder' : 'file'} size={13} /> {entry.name}
+                    </span>
+                    {entry.isDirectory ? (
+                      <button className="wb-btn" onClick={(e) => { e.stopPropagation(); void loadFilePickerDir(entry.path) }}>进入</button>
+                    ) : (
+                      <div style={{ display: 'flex', gap: 6 }}>
+                        <button className="wb-btn" onClick={(e) => { e.stopPropagation(); pickLocalFile(entry) }}>选择</button>
+                        <button className="wb-btn primary" onClick={(e) => { e.stopPropagation(); pickAndSummarizeLocalFile(entry) }}>选择并总结</button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="wb-modal-actions">
+              <button className="wb-btn" onClick={() => setFilePickerOpen(false)}>取消</button>
             </div>
           </div>
         </div>
@@ -1643,6 +1760,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
             <>
               <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
                 <input style={{ flex: 1, minWidth: 180, background: 'var(--dsw-alias-bg-base,#17171a)', border: '1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.15))', color: 'inherit', borderRadius: 8, padding: '7px 10px' }} placeholder="本地文档路径或 file://，如 D:\docs\方案.md、/mnt/d/docs/方案.md" value={localDocPath} onChange={(e) => setLocalDocPath(e.target.value)} />
+                <button className="wb-btn" disabled={busy} onClick={openFilePicker}><Icon name="folder" />选择文件</button>
                 <button className="wb-btn primary" disabled={busy} onClick={() => void summarizeLocalDoc()}><Icon name="file" />AI 总结本地文档</button>
               </div>
               <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
@@ -1890,7 +2008,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                       <div style={{ margin: '8px 0', fontSize: 13, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                         <span>📎 本地文件：</span>
                         <code style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)', wordBreak: 'break-all', background: 'var(--dsw-alias-bg-base,#17171a)', border: '1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.15))', borderRadius: 6, padding: '3px 6px' }}>{selectedKnowledge.fileLink}</code>
-                        <button className="wb-btn" onClick={() => { void api('/api/workbench/knowledge/open-file', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ fileLink: selectedKnowledge.fileLink }) }).then(() => setNotice('已调用系统打开文件')).catch((err: unknown) => setError(err instanceof Error ? err.message : String(err))) }}><Icon name="file" />打开文件</button>
+                        <button className="wb-btn" onClick={() => { void openKnowledgeFile(selectedKnowledge.fileLink!) }}><Icon name="file" />打开文件</button>
                       </div>
                     )}
                     {selectedKnowledge.sourceTaskId !== null && (

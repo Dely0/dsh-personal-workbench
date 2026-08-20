@@ -1,7 +1,6 @@
 /**
  * /api/workbench/* 路由。Loopback-only 保护（同 dsh-ssh 的信任围栏）。
  */
-import { execFile } from 'node:child_process'
 import { mkdirSync } from 'node:fs'
 import { readFile, stat } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -90,28 +89,6 @@ function toNativePath(link: string): string {
     }
   }
   return path
-}
-
-function openLocalFile(filePath: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (process.platform === 'win32') {
-      // `cmd /c start "" "path"` 用系统默认程序打开文件，路径带空格也安全。
-      execFile('cmd', ['/c', 'start', '', filePath], { windowsVerbatimArguments: true }, (error) => {
-        if (error) reject(error)
-        else resolve()
-      })
-    } else if (process.platform === 'darwin') {
-      execFile('open', [filePath], (error) => {
-        if (error) reject(error)
-        else resolve()
-      })
-    } else {
-      execFile('xdg-open', [filePath], (error) => {
-        if (error) reject(error)
-        else resolve()
-      })
-    }
-  })
 }
 
 function pathSegments(url: URL, prefix: string): string[] {
@@ -713,22 +690,6 @@ export function makeRoutes(db: DatabaseSync): WebRoute[] {
               truncated,
               size: info.size,
             })
-          } catch (error) {
-            return writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
-          }
-        }
-        if (segments.length === 1 && segments[0] === 'open-file' && method === 'POST') {
-          if (body === undefined) return writeJson(res, 400, { error: 'invalid JSON body' })
-          const raw = typeof body.fileLink === 'string' ? body.fileLink : typeof body.path === 'string' ? body.path : undefined
-          if (raw === undefined || raw.trim() === '') return writeJson(res, 400, { error: 'fileLink is required' })
-          try {
-            const fileLink = assertValidFileLink(raw)
-            if (fileLink === null) return writeJson(res, 400, { error: 'fileLink is required' })
-            const filePath = toNativePath(fileLink)
-            const info = await stat(filePath)
-            if (!info.isFile()) return writeJson(res, 400, { error: 'path is not a file' })
-            await openLocalFile(filePath)
-            return writeJson(res, 200, { ok: true, path: filePath })
           } catch (error) {
             return writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
           }

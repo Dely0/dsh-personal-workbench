@@ -6,12 +6,14 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openWorkbenchDb } from '../lib/db/database.js'
 import { seedDictionaries } from '../lib/db/seed.js'
+import { makeLocalDirRoute } from '../lib/api/localDirRoute.js'
+import { makeOpenFileRoute } from '../lib/api/openFileRoute.js'
 import { makeRoutes } from '../lib/api/routes.js'
 import { createKnowledge, createTask, localDateString, updateTask } from '../lib/db/repo.js'
 
 function startTestServer() {
   const db = openWorkbenchDb({ dbPath: ':memory:' })
-  const routes = makeRoutes(db)
+  const routes = [makeLocalDirRoute(), makeOpenFileRoute(), ...makeRoutes(db)]
   const server = http.createServer((req, res) => {
     const url = new URL(req.url ?? '/', 'http://localhost')
     for (const route of routes) {
@@ -191,6 +193,11 @@ test('knowledge API supports file_link and local document reading', async () => 
 
       const rel = await request('GET', `/api/workbench/knowledge/read-local-file?path=${encodeURIComponent('relative/path.md')}`)
       assert.equal(rel.status, 400)
+
+      const listDir = await request('GET', `/api/workbench/knowledge/list-local-dir?path=${encodeURIComponent(dir)}`)
+      assert.equal(listDir.status, 200)
+      assert.equal(listDir.body.path, dir)
+      assert.ok(listDir.body.entries.some((e) => e.name === 'note.md' && e.isFile && e.path === docPath))
 
       const openMissing = await request('POST', '/api/workbench/knowledge/open-file', { fileLink: '/no/such/file.md' })
       assert.equal(openMissing.status, 400)
