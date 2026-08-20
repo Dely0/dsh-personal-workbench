@@ -8,6 +8,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   buildTaskTree,
+  countTaskTreeBy,
   createTaskSorter,
   filterTaskTree,
   isTaskFilterEmpty,
@@ -108,6 +109,8 @@ html[${PENDING_ATTR}] [${ENTRY_ATTR}]::after { content:''; position:absolute; to
 .wb-row:last-child { border-bottom:none; }
 .wb-row:hover { background: color-mix(in srgb, var(--dsw-alias-label-primary, #fff) 5%, transparent); }
 .wb-row.selected { background: color-mix(in srgb, var(--dsw-alias-state-business-primary, #8fa8c8) 12%, transparent); box-shadow:inset 3px 0 0 var(--dsw-alias-state-business-primary, #8fa8c8); }
+.wb-row-context { opacity:.55; }
+.wb-row-context .wb-row-title { color: var(--dsw-alias-label-secondary); }
 .wb-card { transition: border-color .16s ease, box-shadow .16s ease, transform .16s ease; }
 .wb-card.selected { border-color: color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 65%, transparent) !important; box-shadow: 0 0 0 1px color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 35%, transparent), 0 6px 18px rgba(0,0,0,.10); transform: translateY(-1px); }
 .wb-row-title { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -377,22 +380,22 @@ function countTaskTree(roots: TaskTreeNode<Task>[]): number {
   return roots.reduce((sum, node) => sum + 1 + countTaskTree(node.children), 0)
 }
 
-function TaskTreeRows({ roots, depth, expanded, toggle, dicts, onOpen, selectedId }: {
+function TaskTreeRows({ roots, depth, expanded, toggle, dicts, onOpen, selectedId, contextIds }: {
   roots: TaskTreeNode<Task>[]; depth: number; expanded: Set<string>; toggle: (id: string) => void
-  dicts: Dict[]; onOpen: (task: Task) => void; selectedId?: string
+  dicts: Dict[]; onOpen: (task: Task) => void; selectedId?: string; contextIds?: Set<string>
 }): JSX.Element {
   return (
     <>
       {roots.map((node) => (
         <div key={node.task.id}>
-          <div className={`wb-row ${selectedId === node.task.id ? 'selected' : ''}`} style={{ paddingLeft: 8 + depth * 16 }} onClick={() => onOpen(node.task)}>
+          <div className={`wb-row ${selectedId === node.task.id ? 'selected' : ''} ${contextIds?.has(node.task.id) ? 'wb-row-context' : ''}`} style={{ paddingLeft: 8 + depth * 16 }} onClick={() => onOpen(node.task)}>
             <button type="button" className="wb-btn" style={{ padding: '2px 6px', border: 'none', flex: 'none' }} onClick={(e) => { e.stopPropagation(); toggle(node.task.id) }}>
               {node.children.length > 0 ? (expanded.has(node.task.id) ? '▼' : '▶') : '·'}
             </button>
             <TaskRow task={node.task} dicts={dicts} onOpen={onOpen} bare />
           </div>
           {node.children.length > 0 && expanded.has(node.task.id) && (
-            <TaskTreeRows roots={node.children} depth={depth + 1} expanded={expanded} toggle={toggle} dicts={dicts} onOpen={onOpen} selectedId={selectedId} />
+            <TaskTreeRows roots={node.children} depth={depth + 1} expanded={expanded} toggle={toggle} dicts={dicts} onOpen={onOpen} selectedId={selectedId} contextIds={contextIds} />
           )}
         </div>
       ))}
@@ -1325,6 +1328,18 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   }, [pickedPlan])
   const pickedPlanTree = useMemo(() => filterTaskTree(buildTaskTree(tasks, pickedPlanOrder), planKeep), [tasks, picked, pickedPlanOrder]) // eslint 语义同 tasks
   const pickedDoneTree = useMemo(() => filterTaskTree(buildTaskTree(tasks), doneKeep), [tasks, picked])
+  // 已完成面板中保留的父/祖父链只是上下文，不应计入统计，也以灰色弱化展示。
+  const doneContextIds = (() => {
+    const ids = new Set<string>()
+    const walk = (nodes: TaskTreeNode<Task>[]): void => {
+      for (const node of nodes) {
+        if (!doneKeep(node.task)) ids.add(node.task.id)
+        walk(node.children)
+      }
+    }
+    walk(pickedDoneTree)
+    return ids
+  })()
 
   return (
     <div className="wb-app">
@@ -1505,7 +1520,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
 
               <div className="wb-segmented wb-sub-segmented">
                 <button className={`wb-seg ${dayTab === 'plan' ? 'on' : ''}`} onClick={() => setDayTab('plan')}><Icon name="list" />计划 <span className="count">{countTaskTree(pickedPlanTree)}</span></button>
-                <button className={`wb-seg ${dayTab === 'done' ? 'on' : ''}`} onClick={() => setDayTab('done')}><Icon name="check" />已完成 <span className="count">{countTaskTree(pickedDoneTree)}</span></button>
+                <button className={`wb-seg ${dayTab === 'done' ? 'on' : ''}`} onClick={() => setDayTab('done')}><Icon name="check" />已完成 <span className="count">{countTaskTreeBy(pickedDoneTree, doneKeep)}</span></button>
                 <button className={`wb-seg ${dayTab === 'report' ? 'on' : ''}`} onClick={() => setDayTab('report')}><Icon name="report" />报告</button>
               </div>
               {dayTab === 'plan' && (
@@ -1578,7 +1593,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                 </div>
               ) : (
                 <div className="wb-list">
-                  <TaskTreeRows roots={dayTab === 'plan' ? pickedPlanTree : pickedDoneTree} depth={0} expanded={calendarExpanded} toggle={toggleCalendarExpanded} dicts={dicts} onOpen={openTask} selectedId={selected?.task.id} />
+                  <TaskTreeRows roots={dayTab === 'plan' ? pickedPlanTree : pickedDoneTree} depth={0} expanded={calendarExpanded} toggle={toggleCalendarExpanded} dicts={dicts} onOpen={openTask} selectedId={selected?.task.id} contextIds={dayTab === 'done' ? doneContextIds : undefined} />
                   {(dayTab === 'plan' ? pickedPlanTree : pickedDoneTree).length === 0 && <div className="wb-empty">{picked.getMonth() + 1}/{picked.getDate()} 没有{dayTab === 'plan' ? '计划任务' : '完成记录'}</div>}
                 </div>
               )}

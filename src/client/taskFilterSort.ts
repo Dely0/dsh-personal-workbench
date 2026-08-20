@@ -144,3 +144,8 @@ export function filterTaskTree<T>(roots: TaskTreeNode<T>[], keep: (task: T) => b
   }
   return walk(roots)
 }
+
+/** 统计树中满足 keep 的任务数量；父链上下文节点不会被计入。 */
+export function countTaskTreeBy<T>(roots: TaskTreeNode<T>[], keep: (task: T) => boolean): number {
+  return roots.reduce((sum, node) => sum + (keep(node.task) ? 1 : 0) + countTaskTreeBy(node.children, keep), 0)
+}

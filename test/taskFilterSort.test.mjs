@@ -4,6 +4,7 @@ import {
   EMPTY_TASK_FILTER,
   buildTaskTree,
   compareTasks,
+  countTaskTreeBy,
   createTaskSorter,
   filterTaskTree,
   isTaskFilterEmpty,
@@ -65,6 +66,25 @@ test('task tree filter drops non-matching children under a matching parent', () 
   assert.equal(filtered.length, 1)
   assert.equal(filtered[0].task.id, 'p')
   assert.equal(filtered[0].children.length, 0)
+})
+
+test('countTaskTreeBy only counts nodes matching keep, not parent context', () => {
+  const grand = task('g', { title: '祖父' })
+  const parent = task('p', { parentId: 'g', title: '父任务' })
+  const doneChild = task('c1', { parentId: 'p', title: '已完成子任务', statusCode: 'done', completedAt: '2024-01-01T00:00:00.000Z' })
+  const todoChild = task('c2', { parentId: 'p', title: '未完成子任务' })
+
+  const tree = buildTaskTree([grand, parent, doneChild, todoChild])
+  const keep = (t) => t.statusCode === 'done'
+
+  // 过滤后保留父链：祖父/父任务作为上下文出现
+  const filtered = filterTaskTree(tree, keep)
+  assert.deepEqual(filtered.map((n) => n.task.id), ['g'])
+  assert.deepEqual(filtered[0].children.map((n) => n.task.id), ['p'])
+  assert.deepEqual(filtered[0].children[0].children.map((n) => n.task.id), ['c1'])
+
+  // 计数只算真正完成的任务
+  assert.equal(countTaskTreeBy(filtered, keep), 1)
 })
 
 test('task sorter: dueAt asc/desc uses dueAt, then completedAt for done tasks, nulls last', () => {
