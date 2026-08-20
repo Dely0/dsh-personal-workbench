@@ -2199,7 +2199,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                             <button className="wb-btn" disabled={busy} onClick={() => void startAISession('consult', selected.task, selected.task.title)}>AI 协助</button>
                             <button className="wb-btn" disabled={busy} onClick={() => void startAISession('breakdown', selected.task, selected.task.title)}>AI 拆解</button>
                             <button className="wb-btn" onClick={() => setSubtaskParent(selected.task)}>+ 子任务</button>
-                            <button className="wb-btn" onClick={() => { if (window.confirm('归档后任务会从工作台列表隐藏；可在列表页“查看归档”中恢复。确认归档？')) { const id = selected.task.id; setTasks((list) => list.filter((t) => t.id !== id)); void api(`/api/workbench/tasks/${id}/archive`, { method: 'POST' }).then(() => { setSelected(null); selectedRef.current = null; setNotice('任务已归档，可在列表页“查看归档”恢复。'); void refresh() }).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e))) } }}>归档</button>
+                            <button className="wb-btn" onClick={() => { if (window.confirm('归档后任务会从工作台列表隐藏；可在列表页“查看归档”中恢复。确认归档？')) { const id = selected.task.id; setTasks((list) => list.filter((t) => t.id !== id)); void api(`/api/workbench/tasks/${id}/archive`, { method: 'POST' }).then(() => { setSelected(null); selectedRef.current = null; setNotice('任务已归档，可在列表页“查看归档”恢复。'); void refresh() }).catch((e: unknown) => { const msg = e instanceof Error ? e.message : String(e); if (msg.includes('not found')) { setSelected(null); selectedRef.current = null; void refresh(); setNotice('该任务已不存在，已从当前视图移除') } setError(msg) }) } }}>归档</button>
                           </>
                         )}
                       </div>

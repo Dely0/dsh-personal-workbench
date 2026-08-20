@@ -253,3 +253,23 @@ test('dictionary CRUD API creates, edits, deactivates, protects builtin and bloc
     assert.equal(deactivate.body.dictionary.active, 0)
   })
 })
+
+test('archive/restore a task that was already deleted returns 404 instead of crashing', async () => {
+  await withServer(async ({ db, request }) => {
+    const task = createTask(db, { title: 'deleted test task', typeCode: 'code_impl', priorityCode: 'p2' })
+    // 模拟 AI/外部已把任务行删除，前端仍残留该任务并尝试归档。
+    db.prepare('DELETE FROM tasks WHERE id = ?').run(task.id)
+
+    const archive = await request('POST', `/api/workbench/tasks/${task.id}/archive`)
+    assert.equal(archive.status, 404)
+    assert.match(archive.body.error, /task not found/)
+
+    const restore = await request('POST', `/api/workbench/tasks/${task.id}/restore`)
+    assert.equal(restore.status, 404)
+    assert.match(restore.body.error, /task not found/)
+
+    const patchArchive = await request('PATCH', `/api/workbench/tasks/${task.id}`, { archived: true })
+    assert.equal(patchArchive.status, 404)
+    assert.match(patchArchive.body.error, /task not found/)
+  })
+})
