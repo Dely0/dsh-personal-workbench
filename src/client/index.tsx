@@ -154,6 +154,14 @@ html[${PENDING_ATTR}] [${ENTRY_ATTR}]::after { content:''; position:absolute; to
 .wb-h { border-bottom-color: var(--wb-border) !important; }
 .wb-nav { border-right-color: var(--wb-border-soft) !important; }
 .wb-day, .wb-mday, .wb-form { border-color: var(--wb-border-soft) !important; }
+/* 今日卡片高亮：周/月视图统一加亮边框 + 浅色背景 + 日期数字高亮 */
+.wb-day.today { border-color: var(--dsw-alias-state-business-primary, #4f8ef7) !important; background: color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 12%, transparent) !important; }
+.wb-day.today .wb-day-date { color: var(--dsw-alias-state-business-primary, #4f8ef7); font-weight: 700; }
+.wb-day.today.selected { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 70%, transparent); }
+.wb-mday.today { border-color: var(--dsw-alias-state-business-primary, #4f8ef7) !important; background: color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 14%, transparent) !important; color: var(--dsw-alias-label-primary); }
+.wb-mday.today .wb-mday-date { color: var(--dsw-alias-state-business-primary, #4f8ef7); font-weight: 700; }
+.wb-mday.today.selected { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 70%, transparent); }
+.wb-mday.other.today { opacity: 1; }
 `
 
 interface Dict { kind: string; code: string; name: string; config: Record<string, unknown> }
@@ -1500,7 +1508,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                     const n = tasks.filter((t) => t.effectiveDueAt !== null && sameDay(new Date(t.effectiveDueAt), d) && t.statusCode !== 'cancelled').length
                     return (
                       <div key={d.toISOString()} className={`wb-day ${sameDay(d, now) ? 'today' : ''} ${sameDay(d, picked) ? 'selected' : ''}`} onClick={() => setPicked(startOfDay(d))}>
-                        <div style={{ fontSize: 12, color: '#999' }}>{d.getMonth() + 1}/{d.getDate()}</div>
+                        <div className="wb-day-date" style={{ fontSize: 12, color: '#999' }}>{d.getMonth() + 1}/{d.getDate()}</div>
                         {n > 0 && <div className="wb-chip" style={{ background: '#4f8ef7', marginTop: 4 }}>{n} 个任务</div>}
                       </div>
                     )
@@ -1511,7 +1519,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                 <div className="wb-month">
                   {monthGrid.map((d) => (
                     <div key={d.toISOString()} className={`wb-mday ${d.getMonth() !== cursor.getMonth() ? 'other' : ''} ${sameDay(d, now) ? 'today' : ''} ${sameDay(d, picked) ? 'selected' : ''}`} onClick={() => setPicked(startOfDay(d))}>
-                      <div style={{ fontSize: 12 }}>{d.getDate()}</div>
+                      <div className="wb-mday-date" style={{ fontSize: 12 }}>{d.getDate()}</div>
                       {tasks.some((t) => t.effectiveDueAt !== null && sameDay(new Date(t.effectiveDueAt), d)) && <div className="wb-chip" style={{ background: '#4f8ef7', marginTop: 2 }}>•</div>}
                     </div>
                   ))}
