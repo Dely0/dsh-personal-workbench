@@ -7,6 +7,7 @@ import {
   countTaskTreeBy,
   createTaskSorter,
   filterTaskTree,
+  isTaskDueOnDay,
   isTaskFilterEmpty,
   matchesTaskFilter,
 } from '../lib/client/taskFilterSort.js'
@@ -85,6 +86,21 @@ test('countTaskTreeBy only counts nodes matching keep, not parent context', () =
 
   // 计数只算真正完成的任务
   assert.equal(countTaskTreeBy(filtered, keep), 1)
+})
+
+test('isTaskDueOnDay excludes cancelled tasks from calendar markers', () => {
+  const day = new Date('2024-01-01T00:00:00.000Z')
+  const due = task('a', { effectiveDueAt: '2024-01-01T10:00:00.000Z' })
+  const cancelled = task('b', { effectiveDueAt: '2024-01-01T10:00:00.000Z', statusCode: 'cancelled' })
+  const done = task('c', { effectiveDueAt: '2024-01-01T10:00:00.000Z', statusCode: 'done' })
+  const otherDay = task('d', { effectiveDueAt: '2024-01-02T10:00:00.000Z' })
+  const noDue = task('e', { effectiveDueAt: null })
+
+  assert.equal(isTaskDueOnDay(due, day), true)
+  assert.equal(isTaskDueOnDay(cancelled, day), false)
+  assert.equal(isTaskDueOnDay(done, day), true)
+  assert.equal(isTaskDueOnDay(otherDay, day), false)
+  assert.equal(isTaskDueOnDay(noDue, day), false)
 })
 
 test('task sorter: dueAt asc/desc uses dueAt, then completedAt for done tasks, nulls last', () => {

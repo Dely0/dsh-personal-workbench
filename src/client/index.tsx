@@ -11,6 +11,7 @@ import {
   countTaskTreeBy,
   createTaskSorter,
   filterTaskTree,
+  isTaskDueOnDay,
   isTaskFilterEmpty,
   matchesTaskFilter,
   type TaskFilterState,
@@ -1505,7 +1506,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
               {calMode === 'week' && (
                 <div className="wb-week">
                   {weekDays.map((d) => {
-                    const n = tasks.filter((t) => t.effectiveDueAt !== null && sameDay(new Date(t.effectiveDueAt), d) && t.statusCode !== 'cancelled').length
+                    const n = tasks.filter((t) => isTaskDueOnDay(t, d)).length
                     return (
                       <div key={d.toISOString()} className={`wb-day ${sameDay(d, now) ? 'today' : ''} ${sameDay(d, picked) ? 'selected' : ''}`} onClick={() => setPicked(startOfDay(d))}>
                         <div className="wb-day-date" style={{ fontSize: 12, color: '#999' }}>{d.getMonth() + 1}/{d.getDate()}</div>
@@ -1520,7 +1521,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                   {monthGrid.map((d) => (
                     <div key={d.toISOString()} className={`wb-mday ${d.getMonth() !== cursor.getMonth() ? 'other' : ''} ${sameDay(d, now) ? 'today' : ''} ${sameDay(d, picked) ? 'selected' : ''}`} onClick={() => setPicked(startOfDay(d))}>
                       <div className="wb-mday-date" style={{ fontSize: 12 }}>{d.getDate()}</div>
-                      {tasks.some((t) => t.effectiveDueAt !== null && sameDay(new Date(t.effectiveDueAt), d)) && <div className="wb-chip" style={{ background: '#4f8ef7', marginTop: 2 }}>•</div>}
+                      {tasks.some((t) => isTaskDueOnDay(t, d)) && <div className="wb-chip" style={{ background: '#4f8ef7', marginTop: 2 }}>•</div>}
                     </div>
                   ))}
                 </div>

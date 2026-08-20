@@ -149,3 +149,10 @@ export function filterTaskTree<T>(roots: TaskTreeNode<T>[], keep: (task: T) => b
 export function countTaskTreeBy<T>(roots: TaskTreeNode<T>[], keep: (task: T) => boolean): number {
   return roots.reduce((sum, node) => sum + (keep(node.task) ? 1 : 0) + countTaskTreeBy(node.children, keep), 0)
 }
+
+const sameDay = (a: Date, b: Date): boolean => a.toDateString() === b.toDateString()
+
+/** 判断任务是否在某一天有有效截止时间，且未取消。日历标记统一使用该条件。 */
+export function isTaskDueOnDay<T extends TaskLike>(task: T, day: Date): boolean {
+  return task.effectiveDueAt != null && sameDay(new Date(task.effectiveDueAt), day) && task.statusCode !== 'cancelled'
+}
