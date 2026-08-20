@@ -103,14 +103,21 @@ test('agent tools write pending drafts and update tasks', async () => {
 
     const submitKnowledge = submitKnowledgeTool(db)
     const kOut = await submitKnowledge.execute(
-      { title: '经验：先验证再开发', content_md: '# 结论', kind_code: 'lesson', tags: ['流程'] },
+      { title: '经验：先验证再开发', content_md: '# 结论', kind_code: 'lesson', tags: ['流程'], file_link: 'D:\\docs\\经验.md' },
       { agent: { session: { id: 'sess-know' } } },
     )
     assert.match(kOut, /知识草稿已保存/)
+    assert.equal(getDraftBySession(db, 'sess-know').payload.fileLink, 'D:\\docs\\经验.md')
     assert.match(await submitKnowledge.execute(
       { title: '经验：先验证再开发 v2', content_md: '# 结论 v2', kind_code: 'lesson', tags: ['流程'] },
       { agent: { session: { id: 'sess-know' } } },
     ), /知识草稿已保存/)
+    // 非法 file_link 会被工具拒绝，不写入草稿
+    const badLink = await submitKnowledge.execute(
+      { title: '坏链接', content_md: '# x', kind_code: 'note', file_link: 'relative/path.md' },
+      { agent: { session: { id: 'sess-know-bad' } } },
+    )
+    assert.match(badLink, /fileLink must be a file:\/\/ URL or an absolute path/)
 
     const idea1 = createIdea(db, { title: '点子A', kindCode: 'spark', tags: ['x'] })
     const idea2 = createIdea(db, { title: '点子B', kindCode: 'plugin', tags: ['x'] })

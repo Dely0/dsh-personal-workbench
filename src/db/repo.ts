@@ -1484,6 +1484,7 @@ export interface KnowledgeInput {
   sourceTaskId?: string | null
   sourceSessionId?: string | null
   sourceReviewId?: string | null
+  fileLink?: string | null
 }
 
 export interface KnowledgeRow {
@@ -1495,6 +1496,7 @@ export interface KnowledgeRow {
   sourceTaskId: string | null
   sourceSessionId: string | null
   sourceReviewId: string | null
+  fileLink: string | null
   createdAt: string
   updatedAt: string
 }
@@ -1508,8 +1510,25 @@ interface RawKnowledgeRow {
   source_task_id: string | null
   source_session_id: string | null
   source_review_id: string | null
+  file_link: string | null
   created_at: string
   updated_at: string
+}
+
+/** 校验并规整知识条目本地文件链接：支持 file:// URL 或绝对路径，拒绝相对路径/空值。 */
+export function normalizeFileLink(value: string | null | undefined): string | null {
+  if (value === undefined || value === null) return null
+  const trimmed = value.trim()
+  return trimmed === '' ? null : trimmed
+}
+
+export function assertValidFileLink(value: string | null | undefined): string | null {
+  const link = normalizeFileLink(value)
+  if (link === null) return null
+  if (!/^file:/i.test(link) && !/^[A-Za-z]:[\\/]/.test(link) && !link.startsWith('/')) {
+    throw new Error('fileLink must be a file:// URL or an absolute path')
+  }
+  return link
 }
 
 function parseKnowledge(row: RawKnowledgeRow | undefined): KnowledgeRow | undefined {
@@ -1524,6 +1543,7 @@ function parseKnowledge(row: RawKnowledgeRow | undefined): KnowledgeRow | undefi
     sourceTaskId: row.source_task_id,
     sourceSessionId: row.source_session_id,
     sourceReviewId: row.source_review_id,
+    fileLink: row.file_link ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }
@@ -1531,10 +1551,11 @@ function parseKnowledge(row: RawKnowledgeRow | undefined): KnowledgeRow | undefi
 
 export function createKnowledge(db: DatabaseSync, input: KnowledgeInput, at = nowIso()): KnowledgeRow {
   const id = randomUUID()
+  const fileLink = assertValidFileLink(input.fileLink)
   db.prepare(`
-    INSERT INTO knowledge_entries (id, kind_code, title, content_md, tags_json, source_task_id, source_session_id, source_review_id, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(id, input.kindCode ?? 'note', input.title, input.contentMd ?? '', JSON.stringify(input.tags ?? []), input.sourceTaskId ?? null, input.sourceSessionId ?? null, input.sourceReviewId ?? null, at, at)
+    INSERT INTO knowledge_entries (id, kind_code, title, content_md, tags_json, source_task_id, source_session_id, source_review_id, file_link, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(id, input.kindCode ?? 'note', input.title, input.contentMd ?? '', JSON.stringify(input.tags ?? []), input.sourceTaskId ?? null, input.sourceSessionId ?? null, input.sourceReviewId ?? null, fileLink, at, at)
   return getKnowledge(db, id)!
 }
 
@@ -1550,8 +1571,8 @@ export function listKnowledge(db: DatabaseSync, opts: { q?: string; kindCode?: s
   if (opts.sourceReviewId !== undefined) { conditions.push('source_review_id = ?'); params.push(opts.sourceReviewId) }
   if (typeof opts.q === 'string' && opts.q.trim() !== '') {
     const like = `%${opts.q.trim()}%`
-    conditions.push('(title LIKE ? OR content_md LIKE ? OR tags_json LIKE ?)')
-    params.push(like, like, like)
+    conditions.push('(title LIKE ? OR content_md LIKE ? OR tags_json LIKE ? OR file_link LIKE ?)')
+    params.push(like, like, like, like)
   }
   const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
   const limit = Math.max(1, Math.min(opts.limit ?? 200, 500))
@@ -1571,12 +1592,13 @@ export function updateKnowledge(db: DatabaseSync, id: string, patch: Partial<Kno
     sourceTaskId: patch.sourceTaskId === undefined ? before.sourceTaskId : patch.sourceTaskId,
     sourceSessionId: patch.sourceSessionId === undefined ? before.sourceSessionId : patch.sourceSessionId,
     sourceReviewId: patch.sourceReviewId === undefined ? before.sourceReviewId : patch.sourceReviewId,
+    fileLink: patch.fileLink === undefined ? before.fileLink : assertValidFileLink(patch.fileLink),
     updatedAt: at,
   }
   db.prepare(`
-    UPDATE knowledge_entries SET kind_code = ?, title = ?, content_md = ?, tags_json = ?, source_task_id = ?, source_session_id = ?, source_review_id = ?, updated_at = ?
+    UPDATE knowledge_entries SET kind_code = ?, title = ?, content_md = ?, tags_json = ?, source_task_id = ?, source_session_id = ?, source_review_id = ?, file_link = ?, updated_at = ?
     WHERE id = ?
-  `).run(next.kindCode, next.title, next.contentMd, JSON.stringify(next.tags), next.sourceTaskId, next.sourceSessionId, next.sourceReviewId, next.updatedAt, id)
+  `).run(next.kindCode, next.title, next.contentMd, JSON.stringify(next.tags), next.sourceTaskId, next.sourceSessionId, next.sourceReviewId, next.fileLink, next.updatedAt, id)
   return next
 }
 
@@ -1587,7 +1609,7 @@ export function deleteKnowledge(db: DatabaseSync, id: string): boolean {
 export function confirmKnowledgeDraft(db: DatabaseSync, draftId: string, actor = 'user', at = nowIso()): KnowledgeRow | undefined {
   const draft = getDraft(db, draftId)
   if (draft === undefined || draft.kindCode !== 'knowledge') return undefined
-  const payload = draft.payload as { title?: string; contentMd?: string; kindCode?: string; tags?: string[]; sourceTaskId?: string; sourceSessionId?: string; sourceReviewId?: string }
+  const payload = draft.payload as { title?: string; contentMd?: string; kindCode?: string; tags?: string[]; sourceTaskId?: string; sourceSessionId?: string; sourceReviewId?: string; fileLink?: string | null }
   const title = typeof payload.title === 'string' ? payload.title.trim() : ''
   if (title === '') throw new Error('knowledge requires a non-empty title')
   const contentMd = typeof payload.contentMd === 'string' ? payload.contentMd : ''
@@ -1602,6 +1624,7 @@ export function confirmKnowledgeDraft(db: DatabaseSync, draftId: string, actor =
       sourceTaskId: typeof payload.sourceTaskId === 'string' ? payload.sourceTaskId : null,
       sourceSessionId: typeof payload.sourceSessionId === 'string' ? payload.sourceSessionId : draft.sessionId,
       sourceReviewId: typeof payload.sourceReviewId === 'string' ? payload.sourceReviewId : null,
+      fileLink: typeof payload.fileLink === 'string' ? payload.fileLink : null,
     }, at)
     setDraftStatus(db, draftId, 'confirmed', at)
     db.exec('COMMIT')

@@ -1,9 +1,13 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import http from 'node:http'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { openWorkbenchDb } from '../lib/db/database.js'
+import { seedDictionaries } from '../lib/db/seed.js'
 import { makeRoutes } from '../lib/api/routes.js'
-import { createTask, localDateString, updateTask } from '../lib/db/repo.js'
+import { createKnowledge, createTask, localDateString, updateTask } from '../lib/db/repo.js'
 
 function startTestServer() {
   const db = openWorkbenchDb({ dbPath: ':memory:' })
@@ -153,4 +157,47 @@ test('manual plan editing PUT removes an item and keeps remaining done task', as
     assert.equal(empty.status, 400)
     assert.match(empty.body.error, /at least one item/)
   })
+})
+
+test('knowledge API supports file_link and local document reading', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-workbench-knowledge-file-'))
+  const docPath = join(dir, 'note.md')
+  writeFileSync(docPath, '# 本地文档\n这是需要总结的内容', 'utf8')
+  try {
+    await withServer(async ({ db, request }) => {
+      seedDictionaries(db)
+      const created = await request('POST', '/api/workbench/knowledge', {
+        title: '本地文档总结',
+        contentMd: '# 摘要',
+        kindCode: 'note',
+        fileLink: docPath,
+      })
+      assert.equal(created.status, 201)
+      assert.equal(created.body.knowledge.fileLink, docPath)
+      const id = created.body.knowledge.id
+
+      const got = await request('GET', `/api/workbench/knowledge/${id}`)
+      assert.equal(got.status, 200)
+      assert.equal(got.body.knowledge.fileLink, docPath)
+
+      const patched = await request('PATCH', `/api/workbench/knowledge/${id}`, { fileLink: `file://${docPath}` })
+      assert.equal(patched.status, 200)
+      assert.equal(patched.body.knowledge.fileLink, `file://${docPath}`)
+
+      const read = await request('GET', `/api/workbench/knowledge/read-local-file?path=${encodeURIComponent(docPath)}`)
+      assert.equal(read.status, 200)
+      assert.match(read.body.content, /本地文档/)
+      assert.equal(read.body.fileLink, docPath)
+
+      const rel = await request('GET', `/api/workbench/knowledge/read-local-file?path=${encodeURIComponent('relative/path.md')}`)
+      assert.equal(rel.status, 400)
+
+      const openMissing = await request('POST', '/api/workbench/knowledge/open-file', { fileLink: '/no/such/file.md' })
+      assert.equal(openMissing.status, 400)
+      const openNoLink = await request('POST', '/api/workbench/knowledge/open-file', {})
+      assert.equal(openNoLink.status, 400)
+    })
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })

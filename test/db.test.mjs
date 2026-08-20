@@ -10,7 +10,7 @@ import {
   createDraft, confirmTaskDraft, confirmDailyPlanDraft, confirmReportDraft, getDailyPlan, updateDailyPlan, deleteDailyPlan,
   getTaskReport, listTaskReports, deleteTaskReport,
   getAiSession, registerAiSession, listReminders, ensureRecurringInstances,
-  createKnowledge, listKnowledge, getKnowledge, deleteKnowledge, confirmKnowledgeDraft,
+  createKnowledge, updateKnowledge, listKnowledge, getKnowledge, deleteKnowledge, confirmKnowledgeDraft,
   createIdea, listIdeas, createIdeaCluster, getIdeaCluster, confirmIdeaClusterDraft, confirmIdeaTaskDraft,
   getDraftBySession, listTaskSessions, linkTaskSession, localDateString,
   completeTaskCascade, repairParentCompletion, addTaskMemory, getTaskMemoryContext, listTaskMemories,
@@ -113,15 +113,23 @@ test('db migrations, dictionaries and task tree', () => {
     assert.equal(ensureRecurringInstances(db, '2026-08-17'), 0)
     assert.equal(getTask(db, recurring.id).recurrenceLastGenerated, '2026-08-17')
 
-    // knowledge base: create / search / draft confirm / delete
-    const k1 = createKnowledge(db, { title: 'edge-tts 方案', kindCode: 'lesson', contentMd: '# 结论\n免费可用', tags: ['TTS', '踩坑'] })
+    // knowledge base: create / search / draft confirm / file_link / delete
+    const k1 = createKnowledge(db, { title: 'edge-tts 方案', kindCode: 'lesson', contentMd: '# 结论\n免费可用', tags: ['TTS', '踩坑'], fileLink: 'D:\\docs\\edge-tts.md' })
+    assert.equal(getKnowledge(db, k1.id).fileLink, 'D:\\docs\\edge-tts.md')
     assert.equal(listKnowledge(db, { q: 'edge' }).length, 1)
     assert.equal(listKnowledge(db, { kindCode: 'lesson' }).length, 1)
-    const kDraft = createDraft(db, { kindCode: 'knowledge', sessionId: 's-know', payload: { title: 'AI 提交的经验', contentMd: '# 内容', kindCode: 'note', tags: ['AI'], sourceReviewId: 'review-1' } })
+    const updatedK1 = updateKnowledge(db, k1.id, { fileLink: 'file:///mnt/d/docs/edge-tts.md' })
+    assert.equal(updatedK1.fileLink, 'file:///mnt/d/docs/edge-tts.md')
+    assert.equal(getKnowledge(db, k1.id).fileLink, 'file:///mnt/d/docs/edge-tts.md')
+    // file_link 必须是 file:// 或绝对路径，相对路径/空值会被拒绝
+    assert.throws(() => createKnowledge(db, { title: 'bad link', kindCode: 'note', contentMd: 'x', fileLink: 'docs/a.md' }), /fileLink must be a file:\/\/ URL or an absolute path/)
+    assert.throws(() => updateKnowledge(db, k1.id, { fileLink: 'relative/path.md' }), /fileLink must be a file:\/\/ URL or an absolute path/)
+    const kDraft = createDraft(db, { kindCode: 'knowledge', sessionId: 's-know', payload: { title: 'AI 提交的经验', contentMd: '# 内容', kindCode: 'note', tags: ['AI'], sourceReviewId: 'review-1', fileLink: '/mnt/d/docs/ai.md' } })
     const kConfirmed = confirmKnowledgeDraft(db, kDraft.id)
     assert.equal(kConfirmed.title, 'AI 提交的经验')
     assert.equal(getKnowledge(db, kConfirmed.id).tags[0], 'AI')
     assert.equal(getKnowledge(db, kConfirmed.id).sourceReviewId, 'review-1')
+    assert.equal(getKnowledge(db, kConfirmed.id).fileLink, '/mnt/d/docs/ai.md')
     assert.equal(listKnowledge(db, { sourceReviewId: 'review-1' }).length, 1)
     assert.equal(deleteKnowledge(db, k1.id), true)
     assert.equal(getKnowledge(db, k1.id), undefined)

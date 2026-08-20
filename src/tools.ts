@@ -5,7 +5,7 @@
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { DatabaseSync } from 'node:sqlite'
-import { addTaskMemory, createDraft, getDictionary, getDraft, getIdea, getIdeaCluster, getPendingDailyPlanDraft, getPendingDraftForSession, getPendingDraftForTask, getPendingKnowledgeDraft, getPendingReportDraft, getTask, localDateString, updateDraft, updateTask } from './db/repo.js'
+import { addTaskMemory, assertValidFileLink, createDraft, getDictionary, getDraft, getIdea, getIdeaCluster, getPendingDailyPlanDraft, getPendingDraftForSession, getPendingDraftForTask, getPendingKnowledgeDraft, getPendingReportDraft, getTask, localDateString, updateDraft, updateTask } from './db/repo.js'
 
 function text(value: string): ContentBlock[] {
   return [{ type: 'text', text: value }]
@@ -299,7 +299,7 @@ export function submitKnowledgeTool(db: DatabaseSync) {
     name: 'workbench_submit_knowledge',
     description:
       '个人工作台知识库工具：把值得沉淀的经验教训、决策、笔记或可复用片段提交为知识条目草稿（pending），由用户在工作台确认后才入库。' +
-      'kind_code 可选 note/lesson/decision/snippet；tags 为字符串数组；source_task_id 可选，用于关联任务。同一会话重复提交会更新同一草稿。',
+      'kind_code 可选 note/lesson/decision/snippet；tags 为字符串数组；source_task_id 可选，用于关联任务；file_link 可选，用于绑定本地文档（file:// 或绝对路径）。同一会话重复提交会更新同一草稿。',
     parameters: {
       draft_id: { type: 'string', description: '已有知识草稿 id；修改后再次提交时传' },
       title: { type: 'string', required: true, description: '知识标题，简洁可检索' },
@@ -308,6 +308,7 @@ export function submitKnowledgeTool(db: DatabaseSync) {
       tags: { type: 'json', description: '标签数组，如 ["TTS","踩坑"]' },
       source_task_id: { type: 'string', description: '关联任务 id（可选）' },
       source_review_id: { type: 'string', description: '来源复盘记录 id（可选；同一复盘只允许沉淀一次）' },
+      file_link: { type: 'string', description: '本地文件链接（可选）：file:// URL 或绝对路径，如 file:///D:/docs/a.md、D:\\docs\\a.md、/mnt/d/docs/a.md' },
     },
     output: {
       schema: { type: 'string' },
@@ -324,6 +325,14 @@ export function submitKnowledgeTool(db: DatabaseSync) {
         return `错误：source_task_id 任务不存在：${args.source_task_id}`
       }
       const tags = Array.isArray(args.tags) ? args.tags.filter((tag): tag is string => typeof tag === 'string').slice(0, 20) : []
+      let fileLink: string | null = null
+      if (args.file_link !== undefined && args.file_link !== null && args.file_link !== '') {
+        try {
+          fileLink = assertValidFileLink(String(args.file_link))
+        } catch (error) {
+          return `错误：${error instanceof Error ? error.message : String(error)}`
+        }
+      }
 
       const sessionId = exec.agent?.session?.id ?? null
       const draftId = str(args.draft_id)
@@ -338,6 +347,7 @@ export function submitKnowledgeTool(db: DatabaseSync) {
         tags,
         sourceTaskId: str(args.source_task_id) ?? null,
         sourceReviewId: str(args.source_review_id) ?? null,
+        fileLink,
       }
       const draft = existing !== undefined
         ? updateDraft(db, existing.id, payload)

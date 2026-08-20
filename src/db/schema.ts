@@ -4,7 +4,7 @@
  */
 import type { DatabaseSync } from 'node:sqlite'
 
-export const SCHEMA_VERSION = 10
+export const SCHEMA_VERSION = 11
 
 export interface Migration {
   version: number
@@ -297,6 +297,13 @@ export const MIGRATIONS: Migration[] = [
         CREATE INDEX idx_task_memories_root ON task_memories(root_task_id, updated_at DESC);
         CREATE INDEX idx_task_memories_task ON task_memories(task_id, updated_at DESC);
       `)
+    },
+  },
+  {
+    version: 11,
+    name: 'knowledge-file-link',
+    up(db) {
+      db.exec('ALTER TABLE knowledge_entries ADD COLUMN file_link TEXT')
     },
   },
 ]

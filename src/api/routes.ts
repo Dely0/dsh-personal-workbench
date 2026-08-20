@@ -1,12 +1,15 @@
 /**
  * /api/workbench/* 路由。Loopback-only 保护（同 dsh-ssh 的信任围栏）。
  */
+import { execFile } from 'node:child_process'
 import { mkdirSync } from 'node:fs'
+import { readFile, stat } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { basename } from 'node:path'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import type { DatabaseSync } from 'node:sqlite'
 import {
-  abandonDraft, addReminder, addTaskMemory, archiveTask, completeTaskCascade, confirmDailyPlanDraft, confirmIdeaClusterDraft, confirmIdeaTaskDraft, confirmKnowledgeDraft, confirmReportDraft, confirmSubtaskPlanDraft, confirmTaskDraft,
+  abandonDraft, addReminder, addTaskMemory, archiveTask, assertValidFileLink, completeTaskCascade, confirmDailyPlanDraft, confirmIdeaClusterDraft, confirmIdeaTaskDraft, confirmKnowledgeDraft, confirmReportDraft, confirmSubtaskPlanDraft, confirmTaskDraft,
   createIdea, createIdeaCluster, createKnowledge, createTaskReview,
   createDraft, createTask, deleteDailyPlan, deleteIdea, deleteIdeaCluster, deleteKnowledge, deleteTaskReport, ensureRecurringInstances, fireReminder, getAiSession, getDailyPlan, getDictionary, getDraft, getDraftBySession,
   getIdea, getIdeaCluster, getKnowledge, getLatestPendingDraft, getTask, getTaskMemoryContext, getTaskReport, getTaskRootId, linkTaskSession, listArchivedTasks, listChildren,
@@ -57,6 +60,58 @@ async function readJsonBody(req: IncomingMessage, maxBytes = 256 * 1024): Promis
     const parsed: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'))
     return typeof parsed === 'object' && parsed !== null ? parsed as Record<string, unknown> : undefined
   } catch { return undefined }
+}
+
+const MAX_LOCAL_DOC_BYTES = 1024 * 1024
+
+/** 把 file:// URL 或绝对路径转成服务器本地文件路径。 */
+function fileLinkToPath(link: string): string {
+  const trimmed = link.trim()
+  if (/^file:/i.test(trimmed)) {
+    const url = new URL(trimmed)
+    if (url.protocol !== 'file:') throw new Error('not a file URL')
+    let pathname = decodeURIComponent(url.pathname)
+    // file:///D:/... 在 URL.pathname 中会是 /D:/...，去掉盘符前多余的斜杠。
+    if (/^\/[A-Za-z]:[\\/]/.test(pathname)) pathname = pathname.slice(1)
+    return pathname
+  }
+  return trimmed
+}
+
+/** 根据宿主平台把用户输入的绝对路径归一化为服务器可读路径（WSL 下 D:\Code -> /mnt/d/Code）。 */
+function toNativePath(link: string): string {
+  let path = fileLinkToPath(link)
+  if (process.platform !== 'win32' && /^[A-Za-z]:[\\/]/.test(path)) {
+    const match = /^([A-Za-z]):[\\/]?(.*)$/.exec(path)
+    if (match !== null) {
+      const drive = match[1].toLowerCase()
+      const rest = (match[2] ?? '').replace(/\\/g, '/').replace(/^\/+/, '')
+      path = rest === '' ? `/mnt/${drive}` : `/mnt/${drive}/${rest}`
+    }
+  }
+  return path
+}
+
+function openLocalFile(filePath: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (process.platform === 'win32') {
+      // `cmd /c start "" "path"` 用系统默认程序打开文件，路径带空格也安全。
+      execFile('cmd', ['/c', 'start', '', filePath], { windowsVerbatimArguments: true }, (error) => {
+        if (error) reject(error)
+        else resolve()
+      })
+    } else if (process.platform === 'darwin') {
+      execFile('open', [filePath], (error) => {
+        if (error) reject(error)
+        else resolve()
+      })
+    } else {
+      execFile('xdg-open', [filePath], (error) => {
+        if (error) reject(error)
+        else resolve()
+      })
+    }
+  })
 }
 
 function pathSegments(url: URL, prefix: string): string[] {
@@ -636,6 +691,48 @@ export function makeRoutes(db: DatabaseSync): WebRoute[] {
         const segments = pathSegments(url, KNOWLEDGE_PREFIX)
         const method = req.method ?? 'GET'
         const body = ['POST', 'PATCH'].includes(method) ? await readJsonBody(req) : undefined
+        if (segments.length === 1 && segments[0] === 'read-local-file') {
+          const rawPath = method === 'GET'
+            ? url.searchParams.get('path') ?? undefined
+            : method === 'POST' && body !== undefined && typeof body.path === 'string' ? body.path : undefined
+          if (rawPath === undefined || rawPath.trim() === '') return writeJson(res, 400, { error: 'path is required' })
+          try {
+            const fileLink = assertValidFileLink(rawPath)
+            if (fileLink === null) return writeJson(res, 400, { error: 'path is required' })
+            const filePath = toNativePath(fileLink)
+            const info = await stat(filePath)
+            if (!info.isFile()) return writeJson(res, 400, { error: 'path is not a file' })
+            const content = await readFile(filePath, 'utf8')
+            const truncated = content.length > MAX_LOCAL_DOC_BYTES
+            return writeJson(res, 200, {
+              ok: true,
+              path: filePath,
+              fileLink,
+              name: basename(filePath),
+              content: truncated ? content.slice(0, MAX_LOCAL_DOC_BYTES) : content,
+              truncated,
+              size: info.size,
+            })
+          } catch (error) {
+            return writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
+          }
+        }
+        if (segments.length === 1 && segments[0] === 'open-file' && method === 'POST') {
+          if (body === undefined) return writeJson(res, 400, { error: 'invalid JSON body' })
+          const raw = typeof body.fileLink === 'string' ? body.fileLink : typeof body.path === 'string' ? body.path : undefined
+          if (raw === undefined || raw.trim() === '') return writeJson(res, 400, { error: 'fileLink is required' })
+          try {
+            const fileLink = assertValidFileLink(raw)
+            if (fileLink === null) return writeJson(res, 400, { error: 'fileLink is required' })
+            const filePath = toNativePath(fileLink)
+            const info = await stat(filePath)
+            if (!info.isFile()) return writeJson(res, 400, { error: 'path is not a file' })
+            await openLocalFile(filePath)
+            return writeJson(res, 200, { ok: true, path: filePath })
+          } catch (error) {
+            return writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
+          }
+        }
         if (segments.length === 0) {
           if (method === 'GET') {
             const q = url.searchParams.get('q') ?? undefined
@@ -653,6 +750,8 @@ export function makeRoutes(db: DatabaseSync): WebRoute[] {
               const kindCode = typeof body.kindCode === 'string' ? body.kindCode : 'note'
               requireCode(db, 'knowledge_kind', kindCode, 'kindCode')
               const tags = Array.isArray(body.tags) ? body.tags.filter((tag): tag is string => typeof tag === 'string').slice(0, 20) : []
+              const fileLink = body.fileLink === undefined || body.fileLink === null ? null : typeof body.fileLink === 'string' ? body.fileLink : undefined
+              if (fileLink === undefined) throw new Error('fileLink must be a string or null')
               const entry = createKnowledge(db, {
                 kindCode,
                 title,
@@ -661,6 +760,7 @@ export function makeRoutes(db: DatabaseSync): WebRoute[] {
                 sourceTaskId: typeof body.sourceTaskId === 'string' ? body.sourceTaskId : null,
                 sourceSessionId: typeof body.sourceSessionId === 'string' ? body.sourceSessionId : null,
                 sourceReviewId: typeof body.sourceReviewId === 'string' ? body.sourceReviewId : null,
+                fileLink,
               })
               return writeJson(res, 201, { ok: true, knowledge: entry })
             } catch (error) {
@@ -683,6 +783,7 @@ export function makeRoutes(db: DatabaseSync): WebRoute[] {
           if (Array.isArray(body.tags)) patch.tags = body.tags.filter((tag): tag is string => typeof tag === 'string').slice(0, 20)
           if ('sourceTaskId' in body) patch.sourceTaskId = typeof body.sourceTaskId === 'string' ? body.sourceTaskId : null
           if ('sourceReviewId' in body) patch.sourceReviewId = typeof body.sourceReviewId === 'string' ? body.sourceReviewId : null
+          if ('fileLink' in body) patch.fileLink = typeof body.fileLink === 'string' ? body.fileLink : null
           const entry = updateKnowledge(db, id, patch)
           if (entry === undefined) return writeJson(res, 404, { error: 'knowledge not found' })
           return writeJson(res, 200, { ok: true, knowledge: entry })
