@@ -60,7 +60,7 @@ test('manual plan editing PUT saves added task instead of returning not found', 
 
     const health = await request('GET', '/api/workbench/health')
     assert.equal(health.status, 200)
-    assert.equal(health.body.version, '1.5.2')
+    assert.equal(health.body.version, '1.8.0')
 
     // Simulates: open edit mode, add an existing task, then save.
     const put = await request('PUT', `/api/workbench/plans/${planDate}`, {
