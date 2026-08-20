@@ -17,6 +17,7 @@ import {
   type TaskSortKey,
   type TaskTreeNode,
 } from './taskFilterSort.js'
+import { isWslStylePath, joinPath, normalizeWindowsPathToWsl } from './workspacePath.js'
 
 const PANEL_NAME = 'personal-workbench'
 const ACTIVE_ATTR = 'data-dsh-personal-workbench-active'
@@ -200,9 +201,14 @@ interface WorkbenchRuntime {
     open(id: string): void
   }
   workspaces: {
-    list: { getSnapshot(): { items: readonly { workspaceId: string }[]; recentWorkspaceId?: string } }
+    list: { getSnapshot(): { items: readonly { workspaceId: string; path?: string }[]; recentWorkspaceId?: string } }
     connectWorkspace(workspaceId: string): Promise<string>
     create?(input: { path: string }): Promise<{ workspaceId?: string }>
+  }
+  connection?: {
+    hostDescription: {
+      getSnapshot(): { cwd?: string } | undefined
+    }
   }
 }
 
@@ -1072,24 +1078,31 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
       }
       const ws = runtime.workspaces.list.getSnapshot()
       let workspaceId = ws.recentWorkspaceId ?? ws.items[0]?.workspaceId
-      const joinPath = (base: string, folder: string): string => `${base.replace(/[\\/]+$/, '')}\\${folder}`
+      const hostCwd = runtime.connection?.hostDescription.getSnapshot()?.cwd
+      const isWsl = hostCwd !== undefined
+        ? isWslStylePath(hostCwd)
+        : ws.items.some((item) => typeof item.path === 'string' && isWslStylePath(item.path))
+      const pathSep = isWsl ? '/' : '\\'
       let desired = ''
       if (task !== null) {
         desired = task.workspacePath ?? ''
         if (desired === '' && settings.defaultWorkspace !== '' && settings.autoCreateTypeFolders) {
-          desired = joinPath(settings.defaultWorkspace, folderForText(task.title))
+          desired = joinPath(settings.defaultWorkspace, folderForText(task.title), pathSep)
         }
       } else if (mode === 'clarify' && settings.defaultWorkspace !== '' && settings.autoCreateTypeFolders) {
-        desired = joinPath(settings.defaultWorkspace, folderForText(text || '需求澄清'))
+        desired = joinPath(settings.defaultWorkspace, folderForText(text || '需求澄清'), pathSep)
       }
-      if (desired !== '') {
+      // WSL 下把 Windows 盘符路径（D:\Code）统一归一化为真实路径（/mnt/d/Code）。
+      // 相对路径和已是 /mnt/... 的路径不会被转换；原生 Windows 上不做转换。
+      const normalizedDesired = desired === '' ? '' : isWsl ? normalizeWindowsPathToWsl(desired) : desired
+      if (normalizedDesired !== '') {
         try {
-          await api('/api/workbench/workspaces/ensure', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ path: desired }) })
-          const created = await runtime.workspaces.create?.({ path: desired })
+          await api('/api/workbench/workspaces/ensure', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ path: normalizedDesired }) })
+          const created = await runtime.workspaces.create?.({ path: normalizedDesired })
           if (typeof created?.workspaceId === 'string' && created.workspaceId !== '') workspaceId = created.workspaceId
           // 任务没有显式工作区时，把解析出的任务文件夹回写，保证后续会话都进同一文件夹
-          if (task !== null && task.workspacePath === null && desired !== '') {
-            void api(`/api/workbench/tasks/${task.id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ workspacePath: desired }) }).catch(() => undefined)
+          if (task !== null && task.workspacePath === null && normalizedDesired !== '') {
+            void api(`/api/workbench/tasks/${task.id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ workspacePath: normalizedDesired }) }).catch(() => undefined)
           }
         } catch { /* 目录创建/注册失败则回退当前工作区 */ }
       }
@@ -2031,7 +2044,7 @@ function conversationColumn(): HTMLElement | undefined {
 }
 
 export const name = 'personal-workbench-client'
-export const inject = ['sessions', 'workspaces']
+export const inject = ['sessions', 'workspaces', 'connection']
 
 export function apply(ctx: unknown): () => void {
   const runtime = ctx as WorkbenchRuntime

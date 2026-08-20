@@ -61,7 +61,7 @@
     "build": "rm -rf lib && tsc -p tsconfig.build.json && tsdown",
     "typecheck": "tsc --noEmit",
     "check": "tsc --noEmit && rm -rf lib && tsc -p tsconfig.build.json && tsdown",
-    "test": "pnpm build && node --test test/db.test.mjs test/tools.test.mjs test/routes.test.mjs test/taskFilterSort.test.mjs",
+    "test": "pnpm build && node --test test/db.test.mjs test/tools.test.mjs test/routes.test.mjs test/taskFilterSort.test.mjs test/workspacePath.test.mjs",
     "prepare": "pnpm build"
   },
   "dependencies": {
