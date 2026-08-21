@@ -62,7 +62,7 @@ html[${PENDING_ATTR}] [${ENTRY_ATTR}]::after { content:''; position:absolute; to
 .wb-btn:hover { background: color-mix(in srgb, var(--dsw-alias-label-primary, #fff) 6%, transparent); color:var(--dsw-alias-label-primary); }
 .wb-btn.primary { background: color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 16%, transparent); border:1px solid color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 38%, transparent); color:var(--dsw-alias-label-primary); }
 .wb-body { flex:1; min-height:0; display:flex; }
-.wb-nav { flex:0 0 56%; min-width:0; overflow:auto; padding:0 18px 16px; box-sizing:border-box; border-right:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.14)); }
+.wb-nav { flex:0 0 min(56%, 880px); min-width:420px; overflow:auto; padding:0 18px 16px; box-sizing:border-box; border-right:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.14)); }
 .wb-nav > :first-child:not(.wb-stats-sticky) { margin-top:16px; }
 .wb-detail { flex:1; min-width:0; overflow:auto; padding:16px 18px; box-sizing:border-box; }
 .wb-stats { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin-bottom:12px; }
@@ -182,6 +182,40 @@ html[${PENDING_ATTR}] [${ENTRY_ATTR}]::after { content:''; position:absolute; to
 .wb-file-chip code { background: transparent; border: none; padding: 0; }
 .wb-cluster-meta { font-size: 12px; color: var(--dsw-alias-label-secondary); margin-top: 2px; }
 .wb-empty { border: 1px dashed var(--wb-border-soft, rgba(127,127,127,.16)); border-radius: 12px; margin: 4px; }
+/* ---- P0: 任务详情摘要 + Tabs + 吸顶操作条 ---- */
+.wb-detail-actions { position: sticky; top: 0; z-index: 16; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; padding: 9px 12px; border: 1px solid var(--wb-border-soft, rgba(127,127,127,.18)); border-radius: 12px; background: color-mix(in srgb, var(--dsw-alias-bg-base, #111) 88%, transparent); backdrop-filter: blur(8px); box-shadow: 0 6px 18px rgba(0,0,0,.08); }
+.wb-detail-tabs { display: flex; gap: 4px; margin: 4px 0 12px; border-bottom: 1px solid var(--wb-border-soft, rgba(127,127,127,.16)); }
+.wb-detail-tab { border: none; background: transparent; color: var(--dsw-alias-label-secondary); font: inherit; font-size: 13px; font-weight: 600; padding: 7px 13px; border-radius: 8px 8px 0 0; cursor: pointer; white-space: nowrap; }
+.wb-detail-tab:hover { color: var(--dsw-alias-label-primary); background: color-mix(in srgb, var(--dsw-alias-label-primary, #fff) 6%, transparent); }
+.wb-detail-tab.on { color: var(--dsw-alias-label-primary); box-shadow: inset 0 -2px 0 var(--dsw-alias-state-business-primary, #4f8ef7); }
+.wb-detail-tab .count { margin-left: 4px; font-size: 11px; opacity: .8; }
+/* ---- P1: 会话 Chip + 事件时间线 ---- */
+.wb-session-chip { display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--wb-border-soft, rgba(127,127,127,.18)); background: color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 6%, transparent); border-radius: 99px; padding: 5px 11px; font-size: 12px; color: var(--dsw-alias-label-secondary); cursor: pointer; margin: 0 6px 6px 0; transition: border-color .12s ease, background .12s ease; }
+.wb-session-chip:hover { border-color: color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 55%, transparent); color: var(--dsw-alias-label-primary); background: color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 12%, transparent); }
+.wb-session-role { font-weight: 600; color: var(--dsw-alias-state-business-primary, #4f8ef7); }
+.wb-session-id { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; opacity: .75; }
+.wb-session-open { opacity: .6; }
+.wb-event-group-date { display: flex; align-items: center; gap: 8px; margin: 10px 0 4px; font-size: 12px; font-weight: 700; color: var(--dsw-alias-label-secondary); }
+.wb-event-group-date::after { content: ''; flex: 1; height: 1px; background: var(--wb-border-soft, rgba(127,127,127,.16)); }
+.wb-event-row { display: flex; align-items: flex-start; gap: 8px; padding: 5px 0; font-size: 12px; color: var(--dsw-alias-label-secondary); }
+.wb-event-icon { flex: none; width: 18px; text-align: center; line-height: 1.4; }
+.wb-event-main { flex: 1; min-width: 0; }
+.wb-event-title { color: var(--dsw-alias-label-primary); font-weight: 600; }
+.wb-event-meta { opacity: .8; margin-top: 1px; word-break: break-all; }
+/* ---- P2: 顶栏窄屏自适应 ---- */
+@media (max-width: 1100px) {
+  .wb-h { gap: 8px; padding: 10px 12px; }
+  .wb-h .wb-label { display: none; }
+  .wb-h > .wb-btn { width: 34px; height: 34px; padding: 0; justify-content: center; }
+  .wb-h .wb-segmented { flex-wrap: wrap; }
+  .wb-h .wb-seg { padding: 6px 9px; font-size: 12.5px; }
+  .wb-h .wb-title { font-size: 14px; letter-spacing: 0; }
+}
+/* ---- P2: Markdown 代码块复制 ---- */
+.wb-code-block { position: relative; margin: 8px 0; }
+.wb-code-block pre { background: rgba(127,127,127,.10); padding: 10px 12px; border-radius: 8px; overflow: auto; font-size: 12px; margin: 0; }
+.wb-code-copy { position: absolute; top: 6px; right: 6px; border-radius: 6px; padding: 2px 7px; font-size: 11px; opacity: .75; }
+.wb-blockquote { border-left: 3px solid var(--dsw-alias-state-business-primary, #4f8ef7); background: color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 7%, transparent); border-radius: 0 8px 8px 0; padding: 6px 12px; margin: 8px 0; }
 `
 
 interface Dict { kind: string; code: string; name: string; config: Record<string, unknown>; builtin?: number; active?: number; sortOrder?: number; createdAt?: string; updatedAt?: string }
@@ -279,6 +313,68 @@ const fmtTime = (iso: string): string => {
   if (Number.isNaN(d.getTime())) return iso
   return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
+const ROLE_LABELS: Record<string, string> = {
+  clarify: '澄清会话',
+  consult: '协助会话',
+  breakdown: '拆解会话',
+  execute: '执行会话',
+  review: '复盘会话',
+  plan: 'AI 计划会话',
+  report: '日报/周报会话',
+  idea_association: '点子关联会话',
+  idea_brainstorm: '点子头脑风暴',
+  knowledge_doc: '知识总结会话',
+}
+const roleLabel = (code: string): string => ROLE_LABELS[code] ?? code
+const EVENT_LABELS: Record<string, string> = {
+  created: '创建任务',
+  updated: '更新任务',
+  status_changed: '更新状态',
+  completed: '任务完成',
+  accepted: '用户验收通过',
+  rejected: '用户驳回',
+  archived: '归档任务',
+  restored: '恢复任务',
+  cancelled: '取消任务',
+  memory_added: '写入任务记忆',
+  session_linked: '关联 AI 会话',
+  session_created: '创建 AI 会话',
+  plan_saved: '保存计划',
+  report_saved: '保存报告',
+  review_added: '新增复盘',
+  subtask_added: '新增子任务',
+  reminder_added: '添加提醒',
+  reminder_fired: '触发提醒',
+  knowledge_added: '新增知识',
+  idea_added: '新增点子',
+  idea_cluster_added: '新增点子王',
+}
+const eventLabel = (code: string): string => EVENT_LABELS[code] ?? code
+const EVENT_ICONS: Record<string, string> = {
+  created: '📝',
+  updated: '🔄',
+  status_changed: '🔀',
+  completed: '✅',
+  accepted: '✔️',
+  rejected: '❌',
+  archived: '📦',
+  restored: '♻️',
+  cancelled: '⛔',
+  memory_added: '💾',
+  session_linked: '🔗',
+  session_created: '🔗',
+  plan_saved: '📅',
+  report_saved: '📊',
+  review_added: '🧠',
+  subtask_added: '🌱',
+  reminder_added: '⏰',
+  reminder_fired: '🔔',
+  knowledge_added: '📚',
+  idea_added: '💡',
+  idea_cluster_added: '👑',
+}
+const eventIcon = (code: string): string => EVENT_ICONS[code] ?? '•'
+const shortId = (id: string): string => id.length > 12 ? `${id.slice(0, 8)}…` : id
 const sameDay = (a: Date, b: Date): boolean => a.toDateString() === b.toDateString()
 const startOfDay = (d: Date): Date => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x }
 const startOfWeek = (d: Date): Date => { const x = startOfDay(d); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return x }
@@ -344,6 +440,7 @@ function MarkdownText({ text }: { text: string }): JSX.Element {
   const blocks: JSX.Element[] = []
   let list: { ordered: boolean; items: string[] } | null = null
   let code: string[] = []
+  let inCode = false
   let table: string[] = []
   let key = 0
   const renderListItem = (item: string): JSX.Element => {
@@ -364,7 +461,13 @@ function MarkdownText({ text }: { text: string }): JSX.Element {
   }
   const flushCode = () => {
     if (code.length === 0) return
-    blocks.push(<pre key={key++} style={{ background: 'rgba(127,127,127,.10)', padding: 8, borderRadius: 8, overflow: 'auto', fontSize: 12 }}>{code.join('\n')}</pre>)
+    const codeText = code.join('\n')
+    blocks.push(
+      <div key={key++} className="wb-code-block">
+        <button type="button" className="wb-btn wb-code-copy" onClick={() => { if (navigator.clipboard) void navigator.clipboard.writeText(codeText).catch(() => undefined) }}>复制</button>
+        <pre>{codeText}</pre>
+      </div>,
+    )
     code = []
   }
   const flushTable = () => {
@@ -390,12 +493,13 @@ function MarkdownText({ text }: { text: string }): JSX.Element {
   }
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index]
-    if (line.startsWith('```')) { flushList(); flushTable(); if (code.length > 0) flushCode(); else code = []; continue }
-    if (code.length > 0) { code.push(line); continue }
+    if (line.startsWith('```')) { flushList(); flushTable(); if (inCode) { flushCode(); inCode = false } else { code = []; inCode = true } continue }
+    if (inCode) { code.push(line); continue }
     if (line.trim().startsWith('|')) { flushList(); table.push(line.trim()); continue }
     if (/^###\s/.test(line)) { flushList(); flushTable(); blocks.push(<h5 key={key++} style={{ margin: '8px 0 4px' }}>{renderInline(line.replace(/^###\s*/, ''))}</h5>); continue }
     if (/^##\s/.test(line)) { flushList(); flushTable(); blocks.push(<h4 key={key++} style={{ margin: '10px 0 4px' }}>{renderInline(line.replace(/^##\s*/, ''))}</h4>); continue }
     if (/^#\s/.test(line)) { flushList(); flushTable(); blocks.push(<h3 key={key++} style={{ margin: '12px 0 4px' }}>{renderInline(line.replace(/^#\s*/, ''))}</h3>); continue }
+    if (/^>\s?/.test(line)) { flushList(); flushTable(); flushCode(); blocks.push(<blockquote key={key++} className="wb-blockquote">{renderInline(line.replace(/^>\s?/, ''))}</blockquote>); continue }
     const orderedMatch = /^(\d+)[.)]\s+(.*)$/.exec(line)
     const unorderedMatch = /^[-*]\s+(.*)$/.exec(line)
     if (orderedMatch !== null || unorderedMatch !== null) {
@@ -876,6 +980,8 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   const [showForm, setShowForm] = useState(false)
   const [subtaskParent, setSubtaskParent] = useState<Task | null>(null)
   const [editDraft, setEditDraft] = useState<{ title: string; description: string; typeCode: string; priorityCode: string; statusCode: string; aiPolicyCode: string; dueLocal: string; workspacePath: string; recurrenceCode: string } | null>(null)
+  const [detailTab, setDetailTab] = useState<'desc' | 'children' | 'sessions' | 'records'>('desc')
+  const [eventsExpanded, setEventsExpanded] = useState(false)
   const [showQuick, setShowQuick] = useState(false)
   const [quickText, setQuickText] = useState('')
   const [pendingDraft, setPendingDraft] = useState<DraftView | null>(null)
@@ -1020,6 +1126,8 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   }
   const openTask = (task: Task): void => {
     selectedRef.current = task.id
+    setDetailTab('desc')
+    setEventsExpanded(false)
     void Promise.all([
       api<TaskDetail>(`/api/workbench/tasks/${task.id}`),
       api<{ events: Array<Record<string, unknown>> }>(`/api/workbench/tasks/${task.id}/events`).catch(() => ({ events: [] })),
@@ -1030,6 +1138,8 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   const openTaskById = (taskId: string): void => {
     setView('list')
     selectedRef.current = taskId
+    setDetailTab('desc')
+    setEventsExpanded(false)
     void Promise.all([
       api<TaskDetail>(`/api/workbench/tasks/${taskId}`),
       api<{ events: Array<Record<string, unknown>> }>(`/api/workbench/tasks/${taskId}/events`).catch(() => ({ events: [] })),
@@ -1537,11 +1647,11 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
           <button className={`wb-seg ${view === 'ideas' ? 'on' : ''}`} onClick={() => setView('ideas')}><Icon name="idea" />点子</button>
         </div>
         <div style={{ flex: 1 }} />
-        <button className="wb-btn primary" onClick={() => setShowQuick((v) => !v)} disabled={busy}><Icon name="sparkles" />快速录入</button>
-        <button className="wb-btn" onClick={() => setShowForm((v) => !v)}><Icon name="plus" />新建</button>
-        <button className="wb-btn" onClick={() => setShowSettings((v) => !v)}><Icon name="settings" />设置</button>
-        <button className="wb-btn" onClick={collapseAll}><Icon name="list" />收起全部</button>
-        <button className="wb-btn" onClick={() => closePanel()}><Icon name="back" />返回对话</button>
+        <button className="wb-btn primary" onClick={() => setShowQuick((v) => !v)} disabled={busy}><Icon name="sparkles" /><span className="wb-label">快速录入</span></button>
+        <button className="wb-btn" onClick={() => setShowForm((v) => !v)}><Icon name="plus" /><span className="wb-label">新建</span></button>
+        <button className="wb-btn" onClick={() => setShowSettings((v) => !v)}><Icon name="settings" /><span className="wb-label">设置</span></button>
+        <button className="wb-btn" onClick={collapseAll}><Icon name="list" /><span className="wb-label">收起全部</span></button>
+        <button className="wb-btn" onClick={() => closePanel()}><Icon name="back" /><span className="wb-label">返回对话</span></button>
       </div>
 
       {error !== null && <div className="wb-banner error"><h4><Icon name="bell" />出错了</h4>{error} <button className="wb-btn" onClick={() => setError(null)}>关闭</button></div>}
@@ -1737,7 +1847,17 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
               )}
               <div className="wb-list">
                 <TaskTreeRows roots={todayTree} depth={0} expanded={todayExpanded} toggle={toggleTodayExpanded} dicts={dicts} onOpen={openTask} selectedId={selected?.task.id} />
-                {openTasks.length === 0 && <div className="wb-empty">今天没有需要关注的任务</div>}
+                {openTasks.length === 0 && (
+                  <div className="wb-empty" style={{ padding: '28px 18px' }}>
+                    <div style={{ marginBottom: 6, color: 'var(--dsw-alias-state-business-primary, #4f8ef7)' }}><Icon name="today" size={30} /></div>
+                    <div style={{ fontWeight: 600, marginBottom: 4 }}>今天没有需要关注的任务</div>
+                    <div style={{ fontSize: 12, opacity: .8, marginBottom: 12 }}>可以快速录入一个新任务，或新建一个待办</div>
+                    <div style={{ display: 'flex', gap: 8, justifyContent: 'center', flexWrap: 'wrap' }}>
+                      <button className="wb-btn primary" onClick={() => setShowQuick((v) => !v)}>快速录入</button>
+                      <button className="wb-btn" onClick={() => setShowForm((v) => !v)}>新建任务</button>
+                    </div>
+                  </div>
+                )}
               </div>
             </>
           )}
@@ -1857,7 +1977,14 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
               ) : (
                 <div className="wb-list">
                   <TaskTreeRows roots={dayTab === 'plan' ? pickedPlanTree : pickedDoneTree} depth={0} expanded={calendarExpanded} toggle={toggleCalendarExpanded} dicts={dicts} onOpen={openTask} selectedId={selected?.task.id} contextIds={dayTab === 'done' ? doneContextIds : undefined} />
-                  {(dayTab === 'plan' ? pickedPlanTree : pickedDoneTree).length === 0 && <div className="wb-empty">{picked.getMonth() + 1}/{picked.getDate()} 没有{dayTab === 'plan' ? '计划任务' : '完成记录'}</div>}
+                  {(dayTab === 'plan' ? pickedPlanTree : pickedDoneTree).length === 0 && (
+                    <div className="wb-empty" style={{ padding: '24px 18px' }}>
+                      <div style={{ fontWeight: 600, marginBottom: 4 }}>{picked.getMonth() + 1}/{picked.getDate()} 没有{dayTab === 'plan' ? '计划任务' : '完成记录'}</div>
+                      {dayTab === 'plan' && pickedAnchor >= todayAnchor
+                        ? <button className="wb-btn primary" style={{ marginTop: 8 }} onClick={() => void startAISession('plan', null, pickedAnchor)}>AI 智能排序</button>
+                        : <div style={{ fontSize: 12, opacity: .8, marginTop: 4 }}>切换到其他日期查看计划/记录</div>}
+                    </div>
+                  )}
                 </div>
               )}
             </>
@@ -1892,7 +2019,14 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                     </div>
                   </div>
                 ))}
-                {knowledgeEntries.length === 0 && <div className="wb-empty">还没有知识条目，点“新建”或让 AI 在复盘后提交</div>}
+                {knowledgeEntries.length === 0 && (
+                  <div className="wb-empty" style={{ padding: '28px 18px' }}>
+                    <div style={{ marginBottom: 6, color: 'var(--dsw-alias-state-business-primary, #4f8ef7)' }}><Icon name="book" size={30} /></div>
+                    <div style={{ fontWeight: 600, marginBottom: 4 }}>还没有知识条目</div>
+                    <div style={{ fontSize: 12, opacity: .8, marginBottom: 12 }}>沉淀经验教训、决策和可复用片段；也可以在 AI 复盘后一键写入</div>
+                    <button className="wb-btn primary" onClick={() => { setKnowledgeEditId(null); setKnowledgeDraft({ title: '', contentMd: '', kindCode: 'note', tags: '', sourceTaskId: '', sourceReviewId: '', fileLink: '' }) }}>新建知识</button>
+                  </div>
+                )}
               </div>
             </>
           )}
@@ -1932,7 +2066,14 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                         </div>
                       </div>
                     ))}
-                    {ideas.length === 0 && <div className="wb-empty" style={{ gridColumn: '1 / -1' }}>还没有点子，点“记个点子”把灵感存下来</div>}
+                    {ideas.length === 0 && (
+                      <div className="wb-empty" style={{ gridColumn: '1 / -1', padding: '30px 18px' }}>
+                        <div style={{ marginBottom: 6, color: 'var(--dsw-alias-state-business-primary, #4f8ef7)' }}><Icon name="idea" size={30} /></div>
+                        <div style={{ fontWeight: 600, marginBottom: 4 }}>还没有点子</div>
+                        <div style={{ fontSize: 12, opacity: .8, marginBottom: 12 }}>把一闪而过的灵感先记下来，之后可以 AI 找关联、头脑风暴</div>
+                        <button className="wb-btn primary" onClick={() => { setIdeaEditId(null); setIdeaForm({ title: '', contentMd: '', kindCode: 'spark', tags: '' }); setSelectedIdea(null) }}>记个点子</button>
+                      </div>
+                    )}
                   </div>
                 </>
               ) : (
@@ -1953,7 +2094,14 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                       </div>
                     </div>
                   ))}
-                  {ideaClusters.length === 0 && <div className="wb-empty">还没有点子王。选中至少 2 个点子后点“AI 找关联”。</div>}
+                  {ideaClusters.length === 0 && (
+                    <div className="wb-empty" style={{ padding: '28px 18px' }}>
+                      <div style={{ marginBottom: 6, color: 'var(--dsw-alias-state-business-primary, #4f8ef7)' }}><Icon name="idea" size={30} /></div>
+                      <div style={{ fontWeight: 600, marginBottom: 4 }}>还没有点子王</div>
+                      <div style={{ fontSize: 12, opacity: .8, marginBottom: 12 }}>选中至少 2 个点子后点“AI 找关联”，自动聚合同类灵感</div>
+                      <button className="wb-btn primary" onClick={() => { setIdeaTab('ideas'); setSelectedCluster(null); setSelectedIdea(null); setSelectedIdeaIds(new Set()) }}>去选点子</button>
+                    </div>
+                  )}
                 </div>
               )}
             </>
@@ -2170,45 +2318,9 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                       )}
                       <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>截止：{selected.task.effectiveDueAt === null ? '无' : fmtTime(selected.task.effectiveDueAt)}{selected.task.dueAt === null && selected.task.effectiveDueAt !== null ? '（继承父任务）' : ''}</div>
                       <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>AI 工作区：{selected.task.workspacePath ?? (settings.defaultWorkspace || '默认工作区未设置')}</div>
-                      <div style={{ fontSize: 12, color: '#999', marginBottom: 10 }}>
+                      <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>
                         重复：{dicts.find((d) => d.kind === 'recurrence' && d.code === (selected.task.recurrenceCode ?? 'none'))?.name ?? '不重复'}
                         {selected.task.recurrenceMasterId !== null ? '（自动生成的实例）' : selected.task.recurrenceCode !== null && selected.task.recurrenceCode !== 'none' ? `（模板，已生成到 ${selected.task.recurrenceLastGenerated ?? '—'}）` : ''}
-                      </div>
-                      <div style={{ borderTop: '1px solid var(--wb-border)', margin: '10px 0' }} />
-                      <MarkdownText text={selected.task.description || '（无描述）'} />
-                      <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
-                        {selected.task.archived ? (
-                          <button className="wb-btn primary" onClick={() => { void api(`/api/workbench/tasks/${selected.task.id}/restore`, { method: 'POST' }).then(() => { setNotice('任务已恢复'); setArchivedMode(false); void refresh() }).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e))) }}>恢复任务</button>
-                        ) : (
-                          <>
-                            {selected.task.recurrenceMasterId !== null
-                              ? <span style={{ fontSize: 12, color: '#999', alignSelf: 'center' }}>这是重复任务自动生成的实例，可直接执行/验收。</span>
-                              : selected.task.recurrenceCode !== null && selected.task.recurrenceCode !== 'none'
-                                ? <span style={{ fontSize: 12, color: '#999', alignSelf: 'center' }}>重复任务模板：实例会自动生成到“子任务”中，归档模板即停止重复。</span>
-                                : selected.task.statusCode === 'done' || selected.task.statusCode === 'cancelled'
-                                ? <button className="wb-btn" disabled={busy} onClick={() => {
-                                    const existing = selected.sessions.find((x) => x.role_code === 'review')
-                                    if (existing !== undefined && typeof existing.session_id === 'string' && existing.session_id !== '') {
-                                      closePanel()
-                                      runtime.sessions.open(existing.session_id)
-                                    } else {
-                                      void startAISession('review', selected.task, selected.task.title)
-                                    }
-                                  }}>{selected.sessions.some((x) => x.role_code === 'review') ? '进入复盘会话' : 'AI 复盘'}</button>
-                                : <button className="wb-btn primary" disabled={busy || selected.task.aiPolicyCode !== 'execute'} title={selected.task.aiPolicyCode !== 'execute' ? '请先开启“可执行”' : selected.children.length > 0 ? '执行父任务：验收通过后未完成子任务会级联完成' : selected.sessions.some((x) => x.role_code === 'execute') ? '新建执行会话并携带此前会话提示' : '开始执行'} onClick={() => void startAISession('execute', selected.task, selected.task.title, selected.sessions.filter((x) => x.role_code === 'execute'))}>AI 执行{selected.children.length > 0 ? '（父任务）' : ''}{selected.sessions.some((x) => x.role_code === 'execute') ? '（新会话续作）' : ''}{selected.task.aiPolicyCode !== 'execute' ? '（需可执行）' : ''}</button>}
-                            <button className="wb-btn" disabled={busy} onClick={() => void startAISession('consult', selected.task, selected.task.title)}>AI 协助</button>
-                            <button className="wb-btn" disabled={busy} onClick={() => void startAISession('breakdown', selected.task, selected.task.title)}>AI 拆解</button>
-                            <button className="wb-btn" onClick={() => setSubtaskParent(selected.task)}>+ 子任务</button>
-                            <button className="wb-btn" onClick={() => { if (window.confirm('归档后任务会从工作台列表隐藏；可在列表页“查看归档”中恢复。确认归档？')) { const id = selected.task.id; setTasks((list) => list.filter((t) => t.id !== id)); void api(`/api/workbench/tasks/${id}/archive`, { method: 'POST' }).then(() => { setSelected(null); selectedRef.current = null; setNotice('任务已归档，可在列表页“查看归档”恢复。'); void refresh() }).catch((e: unknown) => { const msg = e instanceof Error ? e.message : String(e); if (msg.includes('not found')) { setSelected(null); selectedRef.current = null; void refresh(); setNotice('该任务已不存在，已从当前视图移除') } setError(msg) }) } }}>归档</button>
-                          </>
-                        )}
-                      </div>
-                      <div style={{ fontSize: 12, color: '#999', marginTop: 6 }}>
-                        {selected.task.aiPolicyCode === 'execute' && selected.task.statusCode !== 'done' && selected.task.statusCode !== 'cancelled'
-                          ? selected.children.length > 0
-                            ? '执行父任务：验收通过后未完成子任务会级联完成；所有子节点完成后父节点也会自动完成。'
-                            : '执行会话完成后，AI 会提交验收申请，由你验收后标记完成。'
-                          : ''}
                       </div>
                     </>
                   ) : (
@@ -2245,75 +2357,185 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                     </form>
                   )}
                 </div>
-                {subtaskParent !== null && subtaskParent.id === selected.task.id && (
-                  <form className="wb-form wb-form-panel" onSubmit={(e) => {
-                    e.preventDefault()
-                    const form = new FormData(e.currentTarget)
-                    const title = String(form.get('title') ?? '').trim()
-                    if (title === '') return
-                    const due = String(form.get('due') ?? '')
-                    void api('/api/workbench/tasks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title, typeCode: String(form.get('type') ?? subtaskParent.typeCode), priorityCode: String(form.get('priority') ?? subtaskParent.priorityCode), statusCode: 'todo', parentId: subtaskParent.id, dueAt: due === '' ? null : new Date(due).toISOString() }) }).then(() => { setSubtaskParent(null); setNotice('子任务已创建'); void refresh() }).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
-                  }}>
-                    <h4 className="full" style={{ margin: 0 }}><Icon name="subtask" />新建子任务（父任务：{subtaskParent.title}）</h4>
-                    <label className="full">标题<input name="title" required placeholder="子任务标题" /></label>
-                    <label>类型<select name="type" defaultValue={subtaskParent.typeCode}>{dictOf('type').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
-                    <label>优先级<select name="priority" defaultValue={subtaskParent.priorityCode}>{dictOf('priority').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
-                    <label>截止时间<input name="due" type="datetime-local" /></label>
-                    <div className="full" style={{ display: 'flex', gap: 8 }}><button className="wb-btn primary" type="submit">保存子任务</button><button className="wb-btn" type="button" onClick={() => setSubtaskParent(null)}>取消</button></div>
-                  </form>
-                )}
-                <div className="wb-card">
-                  <h4>子任务（{selected.children.length}）{selected.children.length > 0 ? ` · ${selected.children.filter((c) => c.statusCode === 'done').length}/${selected.children.length} 已完成` : ''}</h4>
-                  {selected.children.map((c) => <div key={c.id} style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 4 }}><Badge dict={dictOf('status')} code={c.statusCode} /> <span onClick={() => openTask(c)} style={{ cursor: 'pointer' }}>{c.title}</span></div>)}
-                  {selected.children.length === 0 && <div style={{ color: '#999', fontSize: 12 }}>无</div>}
-                </div>
-                <div className="wb-card">
-                  <h4>提醒（{selected.reminders.length}）</h4>
-                  {selected.reminders.map((r) => <div key={r.id} style={{ fontSize: 12, color: '#999', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 5 }}><Icon name="bell" size={13} />{r.offsetMinutes === 0 ? '准时（截止时间）' : `提前 ${r.offsetMinutes} 分钟`} · {r.methodCode === 'os' ? '系统通知' : '页面/桌面通知'} · {r.firedAt === null ? '未触发' : `已触发 ${fmtTime(r.firedAt)}`}</div>)}
-                  {selected.task.effectiveDueAt === null
-                    ? <div style={{ fontSize: 12, color: '#999' }}>任务还没有截止时间，请先在详情里设置截止时间，再添加提醒。</div>
-                    : selected.task.statusCode === 'done' || selected.task.statusCode === 'cancelled'
-                      ? <div style={{ fontSize: 12, color: '#999' }}>已完成/已取消的任务不再提醒。</div>
-                      : (
-                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
-                          {[{ offset: 0, label: '准时' }, { offset: 15, label: '提前15分' }, { offset: 30, label: '提前30分' }, { offset: 60, label: '提前1小时' }, { offset: 1440, label: '提前1天' }].map((item) => (
-                            <button key={item.offset} className="wb-btn" disabled={busy} onClick={() => void addTaskReminder(item.offset)}>{item.label}</button>
-                          ))}
-                        </div>
+
+                {editDraft === null && (
+                  <>
+                    <div className="wb-detail-actions">
+                      {selected.task.archived ? (
+                        <button className="wb-btn primary" onClick={() => { void api(`/api/workbench/tasks/${selected.task.id}/restore`, { method: 'POST' }).then(() => { setNotice('任务已恢复'); setArchivedMode(false); void refresh() }).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e))) }}><Icon name="refresh" />恢复任务</button>
+                      ) : (
+                        <>
+                          {selected.task.recurrenceMasterId !== null
+                            ? <span style={{ fontSize: 12, color: '#999', alignSelf: 'center' }}>这是重复任务自动生成的实例，可直接执行/验收。</span>
+                            : selected.task.recurrenceCode !== null && selected.task.recurrenceCode !== 'none'
+                              ? <span style={{ fontSize: 12, color: '#999', alignSelf: 'center' }}>重复任务模板：实例会自动生成到“子任务”中，归档模板即停止重复。</span>
+                              : selected.task.statusCode === 'done' || selected.task.statusCode === 'cancelled'
+                                ? <button className="wb-btn" disabled={busy} onClick={() => {
+                                    const existing = selected.sessions.find((x) => x.role_code === 'review')
+                                    if (existing !== undefined && typeof existing.session_id === 'string' && existing.session_id !== '') {
+                                      closePanel()
+                                      runtime.sessions.open(existing.session_id)
+                                    } else {
+                                      void startAISession('review', selected.task, selected.task.title)
+                                    }
+                                  }}><Icon name="report" />{selected.sessions.some((x) => x.role_code === 'review') ? '进入复盘会话' : 'AI 复盘'}</button>
+                                : <>
+                                    <button className="wb-btn primary" disabled={busy || selected.task.aiPolicyCode !== 'execute'} title={selected.task.aiPolicyCode !== 'execute' ? '请先开启“可执行”' : selected.children.length > 0 ? '执行父任务：验收通过后未完成子任务会级联完成' : selected.sessions.some((x) => x.role_code === 'execute') ? '新建执行会话并携带此前会话提示' : '开始执行'} onClick={() => void startAISession('execute', selected.task, selected.task.title, selected.sessions.filter((x) => x.role_code === 'execute'))}><Icon name="ai" />AI 执行{selected.children.length > 0 ? '（父任务）' : ''}{selected.sessions.some((x) => x.role_code === 'execute') ? '（新会话续作）' : ''}{selected.task.aiPolicyCode !== 'execute' ? '（需可执行）' : ''}</button>
+                                    <button className="wb-btn" disabled={busy} onClick={() => void startAISession('consult', selected.task, selected.task.title)}><Icon name="ai" />AI 协助</button>
+                                    <button className="wb-btn" disabled={busy} onClick={() => void startAISession('breakdown', selected.task, selected.task.title)}><Icon name="breakdown" />AI 拆解</button>
+                                    <button className="wb-btn" onClick={() => { setSubtaskParent(selected.task); setDetailTab('children') }}><Icon name="subtask" />子任务</button>
+                                    <button className="wb-btn" onClick={() => { if (window.confirm('归档后任务会从工作台列表隐藏；可在列表页“查看归档”中恢复。确认归档？')) { const id = selected.task.id; setTasks((list) => list.filter((t) => t.id !== id)); void api(`/api/workbench/tasks/${id}/archive`, { method: 'POST' }).then(() => { setSelected(null); selectedRef.current = null; setNotice('任务已归档，可在列表页“查看归档”恢复。'); void refresh() }).catch((e: unknown) => { const msg = e instanceof Error ? e.message : String(e); if (msg.includes('not found')) { setSelected(null); selectedRef.current = null; void refresh(); setNotice('该任务已不存在，已从当前视图移除') } setError(msg) }) } }}><Icon name="archive" />归档</button>
+                                  </>}
+                        </>
                       )}
-                  <div style={{ fontSize: 12, color: '#999', marginTop: 6 }}>到提醒时间后：页内横幅 + 桌面通知（设置中授权）；点“知道了”后标记已触发。</div>
-                </div>
-                <div className="wb-card">
-                  <h4>关联会话（{selected.sessions.length}）</h4>
-                  {selected.sessions.map((s) => {
-                    const sid = typeof s.session_id === 'string' ? s.session_id : ''
-                    return <div key={String(s.session_id ?? s.role_code)} style={{ fontSize: 12, color: 'var(--dsw-alias-state-business-primary,#8fa8c8)', cursor: 'pointer', marginBottom: 4 }} onClick={() => { if (sid !== '') { closePanel(); runtime.sessions.open(sid) } }}>#{String(s.role_code ?? '')} · {sid}（点击打开）</div>
-                  })}
-                </div>
-                <div className="wb-card">
-                  <h4>复盘记录（{selected.reviews?.length ?? 0}）</h4>
-                  {(selected.reviews ?? []).map((rv, i) => {
-                    const reviewId = String(rv.id ?? '')
-                    const existingKnowledge = taskKnowledge.find((entry) => entry.sourceReviewId === reviewId)
-                    return (
-                      <div key={String(rv.id ?? i)} style={{ marginBottom: 10, paddingBottom: 10, borderBottom: '1px solid var(--wb-border-soft)' }}>
-                        <MarkdownText text={String(rv.summary_md ?? '')} />
-                        {existingKnowledge !== undefined
-                          ? <button className="wb-btn" style={{ marginTop: 6 }} onClick={() => { setKnowledgeDraft(null); setKnowledgeEditId(null); setSelectedKnowledge(existingKnowledge); setView('knowledge') }}><Icon name="book" />✅ 已沉淀，打开知识条目</button>
-                          : <button className="wb-btn" style={{ marginTop: 6 }} onClick={() => { setKnowledgeEditId(null); setKnowledgeDraft({ title: `复盘：${selected.task.title}`, contentMd: String(rv.summary_md ?? ''), kindCode: 'lesson', tags: '复盘', sourceTaskId: selected.task.id, sourceReviewId: reviewId, fileLink: '' }); setSelectedKnowledge(null); setView('knowledge') }}><Icon name="book" />💡 沉淀为经验</button>}
-                      </div>
-                    )
-                  })}
-                  {(selected.reviews?.length ?? 0) === 0 && <div style={{ fontSize: 12, color: '#999' }}>暂无复盘；已完成任务可用“AI 复盘”。</div>}
-                </div>
-                <div className="wb-card">
-                  <h4>变更历史（{selected.events?.length ?? 0}）</h4>
-                  {(selected.events ?? []).slice(0, 12).map((ev, i) => (
-                    <div key={String(ev.id ?? i)} style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>
-                      {String(ev.at ?? '').slice(0, 16).replace('T', ' ')} · {String(ev.event_code ?? '')} · {String(ev.actor ?? '')}{typeof ev.note === 'string' && ev.note !== '' ? ` · ${ev.note}` : ''}
                     </div>
-                  ))}
-                </div>
+                    <div style={{ fontSize: 12, color: '#999', margin: '-4px 2px 10px' }}>
+                      {selected.task.aiPolicyCode === 'execute' && selected.task.statusCode !== 'done' && selected.task.statusCode !== 'cancelled'
+                        ? selected.children.length > 0
+                          ? '执行父任务：验收通过后未完成子任务会级联完成；所有子节点完成后父节点也会自动完成。'
+                          : '执行会话完成后，AI 会提交验收申请，由你验收后标记完成。'
+                        : ''}
+                    </div>
+
+                    <div className="wb-detail-tabs">
+                      <button className={`wb-detail-tab ${detailTab === 'desc' ? 'on' : ''}`} onClick={() => setDetailTab('desc')}>描述</button>
+                      <button className={`wb-detail-tab ${detailTab === 'children' ? 'on' : ''}`} onClick={() => setDetailTab('children')}>子任务<span className="count">{selected.children.length}</span></button>
+                      <button className={`wb-detail-tab ${detailTab === 'sessions' ? 'on' : ''}`} onClick={() => setDetailTab('sessions')}>会话<span className="count">{selected.sessions.length}</span></button>
+                      <button className={`wb-detail-tab ${detailTab === 'records' ? 'on' : ''}`} onClick={() => setDetailTab('records')}>记录<span className="count">{selected.reminders.length + (selected.reviews?.length ?? 0) + (selected.events?.length ?? 0)}</span></button>
+                    </div>
+
+                    {detailTab === 'desc' && (
+                      <div className="wb-card">
+                        <MarkdownText text={selected.task.description || '（无描述）'} />
+                      </div>
+                    )}
+
+                    {detailTab === 'children' && (
+                      <>
+                        {subtaskParent !== null && subtaskParent.id === selected.task.id && (
+                          <form className="wb-form wb-form-panel" onSubmit={(e) => {
+                            e.preventDefault()
+                            const form = new FormData(e.currentTarget)
+                            const title = String(form.get('title') ?? '').trim()
+                            if (title === '') return
+                            const due = String(form.get('due') ?? '')
+                            void api('/api/workbench/tasks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title, typeCode: String(form.get('type') ?? subtaskParent.typeCode), priorityCode: String(form.get('priority') ?? subtaskParent.priorityCode), statusCode: 'todo', parentId: subtaskParent.id, dueAt: due === '' ? null : new Date(due).toISOString() }) }).then(() => { setSubtaskParent(null); setNotice('子任务已创建'); void refresh() }).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
+                          }}>
+                            <h4 className="full" style={{ margin: 0 }}><Icon name="subtask" />新建子任务（父任务：{subtaskParent.title}）</h4>
+                            <label className="full">标题<input name="title" required placeholder="子任务标题" /></label>
+                            <label>类型<select name="type" defaultValue={subtaskParent.typeCode}>{dictOf('type').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
+                            <label>优先级<select name="priority" defaultValue={subtaskParent.priorityCode}>{dictOf('priority').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
+                            <label>截止时间<input name="due" type="datetime-local" /></label>
+                            <div className="full" style={{ display: 'flex', gap: 8 }}><button className="wb-btn primary" type="submit">保存子任务</button><button className="wb-btn" type="button" onClick={() => setSubtaskParent(null)}>取消</button></div>
+                          </form>
+                        )}
+                        <div className="wb-card">
+                          <h4>子任务（{selected.children.length}）{selected.children.length > 0 ? ` · ${selected.children.filter((c) => c.statusCode === 'done').length}/${selected.children.length} 已完成` : ''}</h4>
+                          {selected.children.map((c) => <div key={c.id} style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 4 }}><Badge dict={dictOf('status')} code={c.statusCode} /> <span onClick={() => openTask(c)} style={{ cursor: 'pointer' }}>{c.title}</span></div>)}
+                          {selected.children.length === 0 && <div style={{ color: '#999', fontSize: 12 }}>无</div>}
+                        </div>
+                      </>
+                    )}
+
+                    {detailTab === 'sessions' && (
+                      <div className="wb-card">
+                        <h4>关联会话（{selected.sessions.length}）</h4>
+                        <div style={{ display: 'flex', flexWrap: 'wrap' }}>
+                          {selected.sessions.map((s) => {
+                            const sid = typeof s.session_id === 'string' ? s.session_id : ''
+                            const role = String(s.role_code ?? '')
+                            return (
+                              <div key={String(s.session_id ?? role)} className="wb-session-chip" onClick={() => { if (sid !== '') { closePanel(); runtime.sessions.open(sid) } }}>
+                                <span className="wb-session-role">{roleLabel(role)}</span>
+                                <span className="wb-session-id">{shortId(sid)}</span>
+                                <span className="wb-session-open">打开 ↗</span>
+                              </div>
+                            )
+                          })}
+                          {selected.sessions.length === 0 && <div style={{ fontSize: 12, color: '#999' }}>暂无关联会话；点击顶部 AI 操作即可创建。</div>}
+                        </div>
+                      </div>
+                    )}
+
+                    {detailTab === 'records' && (
+                      <>
+                        <div className="wb-card">
+                          <h4>提醒（{selected.reminders.length}）</h4>
+                          {selected.reminders.map((r) => <div key={r.id} style={{ fontSize: 12, color: '#999', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 5 }}><Icon name="bell" size={13} />{r.offsetMinutes === 0 ? '准时（截止时间）' : `提前 ${r.offsetMinutes} 分钟`} · {r.methodCode === 'os' ? '系统通知' : '页面/桌面通知'} · {r.firedAt === null ? '未触发' : `已触发 ${fmtTime(r.firedAt)}`}</div>)}
+                          {selected.task.effectiveDueAt === null
+                            ? <div style={{ fontSize: 12, color: '#999' }}>任务还没有截止时间，请先在详情里设置截止时间，再添加提醒。</div>
+                            : selected.task.statusCode === 'done' || selected.task.statusCode === 'cancelled'
+                              ? <div style={{ fontSize: 12, color: '#999' }}>已完成/已取消的任务不再提醒。</div>
+                              : (
+                                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
+                                  {[{ offset: 0, label: '准时' }, { offset: 15, label: '提前15分' }, { offset: 30, label: '提前30分' }, { offset: 60, label: '提前1小时' }, { offset: 1440, label: '提前1天' }].map((item) => (
+                                    <button key={item.offset} className="wb-btn" disabled={busy} onClick={() => void addTaskReminder(item.offset)}>{item.label}</button>
+                                  ))}
+                                </div>
+                              )}
+                          <div style={{ fontSize: 12, color: '#999', marginTop: 6 }}>到提醒时间后：页内横幅 + 桌面通知（设置中授权）；点“知道了”后标记已触发。</div>
+                        </div>
+                        <div className="wb-card">
+                          <h4>复盘记录（{selected.reviews?.length ?? 0}）</h4>
+                          {(selected.reviews ?? []).map((rv, i) => {
+                            const reviewId = String(rv.id ?? '')
+                            const existingKnowledge = taskKnowledge.find((entry) => entry.sourceReviewId === reviewId)
+                            return (
+                              <div key={String(rv.id ?? i)} style={{ marginBottom: 10, paddingBottom: 10, borderBottom: '1px solid var(--wb-border-soft)' }}>
+                                <MarkdownText text={String(rv.summary_md ?? '')} />
+                                {existingKnowledge !== undefined
+                                  ? <button className="wb-btn" style={{ marginTop: 6 }} onClick={() => { setKnowledgeDraft(null); setKnowledgeEditId(null); setSelectedKnowledge(existingKnowledge); setView('knowledge') }}><Icon name="book" />✅ 已沉淀，打开知识条目</button>
+                                  : <button className="wb-btn" style={{ marginTop: 6 }} onClick={() => { setKnowledgeEditId(null); setKnowledgeDraft({ title: `复盘：${selected.task.title}`, contentMd: String(rv.summary_md ?? ''), kindCode: 'lesson', tags: '复盘', sourceTaskId: selected.task.id, sourceReviewId: reviewId, fileLink: '' }); setSelectedKnowledge(null); setView('knowledge') }}><Icon name="book" />💡 沉淀为经验</button>}
+                              </div>
+                            )
+                          })}
+                          {(selected.reviews?.length ?? 0) === 0 && <div style={{ fontSize: 12, color: '#999' }}>暂无复盘；已完成任务可用“AI 复盘”。</div>}
+                        </div>
+                        <div className="wb-card">
+                          <h4>变更历史（{selected.events?.length ?? 0}）</h4>
+                          {(() => {
+                            const events = selected.events ?? []
+                            const shown = eventsExpanded ? events : events.slice(-5).reverse()
+                            let lastDate = ''
+                            return (
+                              <>
+                                {shown.map((ev, i) => {
+                                  const at = String(ev.at ?? '')
+                                  const dateKey = at.slice(0, 10)
+                                  const time = at.slice(11, 16)
+                                  const code = String(ev.event_code ?? '')
+                                  const actor = String(ev.actor ?? '')
+                                  const note = typeof ev.note === 'string' ? ev.note : ''
+                                  const isNewDate = dateKey !== lastDate
+                                  lastDate = dateKey
+                                  return (
+                                    <div key={String(ev.id ?? i)}>
+                                      {isNewDate && <div className="wb-event-group-date">{dateKey}</div>}
+                                      <div className="wb-event-row">
+                                        <span className="wb-event-icon">{eventIcon(code)}</span>
+                                        <div className="wb-event-main">
+                                          <div className="wb-event-title">{eventLabel(code)}{actor !== '' ? ` · ${actor}` : ''}</div>
+                                          {note !== '' && <div className="wb-event-meta">{note}</div>}
+                                          <div className="wb-event-meta">{time}</div>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  )
+                                })}
+                                {events.length === 0 && <div style={{ fontSize: 12, color: '#999' }}>暂无变更记录。</div>}
+                                {events.length > 5 && (
+                                  <button className="wb-btn" style={{ marginTop: 8 }} onClick={() => setEventsExpanded((v) => !v)}>
+                                    {eventsExpanded ? '收起' : `展开全部（${events.length} 条）`}
+                                  </button>
+                                )}
+                              </>
+                            )
+                          })()}
+                        </div>
+                      </>
+                    )}
+                  </>
+                )}
               </>
             )}
         </div>
