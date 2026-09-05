@@ -195,6 +195,24 @@ html[${PENDING_ATTR}] [${ENTRY_ATTR}]::after { content:''; position:absolute; to
 .wb-session-role { font-weight: 600; color: var(--dsw-alias-state-business-primary, #4f8ef7); }
 .wb-session-id { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; opacity: .75; }
 .wb-session-open { opacity: .6; }
+.wb-session-list { display: flex; flex-direction: column; gap: 6px; }
+.wb-session-row { display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px 12px; border: 1px solid var(--wb-border-soft, rgba(127,127,127,.16)); background: color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 5%, transparent); border-radius: 10px; text-align: left; cursor: pointer; font: inherit; font-size: 13px; color: var(--dsw-alias-label-primary); transition: border-color .12s ease, background .12s ease; }
+.wb-session-row:hover { border-color: color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 55%, transparent); background: color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 10%, transparent); }
+.wb-session-role { flex: none; font-size: 12px; font-weight: 600; color: var(--dsw-alias-state-business-primary, #4f8ef7); background: color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 10%, transparent); border: 1px solid color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 30%, transparent); border-radius: 6px; padding: 2px 7px; white-space: nowrap; }
+.wb-session-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wb-session-open { flex: none; font-size: 12px; opacity: .65; }
+.wb-session-picker { margin-top: 10px; border: 1px solid var(--wb-border, rgba(127,127,127,.18)); border-radius: 12px; padding: 10px; background: color-mix(in srgb, var(--dsw-alias-bg-base, #111) 90%, transparent); }
+.wb-session-picker-bar { display: flex; gap: 8px; margin-bottom: 8px; }
+.wb-session-search { flex: 1; min-width: 0; background: var(--dsw-alias-bg-base,#17171a); border: 1px solid var(--dsw-alias-border-l1, rgba(255,255,255,.16)); color: inherit; border-radius: 8px; padding: 7px 10px; font: inherit; font-size: 13px; }
+.wb-session-search:focus { border-color: color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 65%, transparent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 14%, transparent); outline: none; }
+.wb-session-role-select { background: var(--dsw-alias-bg-base,#17171a); border: 1px solid var(--dsw-alias-border-l1, rgba(255,255,255,.16)); color: inherit; border-radius: 8px; padding: 7px 10px; font: inherit; font-size: 13px; }
+.wb-session-picker-list { display: flex; flex-direction: column; gap: 4px; max-height: 260px; overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+.wb-session-option { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 10px; border: 1px solid transparent; background: color-mix(in srgb, var(--dsw-alias-label-primary, #888) 4%, transparent); border-radius: 8px; text-align: left; cursor: pointer; font: inherit; font-size: 13px; color: var(--dsw-alias-label-primary); transition: border-color .12s ease, background .12s ease; }
+.wb-session-option:hover:not(:disabled) { border-color: color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 45%, transparent); background: color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 9%, transparent); }
+.wb-session-option:disabled { opacity: .5; cursor: default; }
+.wb-session-cwd { flex: none; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--dsw-alias-label-secondary); opacity: .8; }
+.wb-session-add { flex: none; font-size: 12px; font-weight: 600; color: var(--dsw-alias-state-business-primary, #4f8ef7); }
+.wb-session-option:disabled .wb-session-add { color: var(--dsw-alias-label-secondary); }
 .wb-event-group-date { display: flex; align-items: center; gap: 8px; margin: 10px 0 4px; font-size: 12px; font-weight: 700; color: var(--dsw-alias-label-secondary); }
 .wb-event-group-date::after { content: ''; flex: 1; height: 1px; background: var(--wb-border-soft, rgba(127,127,127,.16)); }
 .wb-event-row { display: flex; align-items: flex-start; gap: 8px; padding: 5px 0; font-size: 12px; color: var(--dsw-alias-label-secondary); }
@@ -260,8 +278,23 @@ interface SessionDriver {
   prompt(content: Array<{ type: 'text'; text: string }>, mode: 'queue'): Promise<{ ok?: boolean; error?: unknown }>
   rename(title: string): Promise<unknown>
 }
+interface DshSessionSummary {
+  id: string
+  title?: string
+  displayTitle: string
+  cwd?: string
+  running?: boolean
+  blank?: boolean
+  updatedAt?: number
+}
+interface DshSessionListState {
+  ids: string[]
+  byId: Record<string, DshSessionSummary>
+  current?: string
+}
 interface WorkbenchRuntime {
   sessions: {
+    list: { getSnapshot(): DshSessionListState }
     binding(id: string): { session: SessionDriver } | undefined
     open(id: string): void
   }
@@ -981,6 +1014,10 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   const [subtaskParent, setSubtaskParent] = useState<Task | null>(null)
   const [editDraft, setEditDraft] = useState<{ title: string; description: string; typeCode: string; priorityCode: string; statusCode: string; aiPolicyCode: string; dueLocal: string; workspacePath: string; recurrenceCode: string } | null>(null)
   const [detailTab, setDetailTab] = useState<'desc' | 'children' | 'sessions' | 'records'>('desc')
+  const [sessionPickerOpen, setSessionPickerOpen] = useState(false)
+  const [sessionPickerRole, setSessionPickerRole] = useState('consult')
+  const [sessionPickerQuery, setSessionPickerQuery] = useState('')
+  const [sessionPickerBusy, setSessionPickerBusy] = useState(false)
   const [eventsExpanded, setEventsExpanded] = useState(false)
   const [showQuick, setShowQuick] = useState(false)
   const [quickText, setQuickText] = useState('')
@@ -1176,6 +1213,23 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
       await refresh()
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  const linkExistingSession = async (sessionId: string): Promise<void> => {
+    const taskId = selectedRef.current
+    if (taskId === null) return
+    setSessionPickerBusy(true)
+    try {
+      await api(`/api/workbench/tasks/${taskId}/sessions`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sessionId, roleCode: sessionPickerRole }) })
+      setNotice('已关联到任务')
+      setSessionPickerOpen(false)
+      setSessionPickerQuery('')
+      await refresh()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setSessionPickerBusy(false)
     }
   }
 
@@ -1634,6 +1688,14 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
     walk(pickedDoneTree)
     return ids
   })()
+
+  const sessionListSnapshot = runtime.sessions.list.getSnapshot()
+  const linkedSessionIds = new Set((selected?.sessions ?? []).map((s) => typeof s.session_id === 'string' ? s.session_id : '').filter((id) => id !== ''))
+  const sessionQuery = sessionPickerQuery.trim().toLowerCase()
+  const sessionCandidates = sessionListSnapshot.ids
+    .map((id) => sessionListSnapshot.byId[id])
+    .filter((s): s is DshSessionSummary => s !== undefined)
+    .filter((s) => sessionQuery === '' || s.displayTitle.toLowerCase().includes(sessionQuery) || (s.cwd ?? '').toLowerCase().includes(sessionQuery))
 
   return (
     <div className="wb-app">
@@ -2384,8 +2446,8 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                                     <button className="wb-btn" disabled={busy} onClick={() => void startAISession('consult', selected.task, selected.task.title)}><Icon name="ai" />AI 协助</button>
                                     <button className="wb-btn" disabled={busy} onClick={() => void startAISession('breakdown', selected.task, selected.task.title)}><Icon name="breakdown" />AI 拆解</button>
                                     <button className="wb-btn" onClick={() => { setSubtaskParent(selected.task); setDetailTab('children') }}><Icon name="subtask" />子任务</button>
-                                    <button className="wb-btn" onClick={() => { if (window.confirm('归档后任务会从工作台列表隐藏；可在列表页“查看归档”中恢复。确认归档？')) { const id = selected.task.id; setTasks((list) => list.filter((t) => t.id !== id)); void api(`/api/workbench/tasks/${id}/archive`, { method: 'POST' }).then(() => { setSelected(null); selectedRef.current = null; setNotice('任务已归档，可在列表页“查看归档”恢复。'); void refresh() }).catch((e: unknown) => { const msg = e instanceof Error ? e.message : String(e); if (msg.includes('not found')) { setSelected(null); selectedRef.current = null; void refresh(); setNotice('该任务已不存在，已从当前视图移除') } setError(msg) }) } }}><Icon name="archive" />归档</button>
                                   </>}
+                          <button className="wb-btn" onClick={() => { if (window.confirm('归档后任务会从工作台列表隐藏；可在列表页“查看归档”中恢复。确认归档？')) { const id = selected.task.id; setTasks((list) => list.filter((t) => t.id !== id)); void api(`/api/workbench/tasks/${id}/archive`, { method: 'POST' }).then(() => { setSelected(null); selectedRef.current = null; setNotice('任务已归档，可在列表页“查看归档”恢复。'); void refresh() }).catch((e: unknown) => { const msg = e instanceof Error ? e.message : String(e); if (msg.includes('not found')) { setSelected(null); selectedRef.current = null; void refresh(); setNotice('该任务已不存在，已从当前视图移除') } setError(msg) }) } }}><Icon name="archive" />归档</button>
                         </>
                       )}
                     </div>
@@ -2439,21 +2501,51 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
 
                     {detailTab === 'sessions' && (
                       <div className="wb-card">
-                        <h4>关联会话（{selected.sessions.length}）</h4>
-                        <div style={{ display: 'flex', flexWrap: 'wrap' }}>
-                          {selected.sessions.map((s) => {
-                            const sid = typeof s.session_id === 'string' ? s.session_id : ''
-                            const role = String(s.role_code ?? '')
-                            return (
-                              <div key={String(s.session_id ?? role)} className="wb-session-chip" onClick={() => { if (sid !== '') { closePanel(); runtime.sessions.open(sid) } }}>
-                                <span className="wb-session-role">{roleLabel(role)}</span>
-                                <span className="wb-session-id">{shortId(sid)}</span>
-                                <span className="wb-session-open">打开 ↗</span>
+                        <h4>关联会话（{selected.sessions.length}）<span style={{ flex: 1 }} />{!sessionPickerOpen && <button className="wb-btn" onClick={() => { setSessionPickerQuery(''); setSessionPickerOpen(true) }}><Icon name="plus" />添加已有对话</button>}</h4>
+                        {selected.sessions.length > 0
+                          ? (
+                              <div className="wb-session-list">
+                                {selected.sessions.map((s) => {
+                                  const sid = typeof s.session_id === 'string' ? s.session_id : ''
+                                  const role = String(s.role_code ?? '')
+                                  const sessionInfo = sessionListSnapshot.byId[sid]
+                                  const name = sessionInfo?.displayTitle ?? shortId(sid)
+                                  return (
+                                    <button key={`${sid}-${role}`} className="wb-session-row" onClick={() => { if (sid !== '') { closePanel(); runtime.sessions.open(sid) } }} title={roleLabel(role)}>
+                                      <span className="wb-session-role">{roleLabel(role)}</span>
+                                      <span className="wb-session-name">{name}</span>
+                                      <span className="wb-session-open">打开 ↗</span>
+                                    </button>
+                                  )
+                                })}
                               </div>
                             )
-                          })}
-                          {selected.sessions.length === 0 && <div style={{ fontSize: 12, color: '#999' }}>暂无关联会话；点击顶部 AI 操作即可创建。</div>}
-                        </div>
+                          : <div className="wb-empty">暂无关联会话；点击“添加已有对话”关联，或在任务上启动 AI 会话自动关联。</div>}
+                        {sessionPickerOpen && (
+                          <div className="wb-session-picker">
+                            <div className="wb-session-picker-bar">
+                              <input className="wb-session-search" placeholder="搜索会话名称 / 工作区" value={sessionPickerQuery} onChange={(e) => setSessionPickerQuery(e.target.value)} autoFocus />
+                              <select className="wb-session-role-select" value={sessionPickerRole} onChange={(e) => setSessionPickerRole(e.target.value)}>
+                                {dictOf('session_role').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}
+                              </select>
+                              <button className="wb-btn" onClick={() => { setSessionPickerOpen(false); setSessionPickerQuery('') }}>取消</button>
+                            </div>
+                            <div className="wb-session-picker-list">
+                              {sessionCandidates.length > 0
+                                ? sessionCandidates.map((item) => {
+                                    const linked = linkedSessionIds.has(item.id)
+                                    return (
+                                      <button key={item.id} className="wb-session-option" disabled={sessionPickerBusy || linked} onClick={() => void linkExistingSession(item.id)}>
+                                        <span className="wb-session-name">{item.displayTitle}</span>
+                                        {item.cwd !== undefined && <span className="wb-session-cwd">{item.cwd.split(/[\\/]/).filter(Boolean).pop() ?? item.cwd}</span>}
+                                        <span className="wb-session-add">{linked ? '已关联' : '添加'}</span>
+                                      </button>
+                                    )
+                                  })
+                                : <div className="wb-empty">没有找到可添加的会话</div>}
+                            </div>
+                          </div>
+                        )}
                       </div>
                     )}
 
