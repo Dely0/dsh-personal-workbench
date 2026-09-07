@@ -299,14 +299,16 @@ interface WorkbenchRuntime {
     open(id: string): void
   }
   workspaces: {
-    list: { getSnapshot(): { items: readonly { workspaceId: string; path?: string }[]; recentWorkspaceId?: string } }
-    connectWorkspace(workspaceId: string): Promise<string>
+    list: { getSnapshot(): { items: readonly { workspaceId: string; path?: string }[] } }
     create?(input: { path: string }): Promise<{ workspaceId?: string }>
     openPath?(path: string): Promise<void>
   }
+  uiWorkspace: {
+    connectWorkspace(workspaceId: string): Promise<string>
+  }
   connection?: {
-    hostDescription: {
-      getSnapshot(): { cwd?: string } | undefined
+    generation: {
+      getSnapshot(): { host: { home: string } } | undefined
     }
   }
 }
@@ -1303,10 +1305,10 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
         }
       }
       const ws = runtime.workspaces.list.getSnapshot()
-      let workspaceId = ws.recentWorkspaceId ?? ws.items[0]?.workspaceId
-      const hostCwd = runtime.connection?.hostDescription.getSnapshot()?.cwd
-      const isWsl = hostCwd !== undefined
-        ? isWslStylePath(hostCwd)
+      let workspaceId = ws.items[0]?.workspaceId
+      const hostHome = runtime.connection?.generation.getSnapshot()?.host.home
+      const isWsl = hostHome !== undefined
+        ? isWslStylePath(hostHome)
         : ws.items.some((item) => typeof item.path === 'string' && isWslStylePath(item.path))
       const pathSep = isWsl ? '/' : '\\'
       let desired = ''
@@ -1333,7 +1335,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
         } catch { /* 目录创建/注册失败则回退当前工作区 */ }
       }
       if (workspaceId === undefined) throw new Error('没有可用工作区，请先在 DSH 中打开一个工作区')
-      const id = await runtime.workspaces.connectWorkspace(workspaceId)
+      const id = await runtime.uiWorkspace.connectWorkspace(workspaceId)
       const binding = runtime.sessions.binding(id)
       if (binding === undefined) throw new Error('会话绑定未就绪，请稍后重试')
       await binding.session.rename(mode === 'idea_association' ? '点子关联' : mode === 'idea_brainstorm' ? '点子头脑风暴' : mode === 'knowledge_doc' ? `知识总结：${docContext?.name ?? '本地文档'}` : mode === 'report' ? `${text.startsWith('week:') ? '周报' : '日报'}：${text.split(':')[1] ?? ''}` : mode === 'plan' ? `AI 计划：${planAnchor.slice(5)}` : mode === 'clarify' ? `澄清：${text.slice(0, 24)}` : mode === 'consult' ? `协助：${task?.title.slice(0, 24)}` : mode === 'breakdown' ? `拆解：${task?.title.slice(0, 24)}` : mode === 'review' ? `复盘：${task?.title.slice(0, 24)}` : `执行：${task?.title.slice(0, 24)}`).catch(() => undefined)
@@ -2658,7 +2660,7 @@ function conversationColumn(): HTMLElement | undefined {
 }
 
 export const name = 'personal-workbench-client'
-export const inject = ['sessions', 'workspaces', 'connection']
+export const inject = ['sessions', 'workspaces', 'connection', 'uiWorkspace']
 
 export function apply(ctx: unknown): () => void {
   const runtime = ctx as WorkbenchRuntime
