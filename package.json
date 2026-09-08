@@ -58,9 +58,9 @@
   "scripts": {
     "link:dsh": "bash scripts/link-dsh-dev.sh",
     "repair": "node scripts/repair-parent-completion.mjs",
-    "build": "rm -rf lib && tsc -p tsconfig.build.json && tsdown",
+    "build": "node -e \"require('node:fs').rmSync('lib',{recursive:true,force:true})\" && tsc -p tsconfig.build.json && tsdown",
     "typecheck": "tsc --noEmit",
-    "check": "tsc --noEmit && rm -rf lib && tsc -p tsconfig.build.json && tsdown",
+    "check": "tsc --noEmit && node -e \"require('node:fs').rmSync('lib',{recursive:true,force:true})\" && tsc -p tsconfig.build.json && tsdown",
     "test": "pnpm build && node --test test/db.test.mjs test/tools.test.mjs test/routes.test.mjs test/taskFilterSort.test.mjs test/workspacePath.test.mjs",
     "prepare": "pnpm build"
   },
