@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import http from 'node:http'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openWorkbenchDb } from '../lib/db/database.js'
@@ -60,7 +60,9 @@ test('manual plan editing PUT saves added task instead of returning not found', 
 
     const health = await request('GET', '/api/workbench/health')
     assert.equal(health.status, 200)
-    assert.equal(health.body.version, '1.8.0')
+    // health 的版本必须跟随 package.json，防止升级后还报旧版本
+    const pkgVersion = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version
+    assert.equal(health.body.version, pkgVersion)
 
     // Simulates: open edit mode, add an existing task, then save.
     const put = await request('PUT', `/api/workbench/plans/${planDate}`, {

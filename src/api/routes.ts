@@ -5,7 +5,7 @@
  * knowledge / ai-sessions / reports / plans。本文件保留组合入口与跨领域基础端点
  * （workspaces/ensure、settings、bootstrap、maintenance、health）。
  */
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, readFileSync } from 'node:fs'
 import type { DatabaseSync } from 'node:sqlite'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import {
@@ -22,6 +22,17 @@ import { makePlanRoutes } from './routes/plans.js'
 import { makeReminderRoutes, type ReminderRouteDeps } from './routes/reminders.js'
 import { makeReportRoutes } from './routes/reports.js'
 import { makeTaskRoutes } from './routes/tasks.js'
+
+/**
+ * 插件版本：直接读包内 package.json，避免再出现"代码已升级、health 还报旧版本"的漂移。
+ * lib/api/routes.js 相对包根是 ../../package.json。
+ */
+const PACKAGE_VERSION: string = (() => {
+  try {
+    const pkg = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')) as { version?: string }
+    return pkg.version ?? 'unknown'
+  } catch { return 'unknown' }
+})()
 
 
 export function makeRoutes(db: DatabaseSync, deps: ReminderRouteDeps = {}): WebRoute[] {
@@ -145,7 +156,7 @@ export function makeRoutes(db: DatabaseSync, deps: ReminderRouteDeps = {}): WebR
         writeJson(res, 200, {
           ok: true,
           name: '@dely0/dsh-personal-workbench',
-          version: '1.8.0',
+          version: PACKAGE_VERSION,
           db: {
             schemaVersion: versionRow?.value ?? 'unknown',
             taskCount: listTasks(db, { includeArchived: true }).length,
