@@ -105,12 +105,16 @@ export function apply(ctx: Context, config: Config = {}): void {
     'dsh-personal-workbench: tools',
   )
 
-  // 提醒调度：ctx.interval 随 fiber 自动销毁；启动补发只跑一次。
-  ctx.effect(() => {
-    const dispose = scheduler.start(ctx)
-    void scheduler.catchup().catch((error) => { ctx.logger?.warn?.(`[workbench-reminder] catchup failed: ${String(error)}`) })
+  // 提醒调度：用 ctx.interval（随 fiber 自动销毁）。
+  // 注意：ctx.interval 由 @deepseek-ai/cordis-plugin-timer 提供，且**必须声明 inject** 才能访问
+  // （cordis Proxy 未声明时直接抛 cannot get property "timer" without inject）。
+  // 这里用 ctx.inject([...]) 把依赖限定在子 fiber：timer 不在时只有提醒调度不启动，
+  // 工作台本体照常加载——保持"可选增量"这条底线。
+  ctx.inject(['timer'], (timerCtx) => {
+    const dispose = scheduler.start(timerCtx)
+    void scheduler.catchup().catch((error) => { timerCtx.logger?.warn?.(`[workbench-reminder] catchup failed: ${String(error)}`) })
     return dispose
-  }, 'dsh-personal-workbench: reminder-scheduler')
+  })
 
   ctx.effect(() => {
     if ((config.announceToAgent ?? true) === false) return () => {}

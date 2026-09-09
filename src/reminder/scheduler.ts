@@ -189,6 +189,7 @@ export class ReminderScheduler {
 
   /**
    * 注册定时任务。用 ctx.interval（随 fiber 自动销毁），不用裸 setInterval。
+   * 调用方必须已经声明 timer 依赖（见 index.ts 的 ctx.inject(['timer'], ...)）。
    * 返回 dispose 函数，供测试与手动关闭使用。
    */
   start(ctx: Context): () => void {
