@@ -24,8 +24,12 @@ import { WORKBENCH_CSS } from './styles.js'
 import { ACTIVATE_EVENT, ACTIVE_ATTR, ENTRY_ATTR, PANEL_NAME, PENDING_ATTR, SIBLING_ATTRS, VIEW_ATTR } from './constants.js'
 import { Modal } from './components/Modal.js'
 import { SettingsModal } from './components/SettingsModal.js'
+import { DraftBanner } from './components/DraftBanner.js'
+import { MarkdownText } from './components/MarkdownText.js'
 import { ToastHost, useToasts } from './components/Toast.js'
+import { api } from './api.js'
 import type {
+  DraftView,
   ReminderChannelStatus as ReminderChannelView,
   ReminderOptionsView,
   ReminderPolicyView,
@@ -72,7 +76,6 @@ interface Idea { id: string; title: string; contentMd: string; kindCode: string;
 interface IdeaClusterView { id: string; title: string; summaryMd: string; tags: string[]; ideas: Idea[]; createdAt: string; updatedAt: string }
 interface Bootstrap { dictionaries: Dict[]; stats: { overdue: number; todayDue: number; doing: number; total: number }; todayPlan?: DailyPlanView | null }
 interface TaskDetail { task: Task; children: Task[]; sessions: Array<Record<string, unknown>>; reminders: Array<{ id: string; taskId: string; offsetMinutes: number; methodCode: string; firedAt: string | null }>; events: Array<Record<string, unknown>>; reviews: Array<Record<string, unknown>> }
-interface DraftView { id: string; kindCode: string; statusCode: string; sessionId: string | null; payload: Record<string, unknown> }
 
 interface SessionDriver {
   sessionId: string
@@ -114,12 +117,6 @@ interface WorkbenchRuntime {
   }
 }
 
-const api = async <T,>(path: string, init?: RequestInit): Promise<T> => {
-  const res = await fetch(path, init)
-  const body = await res.json().catch(() => ({}))
-  if (!res.ok) throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`)
-  return body as T
-}
 
 const folderForText = (text: string): string => {
   const cleaned = text.trim().replace(/[\\/:*?"<>|]/g, '').replace(/\s+/g, ' ').slice(0, 24).trim()
@@ -250,114 +247,6 @@ function Badge({ dict, code }: { dict: Dict[]; code: string }): JSX.Element {
   return <span className="wb-chip" style={{ background: `color-mix(in srgb, ${color} 14%, transparent)`, color, border: `1px solid color-mix(in srgb, ${color} 45%, transparent)`, fontWeight: 600 }}>{entry?.name ?? code}</span>
 }
 
-function renderInline(text: string): (string | JSX.Element)[] {
-  const parts: (string | JSX.Element)[] = []
-  const regex = /(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\([^)]*\))/g
-  let last = 0
-  for (const match of text.matchAll(regex)) {
-    const idx = match.index
-    if (idx > last) parts.push(text.slice(last, idx))
-    const token = match[0]
-    if (token.startsWith('**')) parts.push(<strong key={idx}>{token.slice(2, -2)}</strong>)
-    else if (token.startsWith('`')) parts.push(<code key={idx} style={{ background: 'rgba(127,127,127,.14)', padding: '0 4px', borderRadius: 4 }}>{token.slice(1, -1)}</code>)
-    else {
-      const m = /^\[([^\]]+)\]\(([^)]*)\)$/.exec(token)
-      if (m !== null) parts.push(<a key={idx} href={m[2]} style={{ color: 'var(--dsw-alias-state-business-primary,#8fa8c8)' }}>{m[1]}</a>)
-      else parts.push(token)
-    }
-    last = idx + token.length
-  }
-  if (last < text.length) parts.push(text.slice(last))
-  return parts
-}
-
-function MarkdownText({ text }: { text: string }): JSX.Element {
-  const lines = text.split('\n')
-  const blocks: JSX.Element[] = []
-  let list: { ordered: boolean; items: string[] } | null = null
-  let code: string[] = []
-  let inCode = false
-  let table: string[] = []
-  let key = 0
-  const renderListItem = (item: string): JSX.Element => {
-    const checkbox = /^\[( |x|X)\]\s+(.*)$/.exec(item)
-    if (checkbox !== null) {
-      return <label style={{ display: 'flex', alignItems: 'flex-start', gap: 6, margin: '2px 0' }}><input type="checkbox" readOnly checked={checkbox[1].toLowerCase() === 'x'} style={{ marginTop: 4 }} />{renderInline(checkbox[2])}</label>
-    }
-    return <span style={{ margin: '2px 0' }}>{renderInline(item)}</span>
-  }
-  const flushList = () => {
-    if (list === null || list.items.length === 0) { list = null; return }
-    if (list.ordered) {
-      blocks.push(<ol key={key++} style={{ margin: '4px 0 4px 18px', padding: 0 }}>{list.items.map((item, i) => <li key={i}>{renderListItem(item)}</li>)}</ol>)
-    } else {
-      blocks.push(<ul key={key++} style={{ margin: '4px 0 4px 18px', padding: 0 }}>{list.items.map((item, i) => <li key={i} style={{ listStyleType: /^\[( |x|X)\]\s/.test(item) ? 'none' : undefined }}>{renderListItem(item)}</li>)}</ul>)
-    }
-    list = null
-  }
-  const flushCode = () => {
-    if (code.length === 0) return
-    const codeText = code.join('\n')
-    blocks.push(
-      <div key={key++} className="wb-code-block">
-        <button type="button" className="wb-btn wb-code-copy" onClick={() => { if (navigator.clipboard) void navigator.clipboard.writeText(codeText).catch(() => undefined) }}>复制</button>
-        <pre>{codeText}</pre>
-      </div>,
-    )
-    code = []
-  }
-  const flushTable = () => {
-    if (table.length === 0) return
-    const rows = table
-      .map((line) => line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((cell) => cell.trim()))
-      .filter((cells) => cells.length > 0 && cells.some((cell) => cell !== ''))
-    const isSeparator = (cells: string[]): boolean => cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell))
-    if (rows.length >= 2 && isSeparator(rows[1])) {
-      const header = rows[0] ?? []
-      const body = rows.slice(2)
-      const border = '1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.22))'
-      blocks.push(
-        <table key={key++} style={{ borderCollapse: 'collapse', width: '100%', margin: '8px 0', fontSize: 13 }}>
-          <thead><tr>{header.map((cell, i) => <th key={i} style={{ border, padding: '4px 8px', textAlign: 'left', background: 'rgba(127,127,127,.10)' }}>{renderInline(cell)}</th>)}</tr></thead>
-          <tbody>{body.map((row, ri) => <tr key={ri}>{row.map((cell, ci) => <td key={ci} style={{ border, padding: '4px 8px' }}>{renderInline(cell)}</td>)}</tr>)}</tbody>
-        </table>,
-      )
-    } else {
-      blocks.push(<p key={key++} style={{ margin: '4px 0' }}>{renderInline(table.join('<br/>'))}</p>)
-    }
-    table = []
-  }
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index]
-    if (line.startsWith('```')) { flushList(); flushTable(); if (inCode) { flushCode(); inCode = false } else { code = []; inCode = true } continue }
-    if (inCode) { code.push(line); continue }
-    if (line.trim().startsWith('|')) { flushList(); table.push(line.trim()); continue }
-    if (/^###\s/.test(line)) { flushList(); flushTable(); blocks.push(<h5 key={key++} style={{ margin: '8px 0 4px' }}>{renderInline(line.replace(/^###\s*/, ''))}</h5>); continue }
-    if (/^##\s/.test(line)) { flushList(); flushTable(); blocks.push(<h4 key={key++} style={{ margin: '10px 0 4px' }}>{renderInline(line.replace(/^##\s*/, ''))}</h4>); continue }
-    if (/^#\s/.test(line)) { flushList(); flushTable(); blocks.push(<h3 key={key++} style={{ margin: '12px 0 4px' }}>{renderInline(line.replace(/^#\s*/, ''))}</h3>); continue }
-    if (/^>\s?/.test(line)) { flushList(); flushTable(); flushCode(); blocks.push(<blockquote key={key++} className="wb-blockquote">{renderInline(line.replace(/^>\s?/, ''))}</blockquote>); continue }
-    const orderedMatch = /^(\d+)[.)]\s+(.*)$/.exec(line)
-    const unorderedMatch = /^[-*]\s+(.*)$/.exec(line)
-    if (orderedMatch !== null || unorderedMatch !== null) {
-      flushTable(); flushCode()
-      const ordered = orderedMatch !== null
-      const item = ordered ? orderedMatch[2] : unorderedMatch![1]
-      if (list === null || list.ordered !== ordered) flushList()
-      if (list === null) list = { ordered, items: [] }
-      list.items.push(item)
-      continue
-    }
-    if (line.trim() === '') {
-      const next = lines.slice(index + 1).find((l) => l.trim() !== '')
-      if (table.length > 0 && next !== undefined && next.trim().startsWith('|')) continue
-      flushList(); flushTable(); flushCode(); continue
-    }
-    flushList(); flushTable(); flushCode()
-    blocks.push(<p key={key++} style={{ margin: '4px 0' }}>{renderInline(line)}</p>)
-  }
-  flushList(); flushTable(); flushCode()
-  return <div style={{ lineHeight: 1.7, fontSize: 13 }}>{blocks}</div>
-}
 
 function countTaskTree(roots: TaskTreeNode<Task>[]): number {
   return roots.reduce((sum, node) => sum + 1 + countTaskTree(node.children), 0)
@@ -657,157 +546,6 @@ function PlanPanel({ plan, tasks, title, onComplete, onDefer, onRefresh, onClear
   )
 }
 
-function DraftBanner({ draft, onDone, runtime, closePanel, kindName }: { draft: DraftView; onDone: () => void; runtime: WorkbenchRuntime; closePanel: () => void; kindName: (kind: string, code: string) => string }): JSX.Element {
-  const subtasks = Array.isArray(draft.payload.subtasks) ? draft.payload.subtasks as Array<{ title?: string }> : []
-  const [busy, setBusy] = useState(false)
-  const act = async (path: string): Promise<void> => {
-    setBusy(true)
-    try { await api(path, { method: 'POST' }); onDone() } finally { setBusy(false) }
-  }
-  if (draft.kindCode === 'idea_cluster') {
-    const clusters = Array.isArray(draft.payload.clusters) ? draft.payload.clusters as Array<{ title?: string; summary?: string; idea_titles?: string[] }> : []
-    const sessionId = typeof draft.sessionId === 'string' && draft.sessionId !== '' ? draft.sessionId : ''
-    return (
-      <div className="wb-banner review">
-        <h4>🧠 点子王提案待确认（{clusters.length}）</h4>
-        {clusters.map((cluster, i) => (
-          <div key={i} style={{ marginBottom: 8 }}>
-            <b>{cluster.title ?? `点子王 ${i + 1}`}</b>
-            {cluster.summary !== undefined && cluster.summary !== '' && <div style={{ fontSize: 12, color: '#999' }}>{cluster.summary}</div>}
-            <div style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)' }}>{(cluster.idea_titles ?? []).map((title) => `• ${title}`).join('  ')}</div>
-          </div>
-        ))}
-        <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-          <button className="wb-btn primary" disabled={busy} onClick={() => void act(`/api/workbench/drafts/${draft.id}/confirm`)}>确认生成点子王</button>
-          <button className="wb-btn" disabled={busy} onClick={() => void act(`/api/workbench/drafts/${draft.id}/abandon`)}>放弃</button>
-          {sessionId !== '' && <button className="wb-btn" onClick={() => { closePanel(); runtime.sessions.open(sessionId) }}>回到关联会话</button>}
-        </div>
-      </div>
-    )
-  }
-  if (draft.kindCode === 'idea_tasks') {
-    const tasks = Array.isArray(draft.payload.tasks) ? draft.payload.tasks as Array<{ title?: string; description?: string }> : []
-    const summary = String(draft.payload.summary ?? '')
-    const sessionId = typeof draft.sessionId === 'string' && draft.sessionId !== '' ? draft.sessionId : ''
-    return (
-      <div className="wb-banner completion">
-        <h4>🚀 点子落地任务提案（{tasks.length}）</h4>
-        {summary !== '' && <div style={{ fontSize: 13, marginBottom: 6 }}>{summary}</div>}
-        <ol style={{ margin: '4px 0 8px 20px', padding: 0, fontSize: 14, lineHeight: 1.7 }}>
-          {tasks.map((task, i) => <li key={i} style={{ margin: '3px 0' }}><b>{task.title ?? '(未命名任务)'}</b>{task.description !== undefined && task.description !== '' ? <span style={{ color: '#999' }}> — {String(task.description).slice(0, 60)}</span> : null}</li>)}
-        </ol>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button className="wb-btn primary" disabled={busy} onClick={() => void act(`/api/workbench/drafts/${draft.id}/confirm`)}>确认转为任务</button>
-          <button className="wb-btn" disabled={busy} onClick={() => void act(`/api/workbench/drafts/${draft.id}/abandon`)}>放弃</button>
-          {sessionId !== '' && <button className="wb-btn" onClick={() => { closePanel(); runtime.sessions.open(sessionId) }}>回到头脑风暴会话</button>}
-        </div>
-      </div>
-    )
-  }
-  if (draft.kindCode === 'knowledge') {
-    const title = String(draft.payload.title ?? '')
-    const contentMd = String(draft.payload.contentMd ?? '')
-    const tags = Array.isArray(draft.payload.tags) ? draft.payload.tags as string[] : []
-    const sessionId = typeof draft.sessionId === 'string' && draft.sessionId !== '' ? draft.sessionId : ''
-    return (
-      <div className="wb-banner review">
-        <h4>💡 知识条目待确认（{kindName('knowledge_kind', String(draft.payload.kindCode ?? 'lesson'))}）</h4>
-        <div style={{ fontWeight: 600, marginBottom: 4 }}>{title}</div>
-        {tags.length > 0 && <div style={{ fontSize: 12, color: '#999', marginBottom: 6 }}>{tags.map((tag) => `#${tag}`).join(' ')}</div>}
-        {typeof draft.payload.fileLink === 'string' && draft.payload.fileLink !== '' && (
-          <div style={{ fontSize: 12, color: '#999', marginBottom: 6, wordBreak: 'break-all' }}>📎 {draft.payload.fileLink}</div>
-        )}
-        <div style={{ maxHeight: 240, overflow: 'auto' }}><MarkdownText text={contentMd} /></div>
-        <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-          <button className="wb-btn primary" disabled={busy} onClick={() => void act(`/api/workbench/drafts/${draft.id}/confirm`)}>确认入库</button>
-          <button className="wb-btn" disabled={busy} onClick={() => void act(`/api/workbench/drafts/${draft.id}/abandon`)}>放弃</button>
-          {sessionId !== '' && <button className="wb-btn" onClick={() => { closePanel(); runtime.sessions.open(sessionId) }}>回到会话</button>}
-        </div>
-      </div>
-    )
-  }
-  if (draft.kindCode === 'report') {
-    const summaryMd = String(draft.payload.summaryMd ?? '')
-    const title = String(draft.payload.title ?? '')
-    const sessionId = typeof draft.sessionId === 'string' && draft.sessionId !== '' ? draft.sessionId : typeof draft.payload.sessionId === 'string' ? draft.payload.sessionId : ''
-    return (
-      <div className="wb-banner review">
-        <h4><Icon name="report" />报告草稿待确认（{String(draft.payload.periodCode === 'week' ? '周报' : '日报')} {String(draft.payload.periodStart ?? '')}）</h4>
-        <div style={{ fontWeight: 600, marginBottom: 6 }}>{title}</div>
-        <div style={{ maxHeight: 260, overflow: 'auto' }}><MarkdownText text={summaryMd} /></div>
-        <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-          <button className="wb-btn primary" disabled={busy} onClick={() => void act(`/api/workbench/drafts/${draft.id}/confirm`)}>确认保存报告</button>
-          <button className="wb-btn" disabled={busy} onClick={() => void act(`/api/workbench/drafts/${draft.id}/abandon`)}>放弃</button>
-          {sessionId !== '' && <button className="wb-btn" onClick={() => { closePanel(); runtime.sessions.open(sessionId) }}>回到报告会话</button>}
-        </div>
-      </div>
-    )
-  }
-  if (draft.kindCode === 'daily_plan') {
-    const items = Array.isArray(draft.payload.items) ? draft.payload.items as Array<{ taskId?: string; order?: number; title?: string; note?: string }> : []
-    const summary = String(draft.payload.summary ?? '')
-    const sessionId = typeof draft.sessionId === 'string' && draft.sessionId !== '' ? draft.sessionId : typeof draft.payload.sessionId === 'string' ? draft.payload.sessionId : ''
-    return (
-      <div className="wb-banner draft">
-        <h4><Icon name="sparkles" />今日计划提案待确认（{String(draft.payload.planDate ?? '')}）</h4>
-        {summary !== '' && <div style={{ fontSize: 14, lineHeight: 1.7, marginBottom: 6 }}>{summary}</div>}
-        <ol style={{ margin: '4px 0 8px 20px', padding: 0, fontSize: 14, lineHeight: 1.7 }}>
-          {items.map((item, i) => <li key={i} style={{ margin: '3px 0' }}><b>{item.title ?? '(未命名任务)'}</b>{item.note !== undefined && item.note !== '' ? <span style={{ color: 'var(--dsw-alias-label-secondary)' }}> — {item.note}</span> : null}</li>)}
-        </ol>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button className="wb-btn primary" disabled={busy} onClick={() => void act(`/api/workbench/drafts/${draft.id}/confirm`)}>确认应用排序</button>
-          <button className="wb-btn" disabled={busy} onClick={() => void act(`/api/workbench/drafts/${draft.id}/abandon`)}>放弃</button>
-          {sessionId !== '' && <button className="wb-btn" onClick={() => { closePanel(); runtime.sessions.open(sessionId) }}>回到排序会话</button>}
-        </div>
-      </div>
-    )
-  }
-  if (draft.kindCode === 'review') {
-    const summary = String(draft.payload.summaryMd ?? '')
-    const sessionId = typeof draft.payload.sessionId === 'string' ? draft.payload.sessionId : ''
-    return (
-      <div className="wb-banner review">
-        <h4><Icon name="report" />复盘草稿待确认</h4>
-        <div style={{ maxHeight: 220, overflow: 'auto' }}><MarkdownText text={summary} /></div>
-        <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-          <button className="wb-btn primary" disabled={busy} onClick={() => void act(`/api/workbench/drafts/${draft.id}/confirm`)}>确认写回任务</button>
-          <button className="wb-btn" disabled={busy} onClick={() => void act(`/api/workbench/drafts/${draft.id}/abandon`)}>放弃</button>
-          {sessionId !== '' && <button className="wb-btn" onClick={() => { closePanel(); runtime.sessions.open(sessionId) }}>回到复盘会话</button>}
-        </div>
-      </div>
-    )
-  }
-  if (draft.kindCode === 'completion') {
-    const summary = String(draft.payload.summary ?? '')
-    const sessionId = typeof draft.payload.sessionId === 'string' ? draft.payload.sessionId : ''
-    return (
-      <div className="wb-banner completion">
-        <h4><Icon name="check" />执行完成，待你验收</h4>
-        <div style={{ fontSize: 13 }}><b>{String(draft.payload.taskId ?? '')}</b></div>
-        <div style={{ fontSize: 12, color: '#999', whiteSpace: 'pre-wrap' }}>{summary}</div>
-        <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-          <button className="wb-btn primary" disabled={busy} onClick={() => void act(`/api/workbench/drafts/${draft.id}/confirm`)}>验收通过（标记完成）</button>
-          <button className="wb-btn" disabled={busy} onClick={() => void act(`/api/workbench/drafts/${draft.id}/abandon`)}>驳回</button>
-          {sessionId !== '' && <button className="wb-btn" onClick={() => { closePanel(); runtime.sessions.open(sessionId) }}>回到执行会话</button>}
-        </div>
-        <div style={{ fontSize: 12, color: '#999', marginTop: 6 }}>驳回后请回到执行会话继续修改，AI 可再次提交验收申请。</div>
-      </div>
-    )
-  }
-  return (
-    <div className="wb-banner draft">
-      <h4>{draft.kindCode === 'subtask_plan' ? `待确认：子任务提案（${subtasks.length}）` : '待确认：任务草稿'}</h4>
-      {draft.kindCode === 'task'
-        ? <div style={{ fontSize: 13 }}><b>{String(draft.payload.title ?? '')}</b> · {String(draft.payload.typeCode ?? '')} · {String(draft.payload.priorityCode ?? '')}</div>
-        : <div style={{ fontSize: 12, color: '#999' }}>{subtasks.slice(0, 8).map((t, i) => <div key={i}>• {t.title ?? '(未命名)'}</div>)}</div>}
-      <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-        <button className="wb-btn primary" disabled={busy} onClick={() => void act(`/api/workbench/drafts/${draft.id}/confirm`)}>确认入册</button>
-        <button className="wb-btn" disabled={busy} onClick={() => void act(`/api/workbench/drafts/${draft.id}/abandon`)}>放弃</button>
-      </div>
-    </div>
-  )
-}
-
 function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; closePanel: () => void }): JSX.Element {
   const [view, setView] = useState<'today' | 'calendar' | 'list' | 'knowledge' | 'ideas'>('today')
   const [bootstrap, setBootstrap] = useState<Bootstrap | null>(null)
@@ -828,6 +566,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   const [reminders, setReminders] = useState<Array<{ reminderId: string; taskId: string; title: string; dueAt: string; methodCode: string }>>([])
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+  const [reminderModalOpen, setReminderModalOpen] = useState(false)
   const [settings, setSettings] = useState<{ defaultWorkspace: string; autoCreateTypeFolders: boolean; desktopNotify: boolean }>({ defaultWorkspace: '', autoCreateTypeFolders: true, desktopNotify: true })
   const [notifyPerm, setNotifyPerm] = useState<NotificationPermission | 'unsupported'>(() => typeof Notification === 'undefined' ? 'unsupported' : Notification.permission)
   const [showSettings, setShowSettings] = useState(false)
@@ -942,6 +681,21 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   }, [showSettings])
 
   const notifiedRef = useRef<Set<string>>(new Set())
+
+  // 提示 / 错误统一转成右上角 toast：不再作为文档流横幅把任务列表挤下去。
+  // 保留既有 setNotice/setError 调用点不变，在这里做一次桥接。
+  useEffect(() => {
+    if (notice !== null) { pushToast(notice, 'success'); setNotice(null) }
+  }, [notice, pushToast])
+  useEffect(() => {
+    if (error !== null) { pushToast(error, 'error'); setError(null) }
+  }, [error, pushToast])
+
+  // 有到期提醒时自动弹出提醒弹窗（关掉后本次不再自动弹；新提醒到达会再弹一次）。
+  useEffect(() => {
+    if (reminders.length > 0) setReminderModalOpen(true)
+  }, [reminders.length])
+
   useEffect(() => {
     let alive = true
     const tick = async () => {
@@ -1455,6 +1209,31 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
     }
   }
 
+  /** 保存任务编辑（详情页编辑弹窗）。 */
+  const saveEditDraft = async (): Promise<void> => {
+    if (editDraft === null || selected === null) return
+    if (editDraft.title.trim() === '') return
+    const payload: Record<string, unknown> = {
+      title: editDraft.title.trim(),
+      description: editDraft.description,
+      typeCode: editDraft.typeCode,
+      priorityCode: editDraft.priorityCode,
+      statusCode: editDraft.statusCode,
+      aiPolicyCode: editDraft.aiPolicyCode,
+      dueAt: editDraft.dueLocal === '' ? null : new Date(editDraft.dueLocal).toISOString(),
+      workspacePath: editDraft.workspacePath.trim() === '' ? null : editDraft.workspacePath.trim(),
+    }
+    // 自动生成的实例不允许改重复规则，编辑保存时也不提交该字段，从源头避免 400。
+    if (selected.task.recurrenceMasterId === null) payload.recurrenceCode = editDraft.recurrenceCode
+    try {
+      await patchTask(selected.task.id, payload)
+      setEditDraft(null)
+      pushToast('任务已更新', 'success')
+    } catch (e) {
+      pushToast(`保存失败：${e instanceof Error ? e.message : String(e)}`, 'error')
+    }
+  }
+
   const createTask = async (event: React.FormEvent<HTMLFormElement>): Promise<void> => {
     event.preventDefault()
     const form = new FormData(event.currentTarget)
@@ -1619,8 +1398,6 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
         <button className="wb-btn" onClick={() => closePanel()}><Icon name="back" /><span className="wb-label">返回对话</span></button>
       </div>
 
-      {error !== null && <div className="wb-banner error"><h4><Icon name="bell" />出错了</h4>{error} <button className="wb-btn" onClick={() => setError(null)}>关闭</button></div>}
-      {notice !== null && <div className="wb-banner notice"><h4><Icon name="bell" />提示</h4>{notice} <button className="wb-btn" onClick={() => setNotice(null)}>关闭</button></div>}
       {promptModal !== null && (
         <div className="wb-modal-mask" onClick={cancelPrompt}>
           <div className="wb-modal" onClick={(e) => e.stopPropagation()}>
@@ -1673,11 +1450,27 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
           </div>
         </div>
       )}
-      {reminders.length > 0 && (
-        <div className="wb-banner reminder">
-          <h4><Icon name="bell" />到期提醒（{reminders.length}）</h4>
-          {reminders.map((r) => <div key={r.reminderId} style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 4 }}><span style={{ flex: 1 }}>{r.title} · {fmtTime(r.dueAt)}</span><button className="wb-btn" onClick={() => void fireReminder(r.reminderId)}>知道了</button></div>)}
-        </div>
+      {reminders.length > 0 && reminderModalOpen && (
+        <Modal
+          title={<><Icon name="bell" />到期提醒（{reminders.length}）</>}
+          size="sm"
+          onClose={() => setReminderModalOpen(false)}
+          footer={(
+            <>
+              <span className="wb-foot-note">点「知道了」后不再提示；host 侧已推送的不会重复出现</span>
+              <button className="wb-btn" onClick={() => setReminderModalOpen(false)}>稍后处理</button>
+            </>
+          )}
+        >
+          <div className="wb-scroll-area">
+            {reminders.map((r) => (
+              <div key={r.reminderId} className="wb-row" style={{ cursor: 'default' }}>
+                <span style={{ flex: 1 }}>{r.title} · {fmtTime(r.dueAt)}</span>
+                <button className="wb-btn" onClick={() => void fireReminder(r.reminderId)}>知道了</button>
+              </div>
+            ))}
+          </div>
+        </Modal>
       )}
       {pendingDraft !== null && <DraftBanner draft={pendingDraft} runtime={runtime} closePanel={closePanel} kindName={(kind, code) => dicts.find((d) => d.kind === kind && d.code === code)?.name ?? code} onDone={() => { setPendingDraft(null); setPlanRefreshKey((v) => v + 1); setReportRefreshKey((v) => v + 1); setKnowledgeRefreshKey((v) => v + 1); setIdeaRefreshKey((v) => v + 1); void refresh() }} />}
 
@@ -2194,7 +1987,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
             : (
               <>
                 <div className="wb-card">
-                  {editDraft === null ? (
+                  {(
                     <>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                         <h4 style={{ flex: 1, margin: 0 }}>{selected.task.title}</h4>
@@ -2226,38 +2019,6 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                         {selected.task.recurrenceMasterId !== null ? '（自动生成的实例）' : selected.task.recurrenceCode !== null && selected.task.recurrenceCode !== 'none' ? `（模板，已生成到 ${selected.task.recurrenceLastGenerated ?? '—'}）` : ''}
                       </div>
                     </>
-                  ) : (
-                    <form className="wb-form" onSubmit={(e) => {
-                      e.preventDefault()
-                      if (editDraft.title.trim() === '') return
-                      const payload: Record<string, unknown> = {
-                        title: editDraft.title.trim(),
-                        description: editDraft.description,
-                        typeCode: editDraft.typeCode,
-                        priorityCode: editDraft.priorityCode,
-                        statusCode: editDraft.statusCode,
-                        aiPolicyCode: editDraft.aiPolicyCode,
-                        dueAt: editDraft.dueLocal === '' ? null : new Date(editDraft.dueLocal).toISOString(),
-                        workspacePath: editDraft.workspacePath.trim() === '' ? null : editDraft.workspacePath.trim(),
-                      }
-                      // 自动生成的实例不允许改重复规则，编辑保存时也不提交该字段，从源头避免 400。
-                      if (selected.task.recurrenceMasterId === null) payload.recurrenceCode = editDraft.recurrenceCode
-                      void patchTask(selected.task.id, payload).then(() => { setEditDraft(null); setNotice('任务已更新') }).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
-                    }}>
-                      <h4 className="full" style={{ margin: 0 }}><Icon name="edit" />编辑任务</h4>
-                      <label className="full">标题<input value={editDraft.title} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, title: e.target.value })} /></label>
-                      <label>类型<select value={editDraft.typeCode} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, typeCode: e.target.value })}>{dictOf('type').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
-                      <label>优先级<select value={editDraft.priorityCode} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, priorityCode: e.target.value })}>{dictOf('priority').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
-                      <label>状态<select value={editDraft.statusCode} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, statusCode: e.target.value })}>{dictOf('status').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
-                      <label>AI 策略<select value={editDraft.aiPolicyCode} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, aiPolicyCode: e.target.value })}>{dictOf('ai_policy').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
-                      {selected.task.recurrenceMasterId === null
-                        ? <label>重复<select value={editDraft.recurrenceCode} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, recurrenceCode: e.target.value })}>{dictOf('recurrence').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
-                        : <div style={{ fontSize: 12, color: '#999', alignSelf: 'center' }}>重复：由模板任务管理</div>}
-                      <label>截止时间<input type="datetime-local" value={editDraft.dueLocal} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, dueLocal: e.target.value })} /></label>
-                      <label className="full">AI 会话工作区（留空使用默认）<input value={editDraft.workspacePath} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, workspacePath: e.target.value })} placeholder={settings.defaultWorkspace || '默认工作区未设置'} /></label>
-                      <label className="full">描述（Markdown）<textarea rows={6} value={editDraft.description} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, description: e.target.value })} /></label>
-                      <div className="full" style={{ display: 'flex', gap: 8 }}><button className="wb-btn primary" type="submit"><Icon name="check" />保存</button><button className="wb-btn" type="button" onClick={() => setEditDraft(null)}>取消</button></div>
-                    </form>
                   )}
                 </div>
 
@@ -2529,6 +2290,35 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
         </Modal>
       )}
 
+      {editDraft !== null && selected !== null && (
+        <Modal
+          title={<><Icon name="edit" />编辑任务</>}
+          size="md"
+          onClose={() => setEditDraft(null)}
+          footer={(
+            <>
+              <button className="wb-btn" onClick={() => setEditDraft(null)}>取消</button>
+              <button className="wb-btn primary" disabled={editDraft.title.trim() === ''} onClick={() => void saveEditDraft()}>
+                <Icon name="check" />保存
+              </button>
+            </>
+          )}
+        >
+          <div className="wb-form" style={{ border: 'none', padding: 0 }}>
+            <label className="full">标题<input value={editDraft.title} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, title: e.target.value })} /></label>
+            <label>类型<select value={editDraft.typeCode} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, typeCode: e.target.value })}>{dictOf('type').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
+            <label>优先级<select value={editDraft.priorityCode} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, priorityCode: e.target.value })}>{dictOf('priority').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
+            <label>状态<select value={editDraft.statusCode} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, statusCode: e.target.value })}>{dictOf('status').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
+            <label>AI 策略<select value={editDraft.aiPolicyCode} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, aiPolicyCode: e.target.value })}>{dictOf('ai_policy').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
+            {selected.task.recurrenceMasterId === null
+              ? <label>重复<select value={editDraft.recurrenceCode} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, recurrenceCode: e.target.value })}>{dictOf('recurrence').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
+              : <div style={{ fontSize: 12, color: '#999', alignSelf: 'center' }}>重复：由模板任务管理</div>}
+            <label>截止时间<input type="datetime-local" value={editDraft.dueLocal} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, dueLocal: e.target.value })} /></label>
+            <label className="full">AI 会话工作区（留空则继承父任务，父任务也没有才用默认）<input value={editDraft.workspacePath} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, workspacePath: e.target.value })} placeholder={settings.defaultWorkspace || '默认工作区未设置'} /></label>
+            <label className="full">描述（Markdown）<textarea rows={6} value={editDraft.description} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, description: e.target.value })} /></label>
+          </div>
+        </Modal>
+      )}
       <ToastHost items={toasts} onDismiss={dismissToast} />
     </div>
   )
