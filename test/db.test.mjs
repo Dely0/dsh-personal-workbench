@@ -14,6 +14,7 @@ import {
   createIdea, listIdeas, createIdeaCluster, getIdeaCluster, confirmIdeaClusterDraft, confirmIdeaTaskDraft,
   getDraftBySession, listTaskSessions, linkTaskSession, localDateString,
   completeTaskCascade, repairParentCompletion, addTaskMemory, getTaskMemoryContext, listTaskMemories,
+  archiveTask, restoreTask, confirmSubtaskPlanDraft,
 } from '../lib/db/repo.js'
 
 test('db migrations, dictionaries and task tree', () => {
@@ -236,6 +237,167 @@ test('status cascade aggregation, repair and shared memory', () => {
     assert.match(getTaskMemoryContext(db, leaf2.id), /使用方案A/)
     assert.match(getTaskMemoryContext(db, root.id), /使用方案A/)
     assert.equal(listTaskMemories(db, { taskId: leaf1.id }).length, 1)
+    db.close()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('subtask_plan confirm is idempotent and preserves estimated_minutes', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-personal-workbench-subtask-plan-'))
+  try {
+    const db = openWorkbenchDb({ dbPath: join(dir, 'workbench.db') })
+    seedDictionaries(db)
+
+    const parent = createTask(db, { title: 'parent', typeCode: 'code_impl', priorityCode: 'p1' })
+    // 提案工具写 snake_case（type_code / estimated_minutes），与 workbench_propose_subtasks 一致
+    const payload = {
+      parentTaskId: parent.id,
+      subtasks: [
+        {
+          title: 'design layer', type_code: 'solution_design', priority_code: 'p1', estimated_minutes: 195,
+          children: [{ title: 'contract', type_code: 'solution_design', priority_code: 'p1', estimated_minutes: 90 }],
+        },
+        { title: 'scheduler', type_code: 'code_impl', priority_code: 'p1', estimated_minutes: 240 },
+      ],
+    }
+    const draft = createDraft(db, { kindCode: 'subtask_plan', sessionId: 's-breakdown', payload })
+    const created = confirmSubtaskPlanDraft(db, draft.id)
+    assert.equal(created.length, 3)
+    assert.equal(created[0].estimatedMinutes, 195)
+    assert.equal(created[1].estimatedMinutes, 90)
+    assert.equal(created[2].estimatedMinutes, 240)
+    assert.equal(listChildren(db, parent.id).length, 2)
+
+    // 重复确认同一份（或同标题）提案：复用既有节点，不再重复建树
+    const draft2 = createDraft(db, { kindCode: 'subtask_plan', sessionId: 's-breakdown-2', payload })
+    const again = confirmSubtaskPlanDraft(db, draft2.id)
+    assert.equal(again.length, 3)
+    assert.deepEqual(again.map((t) => t.id), created.map((t) => t.id))
+    assert.equal(listChildren(db, parent.id).length, 2)
+    assert.equal(listChildren(db, created[0].id).length, 1)
+    assert.equal(listTasks(db, { parentId: parent.id }).length, 2)
+
+    // 复用不覆盖用户对既有任务的编辑
+    updateTask(db, created[2].id, { title: 'scheduler' })
+    const renamed = createTask(db, { title: 'renamed by user', typeCode: 'code_impl', priorityCode: 'p1', parentId: parent.id })
+    const draft3 = createDraft(db, { kindCode: 'subtask_plan', sessionId: 's-breakdown-3', payload: { parentTaskId: parent.id, subtasks: [{ title: 'renamed by user', type_code: 'code_impl', priority_code: 'p1', estimated_minutes: 999 }] } })
+    const reused = confirmSubtaskPlanDraft(db, draft3.id)
+    assert.equal(reused[0].id, renamed.id)
+    assert.equal(getTask(db, renamed.id).estimatedMinutes, null)
+
+    db.close()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('idea_tasks confirm preserves estimated_minutes written in snake_case', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-personal-workbench-idea-est-'))
+  try {
+    const db = openWorkbenchDb({ dbPath: join(dir, 'workbench.db') })
+    seedDictionaries(db)
+
+    const idea = createIdea(db, { title: 'idea', contentMd: 'x' })
+    const draft = createDraft(db, {
+      kindCode: 'idea_tasks',
+      sessionId: 's-idea',
+      payload: {
+        sourceIdeaIds: [idea.id],
+        sourceClusterId: null,
+        tasks: [{ title: 'from idea', type_code: 'code_impl', priority_code: 'p1', estimated_minutes: 1095 }],
+      },
+    })
+    const created = confirmIdeaTaskDraft(db, draft.id)
+    assert.equal(created.length, 1)
+    assert.equal(created[0].estimatedMinutes, 1095)
+
+    db.close()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('archiving a task hides its descendants from the active list but keeps them restorable', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-personal-workbench-archive-'))
+  try {
+    const db = openWorkbenchDb({ dbPath: join(dir, 'workbench.db') })
+    seedDictionaries(db)
+
+    const root = createTask(db, { title: 'root', typeCode: 'code_impl', priorityCode: 'p1' })
+    const mid = createTask(db, { title: 'mid', typeCode: 'code_impl', priorityCode: 'p1', parentId: root.id })
+    const leaf = createTask(db, { title: 'leaf', typeCode: 'code_impl', priorityCode: 'p1', parentId: mid.id })
+    const other = createTask(db, { title: 'other', typeCode: 'code_impl', priorityCode: 'p1' })
+
+    // 默认：只归档单节点；其后代不再出现在活跃列表（否则前端建树会平铺成"重复任务"）
+    archiveTask(db, root.id)
+    const active = listTasks(db)
+    assert.equal(active.some((t) => t.id === root.id), false)
+    assert.equal(active.some((t) => t.id === mid.id), false)
+    assert.equal(active.some((t) => t.id === leaf.id), false)
+    assert.equal(active.some((t) => t.id === other.id), true)
+    // 归档视图仍带出整棵子树
+    const archived = listArchivedTasks(db)
+    assert.equal(archived.length, 3)
+    assert.equal(archived.some((t) => t.id === leaf.id), true)
+    // 子任务自身 archived 仍为 0：可单独恢复，父恢复后重新出现
+    assert.equal(getTask(db, leaf.id).archived, 0)
+    restoreTask(db, root.id)
+    assert.equal(listTasks(db).some((t) => t.id === leaf.id), true)
+
+    // cascade: true 时整棵子树一起归档
+    const root2 = createTask(db, { title: 'root2', typeCode: 'code_impl', priorityCode: 'p1' })
+    const child2 = createTask(db, { title: 'child2', typeCode: 'code_impl', priorityCode: 'p1', parentId: root2.id })
+    const grand2 = createTask(db, { title: 'grand2', typeCode: 'code_impl', priorityCode: 'p1', parentId: child2.id })
+    archiveTask(db, root2.id, 'user', { cascade: true })
+    assert.equal(getTask(db, root2.id).archived, 1)
+    assert.equal(getTask(db, child2.id).archived, 1)
+    assert.equal(getTask(db, grand2.id).archived, 1)
+    // 每个节点各留一条 updated 事件
+    const events = db.prepare("SELECT COUNT(*) AS c FROM task_events WHERE event_code = 'updated'").get()
+    assert.ok(events.c >= 3)
+    restoreTask(db, root2.id)
+    restoreTask(db, child2.id)
+    restoreTask(db, grand2.id)
+    assert.equal(listTasks(db).some((t) => t.id === grand2.id), true)
+
+    db.close()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('effective workspace path dynamically inherits nearest ancestor workspace', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-personal-workbench-effective-ws-'))
+  try {
+    const db = openWorkbenchDb({ dbPath: join(dir, 'workbench.db') })
+    seedDictionaries(db)
+
+    const parent = createTask(db, { title: 'parent', typeCode: 'code_impl', priorityCode: 'p1', workspacePath: '/mnt/d/Code/A' })
+    const child = createTask(db, { title: 'child', typeCode: 'code_impl', priorityCode: 'p1', parentId: parent.id })
+    const grandchild = createTask(db, { title: 'grandchild', typeCode: 'code_impl', priorityCode: 'p1', parentId: child.id })
+    assert.equal(getTask(db, child.id).effectiveWorkspacePath, '/mnt/d/Code/A')
+    assert.equal(getTask(db, grandchild.id).effectiveWorkspacePath, '/mnt/d/Code/A')
+
+    // 父任务改工作区 -> 未自设的后代自动跟随
+    updateTask(db, parent.id, { workspacePath: '/mnt/d/Code/B' })
+    assert.equal(getTask(db, child.id).effectiveWorkspacePath, '/mnt/d/Code/B')
+    assert.equal(getTask(db, grandchild.id).effectiveWorkspacePath, '/mnt/d/Code/B')
+    // 子任务自身 workspacePath 仍为空（动态继承，不写库）
+    assert.equal(getTask(db, child.id).workspacePath, null)
+
+    // 子任务显式设过工作区后，不再受父任务影响
+    updateTask(db, child.id, { workspacePath: '/mnt/d/Code/C' })
+    updateTask(db, parent.id, { workspacePath: '/mnt/d/Code/D' })
+    assert.equal(getTask(db, child.id).effectiveWorkspacePath, '/mnt/d/Code/C')
+    assert.equal(getTask(db, grandchild.id).effectiveWorkspacePath, '/mnt/d/Code/C')
+
+    // 中间层清空后，重新继承更上层
+    updateTask(db, child.id, { workspacePath: null })
+    assert.equal(getTask(db, grandchild.id).effectiveWorkspacePath, '/mnt/d/Code/D')
+    updateTask(db, parent.id, { workspacePath: null })
+    assert.equal(getTask(db, grandchild.id).effectiveWorkspacePath, null)
+
     db.close()
   } finally {
     rmSync(dir, { recursive: true, force: true })

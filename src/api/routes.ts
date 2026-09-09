@@ -383,9 +383,10 @@ export function makeRoutes(db: DatabaseSync): WebRoute[] {
         }
         if (method === 'POST' && action === 'archive') {
           try {
-            const task = archiveTask(db, id)
+            const cascade = body?.cascade === true
+            const task = archiveTask(db, id, 'user', { cascade })
             if (task === undefined) return writeJson(res, 404, { error: 'task not found' })
-            return writeJson(res, 200, { ok: true, task: publicTask(task) })
+            return writeJson(res, 200, { ok: true, task: publicTask(task), cascade })
           } catch (error) {
             return writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
           }

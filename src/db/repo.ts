@@ -80,6 +80,8 @@ export interface TaskRow {
   estimatedMinutes: number | null
   source: string
   workspacePath: string | null
+  /** 动态有效工作区：优先自身 workspacePath，未设置时向上继承最近一个已设工作区的祖先。 */
+  effectiveWorkspacePath: string | null
   archived: number
   extra: Record<string, unknown>
   recurrenceCode: string | null
@@ -150,6 +152,33 @@ function effectiveDueAtForTask(db: DatabaseSync, task: Pick<TaskRow, 'id' | 'par
   return null
 }
 
+/**
+ * 递归向上查找最近一个已设置工作区的祖先（含自身）。带深度/防环保护。
+ * 语义与 effectiveDueAtForTask 完全同构：子任务未显式设工作区时，跟随最近的祖先；
+ * 一旦子任务自己设了工作区，父任务再改动也不会影响它。
+ */
+function effectiveWorkspacePathForTask(
+  db: DatabaseSync,
+  task: Pick<TaskRow, 'id' | 'parentId' | 'workspacePath'>,
+): string | null {
+  if (task.workspacePath !== null) return task.workspacePath
+  const seen = new Set<string>([task.id])
+  let cursorId = task.parentId
+  let guard = 0
+  while (cursorId !== null && guard < 64) {
+    if (seen.has(cursorId)) return null
+    seen.add(cursorId)
+    const row = db.prepare('SELECT id, parent_id, workspace_path FROM tasks WHERE id = ?').get(cursorId) as
+      | { id: string; parent_id: string | null; workspace_path: string | null }
+      | undefined
+    if (row === undefined) return null
+    if (row.workspace_path !== null) return row.workspace_path
+    cursorId = row.parent_id
+    guard += 1
+  }
+  return null
+}
+
 function parseTask(row: RawTaskRow | undefined, db?: DatabaseSync): TaskRow | undefined {
   if (row === undefined) return undefined
   const task: TaskRow = {
@@ -167,6 +196,9 @@ function parseTask(row: RawTaskRow | undefined, db?: DatabaseSync): TaskRow | un
     estimatedMinutes: row.estimated_minutes,
     source: row.source,
     workspacePath: row.workspace_path,
+    effectiveWorkspacePath: db === undefined
+      ? row.workspace_path
+      : effectiveWorkspacePathForTask(db, { id: row.id, parentId: row.parent_id, workspacePath: row.workspace_path }),
     archived: row.archived,
     extra: JSON.parse(row.extra) as Record<string, unknown>,
     recurrenceCode: row.recurrence_code,
@@ -312,6 +344,7 @@ export function createTask(db: DatabaseSync, input: TaskInput, actor = 'user', a
     estimatedMinutes: input.estimatedMinutes ?? null,
     source: input.source ?? 'manual',
     workspacePath: input.workspacePath ?? null,
+    effectiveWorkspacePath: null,
     archived: 0,
     extra: input.extra ?? {},
     recurrenceCode: input.recurrenceCode === undefined || input.recurrenceCode === 'none' ? null : input.recurrenceCode,
@@ -324,6 +357,7 @@ export function createTask(db: DatabaseSync, input: TaskInput, actor = 'user', a
     cancelledAt: input.statusCode === 'cancelled' ? at : null,
   }
   task.effectiveDueAt = effectiveDueAtForTask(db, task)
+  task.effectiveWorkspacePath = effectiveWorkspacePathForTask(db, task)
   db.prepare(`
     INSERT INTO tasks
       (id, parent_id, title, description, type_code, status_code, priority_code,
@@ -352,9 +386,13 @@ export function listTasks(db: DatabaseSync, opts: { includeArchived?: boolean; p
   const all = (parentId === undefined
     ? db.prepare('SELECT * FROM tasks').all()
     : db.prepare('SELECT * FROM tasks WHERE parent_id IS ?').all(parentId)) as unknown as RawTaskRow[]
+  // 正常视图必须排除「祖先已归档」的节点：否则归档父任务后，未归档的子任务会变成
+  // 前端无法建树的孤儿节点（父不在返回集），只能平铺到根下，看起来像重复任务。
+  // 归档视图（includeArchived）不走这条过滤，它由 listArchivedTasks 自己带出整棵子树。
+  const excluded = includeArchived ? new Set<string>() : collectArchivedDescendants(db, all)
   const priorityWeights = new Map(listDictionaries(db, 'priority').map((entry) => [entry.code, Number(entry.config.weight ?? 99)]))
   return all
-    .filter((row) => includeArchived || row.archived === 0)
+    .filter((row) => (includeArchived || row.archived === 0) && !excluded.has(row.id))
     .map((row) => parseTask(row, db))
     .filter((task): task is TaskRow => task !== undefined)
     .sort((a, b) => {
@@ -373,6 +411,49 @@ export function listTasks(db: DatabaseSync, opts: { includeArchived?: boolean; p
 
 export function listChildren(db: DatabaseSync, parentId: string): TaskRow[] {
   return listTasks(db, { parentId })
+}
+
+/**
+ * 找出所有「祖先已归档」的任务 id（不含自身已归档的节点，那些由 archived 过滤处理）。
+ * 用于让正常列表不返回无法建树的孤儿节点；带防环保护。
+ */
+function collectArchivedDescendants(db: DatabaseSync, rows: RawTaskRow[]): Set<string> {
+  const parentOf = new Map<string, string | null>()
+  const archived = new Set<string>()
+  for (const row of rows) {
+    parentOf.set(row.id, row.parent_id)
+    if (row.archived === 1) archived.add(row.id)
+  }
+  // 部分调用（parentId 过滤）只拿到一层，祖先状态需要回查一次全表。
+  const missingParents = new Set<string>()
+  for (const row of rows) {
+    if (row.parent_id !== null && !parentOf.has(row.parent_id)) missingParents.add(row.parent_id)
+  }
+  for (const id of missingParents) {
+    const row = db.prepare('SELECT id, parent_id, archived FROM tasks WHERE id = ?').get(id) as
+      | { id: string; parent_id: string | null; archived: number }
+      | undefined
+    if (row === undefined) continue
+    parentOf.set(row.id, row.parent_id)
+    if (row.archived === 1) archived.add(row.id)
+  }
+  const excluded = new Set<string>()
+  for (const row of rows) {
+    if (row.archived === 1) continue
+    const seen = new Set<string>([row.id])
+    let cursorId = row.parent_id
+    let guard = 0
+    while (cursorId !== null && guard < 64) {
+      if (seen.has(cursorId)) break
+      seen.add(cursorId)
+      if (archived.has(cursorId)) { excluded.add(row.id); break }
+      const next = parentOf.get(cursorId)
+      if (next === undefined) break
+      cursorId = next
+      guard += 1
+    }
+  }
+  return excluded
 }
 
 export function updateTask(db: DatabaseSync, id: string, patch: TaskPatch, actor = 'user', at = nowIso()): TaskRow | undefined {
@@ -399,6 +480,7 @@ export function updateTask(db: DatabaseSync, id: string, patch: TaskPatch, actor
     cancelledAt: patch.statusCode === 'cancelled' ? at : patch.statusCode !== undefined ? null : before.cancelledAt,
   }
   next.effectiveDueAt = effectiveDueAtForTask(db, next)
+  next.effectiveWorkspacePath = effectiveWorkspacePathForTask(db, next)
   db.prepare(`
     UPDATE tasks SET
       title = ?, description = ?, type_code = ?, status_code = ?, priority_code = ?,
@@ -546,8 +628,43 @@ export function repairParentCompletion(db: DatabaseSync, at = nowIso()): number 
   return changed
 }
 
-export function archiveTask(db: DatabaseSync, id: string, actor = 'user'): TaskRow | undefined {
-  return updateTask(db, id, { archived: true }, actor)
+/**
+ * 归档一个任务。
+ * 默认只归档该节点本身（保持既有语义）；`cascade: true` 时在同一事务内连整棵子树一起归档，
+ * 每个被归档的节点各写一条 updated 事件，便于审计与按事件回放恢复。
+ */
+export function archiveTask(
+  db: DatabaseSync,
+  id: string,
+  actor = 'user',
+  opts: { cascade?: boolean } = {},
+): TaskRow | undefined {
+  if (opts.cascade !== true) return updateTask(db, id, { archived: true }, actor)
+  const root = getTask(db, id)
+  if (root === undefined) return undefined
+  const subtree: string[] = []
+  const stack = [id]
+  const seen = new Set<string>()
+  while (stack.length > 0) {
+    const current = stack.pop()!
+    if (seen.has(current)) continue
+    seen.add(current)
+    subtree.push(current)
+    for (const child of listTasks(db, { parentId: current, includeArchived: true })) stack.push(child.id)
+  }
+  db.exec('BEGIN')
+  try {
+    let updated: TaskRow | undefined
+    for (const taskId of subtree) {
+      const row = updateTask(db, taskId, { archived: true }, actor)
+      if (taskId === id) updated = row
+    }
+    db.exec('COMMIT')
+    return updated
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
+  }
 }
 
 export function restoreTask(db: DatabaseSync, id: string, actor = 'user'): TaskRow | undefined {
@@ -624,6 +741,50 @@ interface RawDraftRow {
   status_code: string
   created_at: string
   updated_at: string
+}
+
+/** 提案类草稿里的单个任务节点：工具侧写 snake_case，表单/任务草稿侧写 camelCase。 */
+type DraftTaskItem = Partial<TaskInput> & Record<string, unknown>
+
+/**
+ * 把草稿里的一个任务节点归一化成 createTask 入参。
+ * 三条确认路径（task / subtask_plan / idea_tasks）共用，避免各自只处理一种写法而静默丢字段
+ * （历史事故：estimated_minutes 只读 camelCase，而提案工具写的是 snake_case）。
+ */
+function toTaskInputFromDraftItem(
+  item: DraftTaskItem,
+  defaults: { typeCode: string; priorityCode: string; statusCode?: string; source?: string; extra?: Record<string, unknown> },
+): { title: string; input: TaskInput } | undefined {
+  const title = typeof item.title === 'string' ? item.title.trim() : ''
+  if (title === '') return undefined
+  const estimate = item.estimatedMinutes ?? item.estimated_minutes
+  const allDay = item.allDay ?? item.all_day
+  return {
+    title,
+    input: {
+      title,
+      description: typeof item.description === 'string' ? item.description : undefined,
+      typeCode: String(item.typeCode ?? item.type_code ?? defaults.typeCode),
+      priorityCode: String(item.priorityCode ?? item.priority_code ?? defaults.priorityCode),
+      statusCode: typeof item.statusCode === 'string' ? item.statusCode : typeof item.status_code === 'string' ? item.status_code : defaults.statusCode,
+      dueAt: typeof item.dueAt === 'string' ? item.dueAt : typeof item.due_at === 'string' ? item.due_at : null,
+      allDay: allDay === true,
+      estimatedMinutes: typeof estimate === 'number' ? estimate : undefined,
+      aiPolicyCode: typeof item.aiPolicyCode === 'string' ? item.aiPolicyCode : undefined,
+      source: defaults.source,
+      workspacePath: typeof item.workspacePath === 'string' && item.workspacePath !== '' ? item.workspacePath : undefined,
+      extra: (item.extra as Record<string, unknown> | undefined) ?? defaults.extra,
+    },
+  }
+}
+
+/**
+ * 幂等建节点：同 parent 下已有同名（trim 后精确相等）任务时复用它，不新建。
+ * 重复确认同一份拆解提案曾导致整棵任务树第二次落地（见 docs/issues/2026-09-09-*）。
+ */
+function findSiblingByTitle(db: DatabaseSync, parentId: string | null, title: string): TaskRow | undefined {
+  const normalized = title.trim()
+  return listTasks(db, { parentId, includeArchived: true }).find((task) => task.title.trim() === normalized)
 }
 
 function parseDraft(row: RawDraftRow | undefined): DraftRow | undefined {
@@ -709,27 +870,16 @@ export function confirmTaskDraft(db: DatabaseSync, draftId: string, actor = 'use
       addReminder(db, task.id, reminderOffset, 'browser', at)
     }
     // workbench_submit_task 的 subtasks 参数：确认任务时同步创建简版子任务。
-    const rawChildren = Array.isArray(payload.subtasks) ? payload.subtasks as Array<Partial<TaskInput> & Record<string, unknown>> : []
-    const walkChildren = (items: Array<Partial<TaskInput> & Record<string, unknown>>, parentId: string): void => {
+    const rawChildren = Array.isArray(payload.subtasks) ? payload.subtasks as DraftTaskItem[] : []
+    const walkChildren = (items: DraftTaskItem[], parentId: string): void => {
       for (const item of items) {
-        const childTitle = typeof item.title === 'string' ? item.title : ''
-        if (childTitle.trim() === '') continue
-        const typeCode = String(item.typeCode ?? item.type_code ?? task.typeCode)
-        const priorityCode = String(item.priorityCode ?? item.priority_code ?? task.priorityCode)
-        if (getDictionary(db, 'type', typeCode)?.active !== 1) continue
-        if (getDictionary(db, 'priority', priorityCode)?.active !== 1) continue
-        const child = createTask(db, {
-          title: childTitle,
-          description: typeof item.description === 'string' ? item.description : undefined,
-          typeCode,
-          priorityCode,
-          statusCode: 'todo',
-          dueAt: typeof item.dueAt === 'string' ? item.dueAt : typeof item.due_at === 'string' ? item.due_at : null,
-          estimatedMinutes: typeof item.estimated_minutes === 'number' ? item.estimated_minutes : undefined,
-          source: 'nl',
-          parentId,
-        }, actor, at)
-        if (Array.isArray(item.children)) walkChildren(item.children as Array<Partial<TaskInput> & Record<string, unknown>>, child.id)
+        const normalized = toTaskInputFromDraftItem(item, { typeCode: task.typeCode, priorityCode: task.priorityCode, statusCode: 'todo', source: 'nl' })
+        if (normalized === undefined) continue
+        const { input } = normalized
+        if (getDictionary(db, 'type', input.typeCode)?.active !== 1) continue
+        if (getDictionary(db, 'priority', input.priorityCode)?.active !== 1) continue
+        const child = createTask(db, { ...input, parentId }, actor, at)
+        if (Array.isArray(item.children)) walkChildren(item.children as DraftTaskItem[], child.id)
       }
     }
     walkChildren(rawChildren, task.id)
@@ -748,7 +898,7 @@ export function confirmTaskDraft(db: DatabaseSync, draftId: string, actor = 'use
 export function confirmSubtaskPlanDraft(db: DatabaseSync, draftId: string, actor = 'user', at = nowIso()): TaskRow[] {
   const draft = getDraft(db, draftId)
   if (draft === undefined || draft.kindCode !== 'subtask_plan') return []
-  const payload = draft.payload as { parentTaskId?: string; subtasks?: Array<Partial<TaskInput>> }
+  const payload = draft.payload as { parentTaskId?: string; subtasks?: DraftTaskItem[] }
   const parentTaskId = typeof payload.parentTaskId === 'string' ? payload.parentTaskId : undefined
   if (parentTaskId === undefined) throw new Error('subtask_plan requires parentTaskId')
   const parent = getTask(db, parentTaskId)
@@ -760,29 +910,18 @@ export function confirmSubtaskPlanDraft(db: DatabaseSync, draftId: string, actor
   db.exec('BEGIN')
   try {
     const created: TaskRow[] = []
-    const walk = (items: Array<Partial<TaskInput> & Record<string, unknown>>, parentId: string | null): void => {
+    const walk = (items: DraftTaskItem[], parentId: string | null): void => {
       for (const item of items) {
-        const title = typeof item.title === 'string' ? item.title : ''
-        if (title.trim() === '') continue
-        // 提案工具写入的是 snake_case（type_code），表单/任务草稿写入的是 camelCase，这里两者都收。
-        const typeCode = String(item.typeCode ?? item.type_code ?? parent.typeCode)
-        const priorityCode = String(item.priorityCode ?? item.priority_code ?? parent.priorityCode)
-        if (getDictionary(db, 'type', typeCode)?.active !== 1) continue
-        if (getDictionary(db, 'priority', priorityCode)?.active !== 1) continue
-        const dueAt = typeof item.dueAt === 'string' ? item.dueAt : typeof item.due_at === 'string' ? item.due_at : null
-        const estimate = item.estimatedMinutes ?? item.estimated_minutes
-        const task = createTask(db, {
-          title,
-          description: typeof item.description === 'string' ? item.description : undefined,
-          typeCode,
-          priorityCode,
-          dueAt,
-          estimatedMinutes: typeof estimate === 'number' ? estimate : undefined,
-          parentId,
-          extra: item.extra ?? {},
-        }, actor, at)
+        const normalized = toTaskInputFromDraftItem(item, { typeCode: parent.typeCode, priorityCode: parent.priorityCode, source: parent.source })
+        if (normalized === undefined) continue
+        const { title, input } = normalized
+        if (getDictionary(db, 'type', input.typeCode)?.active !== 1) continue
+        if (getDictionary(db, 'priority', input.priorityCode)?.active !== 1) continue
+        // 幂等：同父下已有同名节点就复用，不重复建树（重确认同一份提案时保持任务 id/状态/用户编辑不变）。
+        const existing = findSiblingByTitle(db, parentId, title)
+        const task = existing ?? createTask(db, { ...input, parentId }, actor, at)
         created.push(task)
-        if (Array.isArray(item.children)) walk(item.children as Array<Partial<TaskInput>>, task.id)
+        if (Array.isArray(item.children)) walk(item.children as DraftTaskItem[], task.id)
       }
     }
     walk(subtasks, parentTaskId)
@@ -1910,7 +2049,7 @@ export function confirmIdeaClusterDraft(db: DatabaseSync, draftId: string, actor
 export function confirmIdeaTaskDraft(db: DatabaseSync, draftId: string, actor = 'user', at = nowIso()): TaskRow[] {
   const draft = getDraft(db, draftId)
   if (draft === undefined || draft.kindCode !== 'idea_tasks') return []
-  const tasks = Array.isArray(draft.payload.tasks) ? draft.payload.tasks as Array<Partial<TaskInput> & Record<string, unknown>> : []
+  const tasks = Array.isArray(draft.payload.tasks) ? draft.payload.tasks as DraftTaskItem[] : []
   if (tasks.length === 0) throw new Error('idea_tasks draft requires at least one task')
   const sourceIdeaIds = Array.isArray(draft.payload.sourceIdeaIds) ? draft.payload.sourceIdeaIds.filter((id): id is string => typeof id === 'string') : []
   const sourceClusterId = typeof draft.payload.sourceClusterId === 'string' ? draft.payload.sourceClusterId : null
@@ -1924,26 +2063,23 @@ export function confirmIdeaTaskDraft(db: DatabaseSync, draftId: string, actor = 
       const candidate = aliases[code ?? ''] ?? fallback
       return getDictionary(db, kind, candidate)?.active === 1 ? candidate : fallback
     }
-    const walk = (items: Array<Partial<TaskInput> & Record<string, unknown>>, parentId: string | null): void => {
+    const walk = (items: DraftTaskItem[], parentId: string | null): void => {
       for (const item of items) {
-        const title = typeof item.title === 'string' ? item.title.trim() : ''
-        if (title === '') continue
-        const typeCode = validCode('type', String(item.typeCode ?? item.type_code ?? ''), 'personal')
-        const priorityCode = validCode('priority', String(item.priorityCode ?? item.priority_code ?? ''), 'p2')
-        const estimate = item.estimatedMinutes ?? item.estimated_minutes
+        const normalized = toTaskInputFromDraftItem(item, { typeCode: 'personal', priorityCode: 'p2', extra: { sourceIdeaIds, sourceClusterId, source: 'idea' } })
+        if (normalized === undefined) continue
+        const { input } = normalized
+        const typeCode = validCode('type', input.typeCode, 'personal')
+        const priorityCode = validCode('priority', input.priorityCode, 'p2')
         const task = createTask(db, {
-          title,
-          description: typeof item.description === 'string' ? item.description : undefined,
+          ...input,
           typeCode,
           priorityCode,
-          dueAt: typeof item.dueAt === 'string' ? item.dueAt : typeof item.due_at === 'string' ? item.due_at : null,
-          estimatedMinutes: typeof estimate === 'number' ? estimate : null,
-          aiPolicyCode: validCode('ai_policy', typeof item.aiPolicyCode === 'string' ? item.aiPolicyCode : undefined, 'consult'),
+          aiPolicyCode: validCode('ai_policy', input.aiPolicyCode, 'consult'),
           parentId,
           extra: { sourceIdeaIds, sourceClusterId, source: 'idea' },
         }, actor, at)
         created.push(task)
-        if (Array.isArray(item.children)) walk(item.children as Array<Partial<TaskInput>>, task.id)
+        if (Array.isArray(item.children)) walk(item.children as DraftTaskItem[], task.id)
       }
     }
     walk(tasks, null)
