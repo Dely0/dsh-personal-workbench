@@ -12,6 +12,11 @@ import { makeOpenFileRoute } from './api/openFileRoute.js'
 import { makeRoutes } from './api/routes.js'
 import { openWorkbenchDb, type WorkbenchDbConfig } from './db/database.js'
 import { seedDictionaries } from './db/seed.js'
+import { countFiredRemindersSince, countQueue, enqueueReminder, listQueue, markQueueAttempt, readMeta, removeQueueEntry } from './db/repo.js'
+import { probeDshIm, WechatChannelAdapter } from './reminder/adapter.js'
+import { readReminderPolicy, writeReminderPolicy } from './reminder/config.js'
+import { ReminderScheduler } from './reminder/scheduler.js'
+import { readWeixinInboundCount } from './reminder/weixin-status.js'
 import { proposeDailyPlanTool, proposeIdeaClustersTool, proposeSubtasksTool, requestCompletionTool, saveTaskMemoryTool, submitIdeaTasksTool, submitKnowledgeTool, submitReportTool, submitReviewTool, submitTaskTool, updateTaskTool } from './tools.js'
 
 export const name = 'personal-workbench'
@@ -35,12 +40,48 @@ const SECTION_ORDER = 150
 
 export interface Config extends WorkbenchDbConfig {
   announceToAgent?: boolean
+  /** 提醒调度器扫描间隔（毫秒），缺省 30s；测试可调小 */
+  reminderScanIntervalMs?: number
 }
 
 export function apply(ctx: Context, config: Config = {}): void {
   const db = openWorkbenchDb(config)
   seedDictionaries(db)
-  const routes = makeRoutes(db)
+
+  // 微信提醒通道适配层：ctx.get('dshIm') 软探测，未安装时静默降级。
+  const adapter = new WechatChannelAdapter({
+    db,
+    probe: () => probeDshIm(ctx),
+    readConfiguredTarget: () => ({
+      botId: readMeta(db, 'reminder_bot_id') ?? null,
+      targetId: readMeta(db, 'reminder_target_id') ?? null,
+    }),
+    queue: {
+      enqueue: (entry, nextAttemptAt) => { enqueueReminder(db, { ...entry, nextAttemptAt }) },
+      listDue: (nowIso) => listQueue(db).filter((entry) => entry.nextAttemptAt <= nowIso),
+      remove: (id) => { removeQueueEntry(db, id) },
+      markAttempt: (id, error, nextAttemptAt) => { markQueueAttempt(db, id, error, nextAttemptAt) },
+      count: () => countQueue(db),
+      statsSince: (iso) => countFiredRemindersSince(db, iso),
+    },
+  })
+
+  const scheduler = new ReminderScheduler({
+    db,
+    adapter,
+    isTargetConfigured: () => adapter.status().configured,
+    readInboundCount: () => readWeixinInboundCount(ctx),
+    log: (message) => { ctx.logger?.info?.(message) },
+  })
+
+  const routes = makeRoutes(db, {
+    channel: {
+      status: () => adapter.status(),
+      listOptions: () => adapter.listOptions(),
+      resolveTarget: () => adapter.resolveTarget(),
+    },
+    policy: { read: () => readReminderPolicy(db), write: (raw) => writeReminderPolicy(db, raw) },
+  })
   // 独立路由文件：保证热重载时新增/修复的“选择文件”“打开文件”“字典管理”接口能随入口模块一起重新加载。
   routes.unshift(makeDictionaryRoute(db), makeLocalDirRoute(), makeOpenFileRoute())
 
@@ -59,6 +100,13 @@ export function apply(ctx: Context, config: Config = {}): void {
     },
     'dsh-personal-workbench: tools',
   )
+
+  // 提醒调度：ctx.interval 随 fiber 自动销毁；启动补发只跑一次。
+  ctx.effect(() => {
+    const dispose = scheduler.start(ctx)
+    void scheduler.catchup().catch((error) => { ctx.logger?.warn?.(`[workbench-reminder] catchup failed: ${String(error)}`) })
+    return dispose
+  }, 'dsh-personal-workbench: reminder-scheduler')
 
   ctx.effect(() => {
     if ((config.announceToAgent ?? true) === false) return () => {}

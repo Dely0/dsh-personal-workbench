@@ -42,13 +42,14 @@
     "@deepseek-ai/dsh-tools": "^0.1.0-rc.6"
   },
   "devDependencies": {
-    "@types/node": "^24.13.3",
-    "tsdown": "0.22.2",
-    "typescript": "~5.7.2",
+    "@deepseek-ai/cordis-plugin-timer": "1.1.4",
     "@deepseek-ai/dsh-llm": "^0.1.0-rc.6",
-    "react-dom": "^18.3.1",
+    "@types/node": "^24.13.3",
     "@types/react": "^18.3.1",
-    "@types/react-dom": "^18.3.1"
+    "@types/react-dom": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tsdown": "0.22.2",
+    "typescript": "~5.7.2"
   },
   "packageManager": "pnpm@11.7.0",
   "engines": {
@@ -61,7 +62,7 @@
     "build": "node -e \"require('node:fs').rmSync('lib',{recursive:true,force:true})\" && tsc -p tsconfig.build.json && tsdown",
     "typecheck": "tsc --noEmit",
     "check": "tsc --noEmit && node -e \"require('node:fs').rmSync('lib',{recursive:true,force:true})\" && tsc -p tsconfig.build.json && tsdown",
-    "test": "pnpm build && node --test test/db.test.mjs test/tools.test.mjs test/routes.test.mjs test/taskFilterSort.test.mjs test/workspacePath.test.mjs",
+    "test": "pnpm build && node --test test/db.test.mjs test/tools.test.mjs test/routes.test.mjs test/taskFilterSort.test.mjs test/workspacePath.test.mjs test/reminder.test.mjs",
     "prepare": "pnpm build"
   },
   "dependencies": {

@@ -12,7 +12,7 @@ import {
   createIdea, createIdeaCluster, createKnowledge, createTaskReview,
   createDraft, createTask, deleteDailyPlan, deleteIdea, deleteIdeaCluster, deleteKnowledge, deleteTaskReport, ensureRecurringInstances, fireReminder, getAiSession, getDailyPlan, getDictionary, getDraft, getDraftBySession,
   getIdea, getIdeaCluster, getKnowledge, getLatestPendingDraft, getTask, getTaskMemoryContext, getTaskReport, getTaskRootId, linkTaskSession, listArchivedTasks, listChildren,
-  listDictionaries, listDueReminders, listIdeas, listIdeaClusters, listIdeaClustersForIdea, listKnowledge, listReminders, listTaskEvents, listTaskMemories, listTaskReports, listTaskReviews,
+  listDictionaries, listDueReminders, listIdeas, listIdeaClusters, listIdeaClustersForIdea, listKnowledge, listQueue, listReminders, listTaskEvents, listTaskMemories, listTaskReports, listTaskReviews,
   listTaskSessions, listTasks, localDateString, registerAiSession, repairParentCompletion, restoreTask, updateDailyPlan, updateIdea, updateKnowledge, updateTask, updateTaskWithCompletion, type ReportPeriodCode, type TaskInput,
 } from '../db/repo.js'
 
@@ -197,7 +197,18 @@ function taskInputFromBody(body: Record<string, unknown>): TaskInput {
   }
 }
 
-export function makeRoutes(db: DatabaseSync): WebRoute[] {
+export interface ReminderRouteDeps {
+  /** 通道状态与目标选择（由入口注入；缺省时提醒相关接口返回未安装） */
+  channel?: {
+    status(): unknown
+    listOptions(): Promise<unknown>
+    resolveTarget(): Promise<unknown>
+  }
+  /** 策略读写 */
+  policy?: { read(): unknown; write(raw: unknown): unknown }
+}
+
+export function makeRoutes(db: DatabaseSync, deps: ReminderRouteDeps = {}): WebRoute[] {
   const metaGet = (key: string): string | undefined => (db.prepare('SELECT value FROM meta WHERE key = ?').get(key) as { value: string } | undefined)?.value
   const metaSet = (key: string, value: string): void => {
     db.prepare("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(key, value)
@@ -249,6 +260,46 @@ export function makeRoutes(db: DatabaseSync): WebRoute[] {
             autoCreateTypeFolders: (metaGet('auto_create_type_folders') ?? '1') === '1',
             desktopNotify: (metaGet('desktop_notify') ?? '1') === '1',
           } })
+        }
+        return writeJson(res, 405, { error: 'method not allowed' })
+      },
+    },
+    // ------------------------------------------------------------------ reminder policy / channel
+    {
+      kind: 'exact',
+      path: '/api/workbench/reminders/policy',
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) return writeJson(res, 403, { error: 'forbidden: loopback-only' })
+        if (deps.policy === undefined) return writeJson(res, 503, { error: 'reminder policy unavailable' })
+        const method = req.method ?? 'GET'
+        if (method === 'GET') return writeJson(res, 200, { ok: true, policy: deps.policy.read() })
+        if (method === 'POST') {
+          const body = await readJsonBody(req)
+          if (body === undefined) return writeJson(res, 400, { error: 'invalid JSON body' })
+          return writeJson(res, 200, { ok: true, policy: deps.policy.write(body) })
+        }
+        return writeJson(res, 405, { error: 'method not allowed' })
+      },
+    },
+    {
+      kind: 'exact',
+      path: '/api/workbench/reminders/channel',
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) return writeJson(res, 403, { error: 'forbidden: loopback-only' })
+        if (deps.channel === undefined) return writeJson(res, 503, { error: 'reminder channel unavailable' })
+        const method = req.method ?? 'GET'
+        if (method === 'GET') {
+          const options = await deps.channel.listOptions()
+          return writeJson(res, 200, { ok: true, status: deps.channel.status(), options, queue: listQueue(db, 20) })
+        }
+        if (method === 'POST') {
+          const body = await readJsonBody(req)
+          if (body === undefined) return writeJson(res, 400, { error: 'invalid JSON body' })
+          // 只保存投递目标选择；通道本身的扫码/凭证全归 dsh-im。
+          if ('botId' in body) metaSet('reminder_bot_id', typeof body.botId === 'string' ? body.botId : '')
+          if ('targetId' in body) metaSet('reminder_target_id', typeof body.targetId === 'string' ? body.targetId : '')
+          await deps.channel.resolveTarget()
+          return writeJson(res, 200, { ok: true, status: deps.channel.status() })
         }
         return writeJson(res, 405, { error: 'method not allowed' })
       },

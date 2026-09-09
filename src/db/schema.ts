@@ -4,7 +4,7 @@
  */
 import type { DatabaseSync } from 'node:sqlite'
 
-export const SCHEMA_VERSION = 11
+export const SCHEMA_VERSION = 12
 
 export interface Migration {
   version: number
@@ -304,6 +304,32 @@ export const MIGRATIONS: Migration[] = [
     name: 'knowledge-file-link',
     up(db) {
       db.exec('ALTER TABLE knowledge_entries ADD COLUMN file_link TEXT')
+    },
+  },
+  {
+    version: 12,
+    name: 'reminder-queue',
+    up(db) {
+      // 微信提醒的待发队列：host 侧调度器把"暂时发不出去"的提醒落库，重启不丢。
+      // 不存 botId/targetId —— 目标在发送时解析，用户换投递目标后旧队列自动跟新目标。
+      db.exec(`
+        CREATE TABLE reminder_queue (
+          id              TEXT PRIMARY KEY,
+          reminder_id     TEXT,
+          root_task_id    TEXT NOT NULL,
+          task_id         TEXT NOT NULL,
+          title           TEXT NOT NULL,
+          body            TEXT NOT NULL,
+          priority_code   TEXT NOT NULL,
+          due_at          TEXT,
+          attempts        INTEGER NOT NULL DEFAULT 0,
+          next_attempt_at TEXT NOT NULL,
+          last_error      TEXT,
+          created_at      TEXT NOT NULL
+        ) STRICT;
+        CREATE INDEX idx_reminder_queue_next ON reminder_queue(next_attempt_at, created_at);
+        CREATE INDEX idx_reminder_queue_root ON reminder_queue(root_task_id, created_at DESC);
+      `)
     },
   },
 ]
