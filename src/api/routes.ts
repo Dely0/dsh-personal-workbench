@@ -206,6 +206,8 @@ export interface ReminderRouteDeps {
   }
   /** 策略读写 */
   policy?: { read(): unknown; write(raw: unknown): unknown }
+  /** 发送测试消息（设置页用） */
+  test?: () => Promise<{ ok: boolean; reason?: string }>
 }
 
 export function makeRoutes(db: DatabaseSync, deps: ReminderRouteDeps = {}): WebRoute[] {
@@ -302,6 +304,17 @@ export function makeRoutes(db: DatabaseSync, deps: ReminderRouteDeps = {}): WebR
           return writeJson(res, 200, { ok: true, status: deps.channel.status() })
         }
         return writeJson(res, 405, { error: 'method not allowed' })
+      },
+    },
+    {
+      kind: 'exact',
+      path: '/api/workbench/reminders/test',
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) return writeJson(res, 403, { error: 'forbidden: loopback-only' })
+        if (req.method !== 'POST') return writeJson(res, 405, { error: 'method not allowed' })
+        if (deps.test === undefined) return writeJson(res, 503, { error: 'reminder channel unavailable' })
+        const result = await deps.test()
+        return writeJson(res, 200, result)
       },
     },
     // ------------------------------------------------------------------ bootstrap

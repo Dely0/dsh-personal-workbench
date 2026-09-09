@@ -267,7 +267,37 @@ interface Task {
 interface DailyPlanItemView { taskId: string; order: number; title: string; note: string }
 interface DailyPlanView { id: string; planDate: string; summary: string; items: DailyPlanItemView[]; sourceCode: string; sessionId: string | null; createdAt: string; updatedAt: string }
 interface TaskReportView { id: string; periodCode: 'day' | 'week'; periodStart: string; title: string; summaryMd: string; stats: Record<string, unknown>; sessionId: string | null; createdAt: string; updatedAt: string }
-interface KnowledgeEntry { id: string; kindCode: string; title: string; contentMd: string; tags: string[]; sourceTaskId: string | null; sourceSessionId: string | null; sourceReviewId: string | null; fileLink: string | null; createdAt: string; updatedAt: string }
+
+interface ReminderPolicyView {
+  enabled: boolean
+  immediatePriorities: string[]
+  digestPriorities: string[]
+  digestAt: string
+  quietHours: { start: string; end: string } | null
+  quietHoursBypassPriorities: string[]
+  hourlyLimit: number
+  dailyLimit: number
+  catchupWindowHours: number
+  catchupMaxItems: number
+  breakerCooldownMinutes: number
+  channel: 'auto' | 'wechat' | 'browser'
+}
+
+interface ReminderChannelView {
+  installed: boolean
+  configured: boolean
+  botId: string | null
+  targetId: string | null
+  botLabel: string | null
+  circuitOpen: boolean
+  circuitUntil: string | null
+  queued: number
+}
+
+interface ReminderOptionsView {
+  installed: boolean
+  bots: Array<{ botId: string; label: string; targets: Array<{ targetId: string; label: string; kind: string }> }>
+}interface KnowledgeEntry { id: string; kindCode: string; title: string; contentMd: string; tags: string[]; sourceTaskId: string | null; sourceSessionId: string | null; sourceReviewId: string | null; fileLink: string | null; createdAt: string; updatedAt: string }
 interface Idea { id: string; title: string; contentMd: string; kindCode: string; tags: string[]; sourceSessionId: string | null; createdAt: string; updatedAt: string }
 interface IdeaClusterView { id: string; title: string; summaryMd: string; tags: string[]; ideas: Idea[]; createdAt: string; updatedAt: string }
 interface Bootstrap { dictionaries: Dict[]; stats: { overdue: number; todayDue: number; doing: number; total: number }; todayPlan?: DailyPlanView | null }
@@ -1031,6 +1061,11 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   const [settings, setSettings] = useState<{ defaultWorkspace: string; autoCreateTypeFolders: boolean; desktopNotify: boolean }>({ defaultWorkspace: '', autoCreateTypeFolders: true, desktopNotify: true })
   const [notifyPerm, setNotifyPerm] = useState<NotificationPermission | 'unsupported'>(() => typeof Notification === 'undefined' ? 'unsupported' : Notification.permission)
   const [showSettings, setShowSettings] = useState(false)
+  // 微信提醒：策略 + 通道状态（通道可用性由 dsh-im 决定，未安装时静默降级）
+  const [reminderPolicy, setReminderPolicy] = useState<ReminderPolicyView | null>(null)
+  const [reminderChannel, setReminderChannel] = useState<ReminderChannelView | null>(null)
+  const [reminderOptions, setReminderOptions] = useState<ReminderOptionsView | null>(null)
+  const [reminderBusy, setReminderBusy] = useState(false)
   const [dictKind, setDictKind] = useState<'type' | 'status' | 'priority' | 'idea_kind'>('type')
   const [dictForm, setDictForm] = useState<{ name: string; code: string; color: string; sortOrder: number } | null>(null)
   const [dictEditCode, setDictEditCode] = useState<string | null>(null)
@@ -1120,6 +1155,19 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   }, [view, loadIdeas, ideaRefreshKey])
   useEffect(() => { void refresh().catch((e: unknown) => setError(e instanceof Error ? e.message : String(e))) }, [refresh])
   useEffect(() => { void api<{ settings: { defaultWorkspace: string; autoCreateTypeFolders: boolean; desktopNotify: boolean } }>('/api/workbench/settings').then((r) => setSettings(r.settings)).catch(() => undefined) }, [])
+
+  // 打开设置面板时加载微信提醒策略与通道状态（含自动发现的可选投递目标）
+  useEffect(() => {
+    if (!showSettings) return
+    void Promise.all([
+      api<{ policy: ReminderPolicyView }>('/api/workbench/reminders/policy'),
+      api<{ status: ReminderChannelView; options: ReminderOptionsView }>('/api/workbench/reminders/channel'),
+    ]).then(([policyResult, channelResult]) => {
+      setReminderPolicy(policyResult.policy)
+      setReminderChannel(channelResult.status)
+      setReminderOptions(channelResult.options)
+    }).catch(() => undefined)
+  }, [showSettings])
 
   const notifiedRef = useRef<Set<string>>(new Set())
   useEffect(() => {
@@ -1814,6 +1862,128 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                   try { new Notification('dsh-personal-workbench 通知测试', { body: '如果你看到这条系统通知，说明桌面提醒已正常工作。' }) } catch { /* ignore */ }
                 }}>发送测试通知</button>}
                 <span style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)' }}>DSH 页面保持打开（可最小化）即可收到</span>
+              </div>
+              <div className="full" style={{ marginTop: 14, borderTop: '1px solid var(--wb-border-soft)', paddingTop: 12 }}>
+                <div style={{ fontWeight: 700, marginBottom: 8 }}><Icon name="bell" /> 微信提醒</div>
+                {reminderChannel === null || reminderPolicy === null ? (
+                  <div style={{ fontSize: 12, color: '#999' }}>正在读取通道状态…</div>
+                ) : (
+                  <>
+                    <label className="full" style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                      <input type="checkbox" checked={reminderPolicy.enabled} onChange={(e) => setReminderPolicy((prev) => prev === null ? prev : { ...prev, enabled: e.target.checked })} />
+                      启用微信提醒（关闭时行为与原来完全一致）
+                    </label>
+
+                    {!reminderChannel.installed && (
+                      <div className="full" style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)', background: 'var(--wb-bg-soft, #f6f6f6)', padding: '6px 8px', borderRadius: 6, marginTop: 6 }}>
+                        未检测到 dsh-im，微信推送不可用，提醒将回落到页面横幅与桌面通知。安装命令：<code>pnpm add -g @xmanrui/dsh-im</code>（或 dsh plugin add @xmanrui/dsh-im）
+                      </div>
+                    )}
+                    {reminderChannel.installed && !reminderChannel.configured && (
+                      <div className="full" style={{ fontSize: 12, color: '#B26A00', background: 'var(--wb-bg-soft, #fff8e6)', padding: '6px 8px', borderRadius: 6, marginTop: 6 }}>
+                        已检测到 dsh-im，但还没有可用的投递目标。请先在微信里给机器人发一条消息，再回到这里点「刷新目标」。
+                      </div>
+                    )}
+                    {reminderChannel.circuitOpen && (
+                      <div className="full" style={{ fontSize: 12, color: '#B23A3A', background: 'var(--wb-bg-soft, #fdecec)', padding: '6px 8px', borderRadius: 6, marginTop: 6 }}>
+                        微信通道当前被 iLink 限流（{reminderChannel.circuitUntil === null ? '' : fmtTime(reminderChannel.circuitUntil)} 前不发送）。
+                        让手机微信给机器人发一条消息即可立即恢复。
+                      </div>
+                    )}
+
+                    {reminderChannel.installed && (
+                      <div className="full" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 8 }}>
+                        <select
+                          value={reminderChannel.botId ?? ''}
+                          onChange={(e) => {
+                            const botId = e.target.value
+                            const bot = reminderOptions?.bots.find((candidate) => candidate.botId === botId)
+                            setReminderChannel((prev) => prev === null ? prev : { ...prev, botId, targetId: bot?.targets[0]?.targetId ?? null })
+                          }}
+                          style={{ minWidth: 140 }}
+                        >
+                          <option value="">选择机器人…</option>
+                          {(reminderOptions?.bots ?? []).map((bot) => <option key={bot.botId} value={bot.botId}>{bot.label}</option>)}
+                        </select>
+                        <select
+                          value={reminderChannel.targetId ?? ''}
+                          onChange={(e) => setReminderChannel((prev) => prev === null ? prev : { ...prev, targetId: e.target.value })}
+                          style={{ minWidth: 160 }}
+                        >
+                          <option value="">选择投递目标…</option>
+                          {(reminderOptions?.bots.find((bot) => bot.botId === reminderChannel.botId)?.targets ?? []).map((target) => (
+                            <option key={target.targetId} value={target.targetId}>{target.label}</option>
+                          ))}
+                        </select>
+                        <button className="wb-btn" disabled={reminderBusy} onClick={() => {
+                          setReminderBusy(true)
+                          void api<{ status: ReminderChannelView }>('/api/workbench/reminders/channel', {
+                            method: 'POST', headers: { 'content-type': 'application/json' },
+                            body: JSON.stringify({ botId: reminderChannel.botId, targetId: reminderChannel.targetId }),
+                          }).then((r) => { setReminderChannel(r.status); setNotice('投递目标已保存') })
+                            .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
+                            .finally(() => setReminderBusy(false))
+                        }}><Icon name="check" />保存目标</button>
+                        <button className="wb-btn" disabled={reminderBusy} onClick={() => {
+                          setReminderBusy(true)
+                          void api<{ status: ReminderChannelView; options: ReminderOptionsView }>('/api/workbench/reminders/channel')
+                            .then((r) => { setReminderChannel(r.status); setReminderOptions(r.options); setNotice('已刷新通道状态') })
+                            .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
+                            .finally(() => setReminderBusy(false))
+                        }}><Icon name="refresh" />刷新目标</button>
+                        <button className="wb-btn" disabled={reminderBusy || !reminderChannel.configured} onClick={() => {
+                          setReminderBusy(true)
+                          void api<{ ok: boolean; reason?: string }>('/api/workbench/reminders/test', { method: 'POST' })
+                            .then((r) => setNotice(r.ok ? '测试消息已发送，请查看手机微信' : `发送失败：${r.reason ?? 'unknown'}`))
+                            .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
+                            .finally(() => setReminderBusy(false))
+                        }}><Icon name="bell" />发送测试消息</button>
+                        {reminderChannel.queued > 0 && <span style={{ fontSize: 12, color: '#999' }}>队列中 {reminderChannel.queued} 条待发</span>}
+                      </div>
+                    )}
+
+                    <div className="full" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 8, marginTop: 10 }}>
+                      <label>即时推送分级
+                        <input value={reminderPolicy.immediatePriorities.join(',')} onChange={(e) => setReminderPolicy((prev) => prev === null ? prev : { ...prev, immediatePriorities: e.target.value.split(',').map((v) => v.trim().toLowerCase()).filter(Boolean) })} placeholder="p0,p1" />
+                      </label>
+                      <label>汇总分级
+                        <input value={reminderPolicy.digestPriorities.join(',')} onChange={(e) => setReminderPolicy((prev) => prev === null ? prev : { ...prev, digestPriorities: e.target.value.split(',').map((v) => v.trim().toLowerCase()).filter(Boolean) })} placeholder="p2,p3" />
+                      </label>
+                      <label>每日汇总时间
+                        <input value={reminderPolicy.digestAt} onChange={(e) => setReminderPolicy((prev) => prev === null ? prev : { ...prev, digestAt: e.target.value })} placeholder="09:00" />
+                      </label>
+                      <label>静默时段开始
+                        <input value={reminderPolicy.quietHours?.start ?? ''} onChange={(e) => setReminderPolicy((prev) => prev === null ? prev : { ...prev, quietHours: e.target.value === '' ? null : { start: e.target.value, end: prev.quietHours?.end ?? '08:00' } })} placeholder="22:00（留空=不静默）" />
+                      </label>
+                      <label>静默时段结束
+                        <input value={reminderPolicy.quietHours?.end ?? ''} onChange={(e) => setReminderPolicy((prev) => prev === null ? prev : { ...prev, quietHours: e.target.value === '' ? null : { start: prev.quietHours?.start ?? '22:00', end: e.target.value } })} placeholder="08:00" />
+                      </label>
+                      <label>穿透静默的优先级
+                        <input value={reminderPolicy.quietHoursBypassPriorities.join(',')} onChange={(e) => setReminderPolicy((prev) => prev === null ? prev : { ...prev, quietHoursBypassPriorities: e.target.value.split(',').map((v) => v.trim().toLowerCase()).filter(Boolean) })} placeholder="p0" />
+                      </label>
+                      <label>每小时上限
+                        <input type="number" min={1} max={60} value={reminderPolicy.hourlyLimit} onChange={(e) => setReminderPolicy((prev) => prev === null ? prev : { ...prev, hourlyLimit: Number(e.target.value) })} />
+                      </label>
+                      <label>每日上限
+                        <input type="number" min={1} max={500} value={reminderPolicy.dailyLimit} onChange={(e) => setReminderPolicy((prev) => prev === null ? prev : { ...prev, dailyLimit: Number(e.target.value) })} />
+                      </label>
+                      <label>补发回溯（小时）
+                        <input type="number" min={1} max={168} value={reminderPolicy.catchupWindowHours} onChange={(e) => setReminderPolicy((prev) => prev === null ? prev : { ...prev, catchupWindowHours: Number(e.target.value) })} />
+                      </label>
+                    </div>
+                    <div className="full" style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                      <button className="wb-btn primary" disabled={reminderBusy} onClick={() => {
+                        setReminderBusy(true)
+                        void api<{ policy: ReminderPolicyView }>('/api/workbench/reminders/policy', {
+                          method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(reminderPolicy),
+                        }).then((r) => { setReminderPolicy(r.policy); setNotice('微信提醒策略已保存') })
+                          .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
+                          .finally(() => setReminderBusy(false))
+                      }}><Icon name="check" />保存提醒策略</button>
+                      <span style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)', alignSelf: 'center' }}>关掉浏览器后仍会推送；未安装 dsh-im 时自动回落</span>
+                    </div>
+                  </>
+                )}
               </div>
               <div className="full" style={{ marginTop: 14, borderTop: '1px solid var(--wb-border-soft)', paddingTop: 12 }}>
                 <div style={{ fontWeight: 700, marginBottom: 8 }}><Icon name="settings" /> 字典管理</div>

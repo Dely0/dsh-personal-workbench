@@ -81,6 +81,10 @@ export function apply(ctx: Context, config: Config = {}): void {
       resolveTarget: () => adapter.resolveTarget(),
     },
     policy: { read: () => readReminderPolicy(db), write: (raw) => writeReminderPolicy(db, raw) },
+    test: async () => {
+      const outcome = await adapter.send({ title: '工作台 · 微信提醒测试', body: `如果你在手机上看到这条消息，说明微信提醒已打通。\n时间：${new Date().toLocaleString('zh-CN', { hour12: false })}` })
+      return outcome.ok ? { ok: true } : { ok: false, reason: outcome.reason }
+    },
   })
   // 独立路由文件：保证热重载时新增/修复的“选择文件”“打开文件”“字典管理”接口能随入口模块一起重新加载。
   routes.unshift(makeDictionaryRoute(db), makeLocalDirRoute(), makeOpenFileRoute())
