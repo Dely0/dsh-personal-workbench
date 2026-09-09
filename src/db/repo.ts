@@ -866,22 +866,10 @@ export function abandonDraft(db: DatabaseSync, draftId: string, at = nowIso()): 
   setDraftStatus(db, draftId, 'abandoned', at)
 }
 
-// ---------------------------------------------------------------------------
-// task sessions
-// ---------------------------------------------------------------------------
+// 任务会话关联已抽到 repo/task-sessions.ts
+import { linkTaskSession } from './repo/task-sessions.js'
+export { linkTaskSession, listTaskSessions } from './repo/task-sessions.js'
 
-export function linkTaskSession(db: DatabaseSync, input: TaskSessionLinkInput, at = nowIso()): void {
-  db.prepare(`
-    INSERT INTO task_sessions (task_id, session_id, role_code, workspace, note, created_at, last_activity_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(task_id, session_id, role_code) DO UPDATE SET last_activity_at = excluded.last_activity_at
-  `).run(input.taskId, input.sessionId, input.roleCode, input.workspace ?? null, input.note ?? null, at, at)
-  appendEvent(db, input.taskId, 'session_linked', { actor: 'system', note: `${input.roleCode}:${input.sessionId}`, at })
-}
-
-export function listTaskSessions(db: DatabaseSync, taskId: string): Array<Record<string, unknown>> {
-  return db.prepare('SELECT * FROM task_sessions WHERE task_id = ? ORDER BY created_at').all(taskId) as Array<Record<string, unknown>>
-}
 
 // 任务共享记忆已抽到 repo/task-memory.ts
 export { getTaskRootId, getTaskMemory, listTaskMemories, addTaskMemory, getTaskMemoryContext } from './repo/task-memory.js'
