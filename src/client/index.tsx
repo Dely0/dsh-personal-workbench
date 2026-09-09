@@ -146,6 +146,21 @@ const fmtTime = (iso: string): string => {
   if (Number.isNaN(d.getTime())) return iso
   return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
+
+/** 草稿类型的中文短标签（待处理入口用）。 */
+const DRAFT_KIND_LABELS: Record<string, string> = {
+  task: '任务草稿',
+  subtask_plan: '子任务提案',
+  daily_plan: '今日计划提案',
+  report: '报告草稿',
+  knowledge: '知识条目',
+  idea_cluster: '点子王提案',
+  idea_tasks: '点子落地提案',
+  completion: '完成验收申请',
+  review: '复盘草稿',
+}
+const draftKindLabel = (kindCode: string): string => DRAFT_KIND_LABELS[kindCode] ?? '草稿'
+
 const ROLE_LABELS: Record<string, string> = {
   clarify: '澄清会话',
   consult: '协助会话',
@@ -567,6 +582,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [reminderModalOpen, setReminderModalOpen] = useState(false)
+  const [pendingOpen, setPendingOpen] = useState(false)
   const [settings, setSettings] = useState<{ defaultWorkspace: string; autoCreateTypeFolders: boolean; desktopNotify: boolean }>({ defaultWorkspace: '', autoCreateTypeFolders: true, desktopNotify: true })
   const [notifyPerm, setNotifyPerm] = useState<NotificationPermission | 'unsupported'>(() => typeof Notification === 'undefined' ? 'unsupported' : Notification.permission)
   const [showSettings, setShowSettings] = useState(false)
@@ -1372,6 +1388,8 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   })()
 
   const sessionListSnapshot = runtime.sessions.list.getSnapshot()
+  /** 待你处理的事项数：待确认草稿 1 条 + 到期提醒 N 条。 */
+  const pendingCount = (pendingDraft === null ? 0 : 1) + reminders.length
   const linkedSessionIds = new Set((selected?.sessions ?? []).map((s) => typeof s.session_id === 'string' ? s.session_id : '').filter((id) => id !== ''))
   const sessionQuery = sessionPickerQuery.trim().toLowerCase()
   const sessionCandidates = sessionListSnapshot.ids
@@ -1391,6 +1409,11 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
           <button className={`wb-seg ${view === 'ideas' ? 'on' : ''}`} onClick={() => setView('ideas')}><Icon name="idea" />点子</button>
         </div>
         <div style={{ flex: 1 }} />
+        {pendingCount > 0 && (
+          <button className="wb-pending-pill" onClick={() => setPendingOpen(true)} title="待你处理的草稿与提醒">
+            <Icon name="bell" size={13} />待处理 <span className="count">{pendingCount}</span>
+          </button>
+        )}
         <button className="wb-btn primary" onClick={() => setShowQuick((v) => !v)} disabled={busy}><Icon name="sparkles" /><span className="wb-label">快速录入</span></button>
         <button className="wb-btn" onClick={() => setShowForm((v) => !v)}><Icon name="plus" /><span className="wb-label">新建</span></button>
         <button className="wb-btn" onClick={() => setShowSettings((v) => !v)}><Icon name="settings" /><span className="wb-label">设置</span></button>
@@ -2316,6 +2339,33 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
             <label>截止时间<input type="datetime-local" value={editDraft.dueLocal} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, dueLocal: e.target.value })} /></label>
             <label className="full">AI 会话工作区（留空则继承父任务，父任务也没有才用默认）<input value={editDraft.workspacePath} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, workspacePath: e.target.value })} placeholder={settings.defaultWorkspace || '默认工作区未设置'} /></label>
             <label className="full">描述（Markdown）<textarea rows={6} value={editDraft.description} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, description: e.target.value })} /></label>
+          </div>
+        </Modal>
+      )}
+      {pendingOpen && (
+        <Modal
+          title={<>待你处理（{pendingCount}）</>}
+          size="sm"
+          onClose={() => setPendingOpen(false)}
+          footer={<button className="wb-btn" onClick={() => setPendingOpen(false)}>关闭</button>}
+        >
+          <div className="wb-scroll-area">
+            {pendingDraft !== null && (
+              <div className="wb-row" style={{ cursor: 'default', alignItems: 'flex-start' }}>
+                <span style={{ flex: 1 }}>
+                  <b>待确认的{draftKindLabel(pendingDraft.kindCode)}</b>
+                  <span className="wb-switch-desc">AI 已提交，确认后才会写入工作台。</span>
+                </span>
+                <button className="wb-btn primary" onClick={() => setPendingOpen(false)}>知道了</button>
+              </div>
+            )}
+            {reminders.map((r) => (
+              <div key={r.reminderId} className="wb-row" style={{ cursor: 'default' }}>
+                <span style={{ flex: 1 }}>{r.title} · {fmtTime(r.dueAt)}</span>
+                <button className="wb-btn" onClick={() => void fireReminder(r.reminderId)}>知道了</button>
+              </div>
+            ))}
+            {pendingCount === 0 && <p className="wb-hint">暂无待处理事项。</p>}
           </div>
         </Modal>
       )}
