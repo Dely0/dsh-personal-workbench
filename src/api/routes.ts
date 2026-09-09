@@ -14,7 +14,7 @@ import {
   createDraft, createTask, deleteDailyPlan, deleteIdea, deleteIdeaCluster, deleteKnowledge, deleteTaskReport, ensureRecurringInstances, fireReminder, getAiSession, getDailyPlan, getDictionary, getDraft, getDraftBySession,
   getIdea, getIdeaCluster, getKnowledge, getLatestPendingDraft, getTask, getTaskMemoryContext, getTaskReport, getTaskRootId, linkTaskSession, listArchivedTasks, listChildren,
   listDictionaries, listDueReminders, listIdeas, listIdeaClusters, listIdeaClustersForIdea, listKnowledge, listQueue, listReminders, listTaskEvents, listTaskMemories, listTaskReports, listTaskReviews,
-  listTaskSessions, listTasks, localDateString, registerAiSession, repairParentCompletion, restoreTask, updateDailyPlan, updateIdea, updateKnowledge, updateTask, updateTaskWithCompletion, type ReportPeriodCode, type TaskInput,
+  listTaskSessions, listTasks, localDateString, readMeta, writeMeta, registerAiSession, repairParentCompletion, restoreTask, updateDailyPlan, updateIdea, updateKnowledge, updateTask, updateTaskWithCompletion, type ReportPeriodCode, type TaskInput,
 } from '../db/repo.js'
 
 const TASKS_PREFIX = '/api/workbench/tasks'
@@ -199,10 +199,6 @@ function taskInputFromBody(body: Record<string, unknown>): TaskInput {
 }
 
 export function makeRoutes(db: DatabaseSync, deps: ReminderRouteDeps = {}): WebRoute[] {
-  const metaGet = (key: string): string | undefined => (db.prepare('SELECT value FROM meta WHERE key = ?').get(key) as { value: string } | undefined)?.value
-  const metaSet = (key: string, value: string): void => {
-    db.prepare("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(key, value)
-  }
   return [
     ...makeReminderRoutes(db, { channel: deps.channel, policy: deps.policy, test: deps.test, listDue: () => listDueReminders(db), fire: (id) => fireReminder(db, id) }),
     // ------------------------------------------------------------------ workspace ensure
@@ -234,22 +230,22 @@ export function makeRoutes(db: DatabaseSync, deps: ReminderRouteDeps = {}): WebR
           return writeJson(res, 200, {
             ok: true,
             settings: {
-              defaultWorkspace: metaGet('ai_default_workspace') ?? '',
-              autoCreateTypeFolders: (metaGet('auto_create_type_folders') ?? '1') === '1',
-              desktopNotify: (metaGet('desktop_notify') ?? '1') === '1',
+              defaultWorkspace: readMeta(db, 'ai_default_workspace') ?? '',
+              autoCreateTypeFolders: (readMeta(db, 'auto_create_type_folders') ?? '1') === '1',
+              desktopNotify: (readMeta(db, 'desktop_notify') ?? '1') === '1',
             },
           })
         }
         if (method === 'POST') {
           const body = await readJsonBody(req)
           if (body === undefined) return writeJson(res, 400, { error: 'invalid JSON body' })
-          if (typeof body.defaultWorkspace === 'string') metaSet('ai_default_workspace', body.defaultWorkspace)
-          if (body.autoCreateTypeFolders === true || body.autoCreateTypeFolders === false) metaSet('auto_create_type_folders', body.autoCreateTypeFolders ? '1' : '0')
-          if (body.desktopNotify === true || body.desktopNotify === false) metaSet('desktop_notify', body.desktopNotify ? '1' : '0')
+          if (typeof body.defaultWorkspace === 'string') writeMeta(db, 'ai_default_workspace', body.defaultWorkspace)
+          if (body.autoCreateTypeFolders === true || body.autoCreateTypeFolders === false) writeMeta(db, 'auto_create_type_folders', body.autoCreateTypeFolders ? '1' : '0')
+          if (body.desktopNotify === true || body.desktopNotify === false) writeMeta(db, 'desktop_notify', body.desktopNotify ? '1' : '0')
           return writeJson(res, 200, { ok: true, settings: {
-            defaultWorkspace: metaGet('ai_default_workspace') ?? '',
-            autoCreateTypeFolders: (metaGet('auto_create_type_folders') ?? '1') === '1',
-            desktopNotify: (metaGet('desktop_notify') ?? '1') === '1',
+            defaultWorkspace: readMeta(db, 'ai_default_workspace') ?? '',
+            autoCreateTypeFolders: (readMeta(db, 'auto_create_type_folders') ?? '1') === '1',
+            desktopNotify: (readMeta(db, 'desktop_notify') ?? '1') === '1',
           } })
         }
         return writeJson(res, 405, { error: 'method not allowed' })
