@@ -1516,16 +1516,7 @@ export function confirmDailyPlanDraft(db: DatabaseSync, draftId: string, at = no
     if (task === undefined) throw new Error(`daily_plan contains unknown task ${taskId}`)
     items.push({ taskId, order: typeof raw.order === 'number' ? raw.order : items.length + 1, title: task.title, note: typeof raw.note === 'string' ? raw.note : '' })
   }
-  db.exec('BEGIN')
-  try {
-    const plan = saveDailyPlan(db, { planDate, summary: payload.summary ?? '', items, sourceCode: 'ai', sessionId: draft.sessionId }, at)
-    setDraftStatus(db, draftId, 'confirmed', at)
-    db.exec('COMMIT')
-    return plan
-  } catch (error) {
-    db.exec('ROLLBACK')
-    throw error
-  }
+  return withDraftConfirm(db, draftId, 'daily_plan', () => saveDailyPlan(db, { planDate, summary: payload.summary ?? '', items, sourceCode: 'ai', sessionId: draft.sessionId }, at), { at })
 }
 
 export function getPendingDailyPlanDraft(db: DatabaseSync, sessionId: string | null, planDate?: string): DraftRow | undefined {
@@ -1635,23 +1626,14 @@ export function confirmReportDraft(db: DatabaseSync, draftId: string, at = nowIs
   const title = typeof payload.title === 'string' && payload.title.trim() !== '' ? payload.title : payload.periodCode === 'day' ? `${payload.periodStart} 日报` : `${payload.periodStart} 周报`
   const summaryMd = typeof payload.summaryMd === 'string' ? payload.summaryMd : ''
   if (summaryMd.trim() === '') throw new Error('report requires summary_md')
-  db.exec('BEGIN')
-  try {
-    const report = saveTaskReport(db, {
-      periodCode: payload.periodCode,
-      periodStart: payload.periodStart,
-      title,
-      summaryMd,
-      stats: payload.stats ?? {},
-      sessionId: draft.sessionId,
-    }, at)
-    setDraftStatus(db, draftId, 'confirmed', at)
-    db.exec('COMMIT')
-    return report
-  } catch (error) {
-    db.exec('ROLLBACK')
-    throw error
-  }
+  return withDraftConfirm(db, draftId, 'report', () => saveTaskReport(db, {
+    periodCode: payload.periodCode as ReportPeriodCode,
+    periodStart: payload.periodStart as string,
+    title,
+    summaryMd,
+    stats: payload.stats ?? {},
+    sessionId: draft.sessionId,
+  }, at), { at })
 }
 
 export function getPendingReportDraft(db: DatabaseSync, sessionId: string | null, periodCode?: string, periodStart?: string): DraftRow | undefined {
@@ -1992,25 +1974,16 @@ export function confirmKnowledgeDraft(db: DatabaseSync, draftId: string, actor =
   if (title === '') throw new Error('knowledge requires a non-empty title')
   const contentMd = typeof payload.contentMd === 'string' ? payload.contentMd : ''
   if (contentMd.trim() === '') throw new Error('knowledge requires content')
-  db.exec('BEGIN')
-  try {
-    const entry = createKnowledge(db, {
-      kindCode: payload.kindCode ?? 'note',
-      title,
-      contentMd,
-      tags: Array.isArray(payload.tags) ? payload.tags : [],
-      sourceTaskId: typeof payload.sourceTaskId === 'string' ? payload.sourceTaskId : null,
-      sourceSessionId: typeof payload.sourceSessionId === 'string' ? payload.sourceSessionId : draft.sessionId,
-      sourceReviewId: typeof payload.sourceReviewId === 'string' ? payload.sourceReviewId : null,
-      fileLink: typeof payload.fileLink === 'string' ? payload.fileLink : null,
-    }, at)
-    setDraftStatus(db, draftId, 'confirmed', at)
-    db.exec('COMMIT')
-    return entry
-  } catch (error) {
-    db.exec('ROLLBACK')
-    throw error
-  }
+  return withDraftConfirm(db, draftId, 'knowledge', () => createKnowledge(db, {
+    kindCode: payload.kindCode ?? 'note',
+    title,
+    contentMd,
+    tags: Array.isArray(payload.tags) ? payload.tags : [],
+    sourceTaskId: typeof payload.sourceTaskId === 'string' ? payload.sourceTaskId : null,
+    sourceSessionId: typeof payload.sourceSessionId === 'string' ? payload.sourceSessionId : draft.sessionId,
+    sourceReviewId: typeof payload.sourceReviewId === 'string' ? payload.sourceReviewId : null,
+    fileLink: typeof payload.fileLink === 'string' ? payload.fileLink : null,
+  }, at), { at })
 }
 
 export function getPendingKnowledgeDraft(db: DatabaseSync, sessionId: string | null): DraftRow | undefined {
@@ -2204,9 +2177,8 @@ export function confirmIdeaClusterDraft(db: DatabaseSync, draftId: string, actor
     title?: string; summary?: string; idea_ids?: string[]; notes?: Record<string, string>
   }> : []
   if (clusters.length === 0) throw new Error('idea_cluster draft requires at least one cluster')
-  const created: IdeaClusterRow[] = []
-  db.exec('BEGIN')
-  try {
+  return withDraftConfirm(db, draftId, 'idea_cluster', (): IdeaClusterRow[] => {
+    const created: IdeaClusterRow[] = []
     for (const cluster of clusters) {
       const title = typeof cluster.title === 'string' && cluster.title.trim() !== '' ? cluster.title.trim() : '未命名点子王'
       const ideaIds = Array.isArray(cluster.idea_ids) ? cluster.idea_ids.filter((id): id is string => typeof id === 'string') : []
@@ -2220,13 +2192,8 @@ export function confirmIdeaClusterDraft(db: DatabaseSync, draftId: string, actor
       }, at)
       created.push(getIdeaCluster(db, clusterId)!)
     }
-    setDraftStatus(db, draftId, 'confirmed', at)
-    db.exec('COMMIT')
     return created
-  } catch (error) {
-    db.exec('ROLLBACK')
-    throw error
-  }
+  }, { at, emptyValue: [] })
 }
 
 export function confirmIdeaTaskDraft(db: DatabaseSync, draftId: string, actor = 'user', at = nowIso()): TaskRow[] {
@@ -2236,8 +2203,7 @@ export function confirmIdeaTaskDraft(db: DatabaseSync, draftId: string, actor = 
   if (tasks.length === 0) throw new Error('idea_tasks draft requires at least one task')
   const sourceIdeaIds = Array.isArray(draft.payload.sourceIdeaIds) ? draft.payload.sourceIdeaIds.filter((id): id is string => typeof id === 'string') : []
   const sourceClusterId = typeof draft.payload.sourceClusterId === 'string' ? draft.payload.sourceClusterId : null
-  db.exec('BEGIN')
-  try {
+  return withDraftConfirm(db, draftId, 'idea_tasks', (): TaskRow[] => {
     const created: TaskRow[] = []
     const validCode = (kind: string, code: string | undefined, fallback: string): string => {
       if (code !== undefined && getDictionary(db, kind, code)?.active === 1) return code
@@ -2267,13 +2233,8 @@ export function confirmIdeaTaskDraft(db: DatabaseSync, draftId: string, actor = 
     }
     walk(tasks, null)
     if (created.length === 0) throw new Error('idea_tasks draft contains no valid tasks')
-    setDraftStatus(db, draftId, 'confirmed', at)
-    db.exec('COMMIT')
     return created
-  } catch (error) {
-    db.exec('ROLLBACK')
-    throw error
-  }
+  }, { at, emptyValue: [] })
 }
 
 export function getPendingDraftForSession(db: DatabaseSync, sessionId: string | null, kindCode: string): DraftRow | undefined {
