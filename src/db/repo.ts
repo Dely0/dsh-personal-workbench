@@ -4,11 +4,13 @@
  */
 import { randomUUID } from 'node:crypto'
 import type { DatabaseSync } from 'node:sqlite'
+import { nowIso, getDraft, setDraftStatus, withDraftConfirm, parseDraft, type DraftRow, type RawDraftRow } from './repo/shared.js'
+export { nowIso, getDraft, setDraftStatus, withDraftConfirm } from './repo/shared.js'
+export type { DraftRow } from './repo/shared.js'
 import { effectiveDueAtForTask, effectiveWorkspacePathForTask, parseTask, appendEvent, collectArchivedDescendants, type RawTaskRow } from './repo/task-primitives.js'
 export { effectiveDueAtForTask, effectiveWorkspacePathForTask, parseTask, appendEvent } from './repo/task-primitives.js'
 export type { RawTaskRow } from './repo/task-primitives.js'
 
-export const nowIso = (): string => new Date().toISOString()
 
 /** 服务器本地时区的 YYYY-MM-DD；每日计划按本地“天”划分。 */
 export function localDateString(date = new Date()): string {
@@ -137,25 +139,7 @@ export type { TaskReviewInput } from './repo/status.js'
 // drafts
 // ---------------------------------------------------------------------------
 
-export interface DraftRow {
-  id: string
-  kindCode: string
-  sessionId: string | null
-  payload: Record<string, unknown>
-  statusCode: string
-  createdAt: string
-  updatedAt: string
-}
 
-interface RawDraftRow {
-  id: string
-  kind_code: string
-  session_id: string | null
-  payload_json: string
-  status_code: string
-  created_at: string
-  updated_at: string
-}
 
 /** 提案类草稿里的单个任务节点：工具侧写 snake_case，表单/任务草稿侧写 camelCase。 */
 export type DraftTaskItem = Partial<TaskInput> & Record<string, unknown>
@@ -201,18 +185,6 @@ function findSiblingByTitle(db: DatabaseSync, parentId: string | null, title: st
   return listTasks(db, { parentId, includeArchived: true }).find((task) => task.title.trim() === normalized)
 }
 
-function parseDraft(row: RawDraftRow | undefined): DraftRow | undefined {
-  if (row === undefined) return undefined
-  return {
-    id: row.id,
-    kindCode: row.kind_code,
-    sessionId: row.session_id,
-    payload: JSON.parse(row.payload_json) as Record<string, unknown>,
-    statusCode: row.status_code,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  }
-}
 
 export function createDraft(db: DatabaseSync, input: DraftInput, at = nowIso()): DraftRow {
   const id = randomUUID()
@@ -232,9 +204,6 @@ export function createDraft(db: DatabaseSync, input: DraftInput, at = nowIso()):
   return row
 }
 
-export function getDraft(db: DatabaseSync, id: string): DraftRow | undefined {
-  return parseDraft(db.prepare('SELECT * FROM task_drafts WHERE id = ?').get(id) as RawDraftRow | undefined)
-}
 
 export function updateDraft(db: DatabaseSync, id: string, payload: Record<string, unknown>, at = nowIso()): DraftRow | undefined {
   const draft = getDraft(db, id)
@@ -247,13 +216,6 @@ export function getDraftBySession(db: DatabaseSync, sessionId: string): DraftRow
   return parseDraft(db.prepare('SELECT * FROM task_drafts WHERE session_id = ? AND status_code = \'pending\' ORDER BY created_at DESC LIMIT 1').get(sessionId) as RawDraftRow | undefined)
 }
 
-export function setDraftStatus(db: DatabaseSync, id: string, statusCode: string, at = nowIso()): void {
-  db.prepare('UPDATE task_drafts SET status_code = ?, updated_at = ? WHERE id = ?').run(statusCode, at, id)
-}
-
-// withDraftConfirm 已抽到 repo/shared.ts；此处再导出保持对外 API 不变
-import { withDraftConfirm } from './repo/shared.js'
-export { withDraftConfirm } from './repo/shared.js'
 
 
 export function confirmTaskDraft(db: DatabaseSync, draftId: string, actor = 'user', at = nowIso()): TaskRow | undefined {
