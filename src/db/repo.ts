@@ -770,12 +770,14 @@ export function confirmSubtaskPlanDraft(db: DatabaseSync, draftId: string, actor
         if (getDictionary(db, 'type', typeCode)?.active !== 1) continue
         if (getDictionary(db, 'priority', priorityCode)?.active !== 1) continue
         const dueAt = typeof item.dueAt === 'string' ? item.dueAt : typeof item.due_at === 'string' ? item.due_at : null
+        const estimate = item.estimatedMinutes ?? item.estimated_minutes
         const task = createTask(db, {
           title,
           description: typeof item.description === 'string' ? item.description : undefined,
           typeCode,
           priorityCode,
           dueAt,
+          estimatedMinutes: typeof estimate === 'number' ? estimate : undefined,
           parentId,
           extra: item.extra ?? {},
         }, actor, at)
@@ -1928,13 +1930,14 @@ export function confirmIdeaTaskDraft(db: DatabaseSync, draftId: string, actor = 
         if (title === '') continue
         const typeCode = validCode('type', String(item.typeCode ?? item.type_code ?? ''), 'personal')
         const priorityCode = validCode('priority', String(item.priorityCode ?? item.priority_code ?? ''), 'p2')
+        const estimate = item.estimatedMinutes ?? item.estimated_minutes
         const task = createTask(db, {
           title,
           description: typeof item.description === 'string' ? item.description : undefined,
           typeCode,
           priorityCode,
           dueAt: typeof item.dueAt === 'string' ? item.dueAt : typeof item.due_at === 'string' ? item.due_at : null,
-          estimatedMinutes: typeof item.estimatedMinutes === 'number' ? item.estimatedMinutes : null,
+          estimatedMinutes: typeof estimate === 'number' ? estimate : null,
           aiPolicyCode: validCode('ai_policy', typeof item.aiPolicyCode === 'string' ? item.aiPolicyCode : undefined, 'consult'),
           parentId,
           extra: { sourceIdeaIds, sourceClusterId, source: 'idea' },
