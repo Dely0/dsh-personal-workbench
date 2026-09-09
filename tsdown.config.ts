@@ -28,6 +28,14 @@ const clientConfig: UserConfig = {
   minify: true,
   sourcemap: false,
   clean: false,
+  /**
+   * react-dom 是 CommonJS 且带 `process.env.NODE_ENV` 分支；浏览器没有 process，
+   * 不折叠这处引用会让插件在 `__ModuleLoader__` 里直接抛 "process is not defined"。
+   * 固定成 production 同时把 React 的开发期告警代码整段摇掉。
+   */
+  define: {
+    'process.env.NODE_ENV': JSON.stringify('production'),
+  },
   deps: {
     neverBundle: [...EXTERNALS],
     alwaysBundle: (id: string) => !EXTERNALS.includes(id),
