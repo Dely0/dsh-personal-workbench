@@ -59,7 +59,7 @@ export async function readJsonBody(req: IncomingMessage, maxBytes = 256 * 1024):
   } catch { return undefined }
 }
 
-const MAX_LOCAL_DOC_BYTES = 1024 * 1024
+export const MAX_LOCAL_DOC_BYTES = 1024 * 1024
 
 /** 把 file:// URL 或绝对路径转成服务器本地文件路径。 */
 export function fileLinkToPath(link: string): string {
@@ -108,7 +108,7 @@ export function todayRange(now: Date): { start: string; end: string } {
   return { start: start.toISOString(), end: end.toISOString() }
 }
 
-const PERIOD_DATE_RE = /^\d{4}-\d{2}-\d{2}$/
+export const PERIOD_DATE_RE = /^\d{4}-\d{2}-\d{2}$/
 
 export function periodRange(periodCode: ReportPeriodCode, periodStart: string): { start: string; end: string } | undefined {
   if (!PERIOD_DATE_RE.test(periodStart)) return undefined
