@@ -157,17 +157,9 @@ import { addReminder } from './repo/reminders.js'
 export { listDueReminders, listReminders, fireReminder, addReminder } from './repo/reminders.js'
 export type { DueReminder, TaskReminderRow } from './repo/reminders.js'
 
-// ---------------------------------------------------------------------------
-// meta（键值设置：默认工作区、提醒策略等）
-// ---------------------------------------------------------------------------
+// meta 已抽到 repo/meta.ts
+export { readMeta, writeMeta } from './repo/meta.js'
 
-export function readMeta(db: DatabaseSync, key: string): string | undefined {
-  return (db.prepare('SELECT value FROM meta WHERE key = ?').get(key) as { value: string } | undefined)?.value
-}
-
-export function writeMeta(db: DatabaseSync, key: string, value: string): void {
-  db.prepare('INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(key, value)
-}
 
 // 提醒队列已抽到 repo/reminder-queue.ts
 export {
