@@ -96,6 +96,10 @@ export interface DraftView {
   sessionId: string | null
   payload: Record<string, unknown>
   statusCode: string
+  /** 非空表示已「暂存」：仍是待确认，但不再自动弹窗 */
+  deferredAt: string | null
+  /** 累计暂存次数 */
+  deferCount: number
   createdAt: string
   updatedAt: string
 }
@@ -117,6 +121,8 @@ export interface ReminderPolicyView {
   catchupMaxItems: number
   breakerCooldownMinutes: number
   channel: 'auto' | 'wechat' | 'browser'
+  /** 草稿通知：哪些草稿类型推送到微信（空数组 = 全部不推） */
+  draftNotifyKinds: string[]
 }
 
 export interface ReminderChannelStatus {
@@ -219,6 +225,27 @@ export interface KnowledgeView {
 }
 
 // ---------------------------------------------------------------------------
+// 技能目录（AI 会话前的 Skill 选择器）
+// ---------------------------------------------------------------------------
+
+/** 技能摘要：不含正文（正文由模型侧 skill 工具按需加载）。 */
+export interface SkillSummary {
+  name: string
+  description: string
+  whenToUse?: string
+  provider: string
+  source: string
+  userInvocable: boolean
+  modelInvocable: boolean
+}
+
+/**
+ * available=false 表示宿主未注册 skills 服务（或技能发现失败），
+ * 此时 skills 为空数组，前端隐藏选择器、保持既有行为。
+ */
+export interface SkillsResponse { ok: true; available: boolean; skills: SkillSummary[]; error?: string }
+
+// ---------------------------------------------------------------------------
 // 响应封装
 // ---------------------------------------------------------------------------
 
@@ -237,7 +264,7 @@ export interface ReminderChannelResponse { ok: true; status: ReminderChannelStat
 export interface ReminderChannelSaveResponse { ok: true; status: ReminderChannelStatus }
 export interface ReminderTestResponse { ok: boolean; reason?: string }
 export interface DueRemindersResponse { ok: true; reminders: DueReminderView[] }
-export interface DraftResponse { ok: true; draft: DraftView | null }
+export interface DraftResponse { ok: true; draft: DraftView | null; /** 仅无 session_id 的列表查询返回 */ deferredDrafts?: DraftView[] }
 export interface DraftsResponse { ok: true; drafts: DraftView[] }
 export interface IdeasResponse { ok: true; ideas: IdeaView[] }
 export interface KnowledgeResponse { ok: true; entries: KnowledgeView[] }

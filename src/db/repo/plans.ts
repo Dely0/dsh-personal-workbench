@@ -6,6 +6,7 @@
 import { randomUUID } from 'node:crypto'
 import type { DatabaseSync } from 'node:sqlite'
 import { nowIso, getDraft, withDraftConfirm, getTask, type DraftRow } from '../repo.js'
+import { parseDraft, type RawDraftRow } from './shared.js'
 
 
 export interface DailyPlanItem {
@@ -166,15 +167,7 @@ export function getPendingDailyPlanDraft(db: DatabaseSync, sessionId: string | n
     if (row.session_id !== sessionId) continue
     const payload = JSON.parse(row.payload_json) as Record<string, unknown>
     if (planDate !== undefined && payload.planDate !== planDate) continue
-    return {
-      id: row.id,
-      kindCode: row.kind_code,
-      sessionId: row.session_id,
-      payload,
-      statusCode: row.status_code,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-    }
+    return parseDraft(row as unknown as RawDraftRow)
   }
   return undefined
 }

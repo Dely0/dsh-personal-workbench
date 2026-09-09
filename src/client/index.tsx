@@ -28,11 +28,14 @@ import { DraftBanner } from './components/DraftBanner.js'
 import { MarkdownText } from './components/MarkdownText.js'
 import { ToastHost, useToasts } from './components/Toast.js'
 import { api } from './api.js'
+import { withSkillPromptBlock } from './skillPrompt.js'
 import type {
   DraftView,
   ReminderChannelStatus as ReminderChannelView,
   ReminderOptionsView,
   ReminderPolicyView,
+  SkillsResponse,
+  SkillSummary,
 } from '../shared/contracts.js'
 import { Icon } from './components/Icon.js'
 import { Badge, MultiSelectDropdown, TaskTreeRows, countTaskTree } from './components/TaskList.js'
@@ -66,6 +69,8 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   const [showQuick, setShowQuick] = useState(false)
   const [quickText, setQuickText] = useState('')
   const [pendingDraft, setPendingDraft] = useState<DraftView | null>(null)
+  // 已暂存的待确认草稿（验收类）：不自动弹窗，只在「待处理」弹窗里等你唤回
+  const [deferredDrafts, setDeferredDrafts] = useState<DraftView[]>([])
   const [reminders, setReminders] = useState<Array<{ reminderId: string; taskId: string; title: string; dueAt: string; methodCode: string }>>([])
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
@@ -121,7 +126,13 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   const [todayPlanSession, setTodayPlanSession] = useState<{ sessionId: string } | null>(null)
   const [busy, setBusy] = useState(false)
   const [promptModal, setPromptModal] = useState<{ title: string; value: string } | null>(null)
-  const promptResolveRef = useRef<((value: string | null) => void) | null>(null)
+  const promptResolveRef = useRef<((value: { text: string; skills: string[] } | null) => void) | null>(null)
+  // AI 会话前的 Skill 选择器：列表来自宿主 skills 注册表（未安装时 available=false，选择器隐藏）
+  const [skillCatalog, setSkillCatalog] = useState<SkillSummary[]>([])
+  const [skillsAvailable, setSkillsAvailable] = useState(false)
+  const [skillsLoading, setSkillsLoading] = useState(false)
+  const [skillQuery, setSkillQuery] = useState('')
+  const [selectedSkills, setSelectedSkills] = useState<string[]>([])
   const selectedRef = useRef<string | null>(null)
 
   const dicts = useMemo(() => bootstrap?.dictionaries ?? [], [bootstrap])
@@ -141,6 +152,18 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
         setSelected({ ...detail, events: ev.events, reviews: rv.reviews })
       } catch { setSelected(null); selectedRef.current = null }
     }
+  }, [])
+
+  /** 技能目录：打开提示词弹窗时按需拉取一次；失败时降级为空目录（选择器隐藏）。 */
+  const loadSkills = useCallback(async (): Promise<void> => {
+    setSkillsLoading(true)
+    try {
+      const res = await api<SkillsResponse>('/api/workbench/skills')
+      setSkillCatalog(res.skills)
+      setSkillsAvailable(res.available && res.skills.length > 0)
+    } catch {
+      setSkillCatalog([]); setSkillsAvailable(false)
+    } finally { setSkillsLoading(false) }
   }, [])
 
   const loadKnowledge = useCallback(async () => {
@@ -204,8 +227,8 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
     let alive = true
     const tick = async () => {
       try {
-        const res = await api<{ draft: DraftView | null }>('/api/workbench/drafts')
-        if (alive) setPendingDraft(res.draft)
+        const res = await api<{ draft: DraftView | null; deferredDrafts?: DraftView[] }>('/api/workbench/drafts')
+        if (alive) { setPendingDraft(res.draft); setDeferredDrafts(res.deferredDrafts ?? []) }
         const r = await api<{ reminders: Array<{ reminderId: string; taskId: string; title: string; dueAt: string; methodCode: string }> }>('/api/workbench/reminders/due')
         if (!alive) return
         setReminders(r.reminders)
@@ -314,22 +337,29 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
     }
   }
 
-  const askUserPrompt = (title: string): Promise<string | null> => new Promise((resolve) => {
+  const askUserPrompt = (title: string): Promise<{ text: string; skills: string[] } | null> => new Promise((resolve) => {
     promptResolveRef.current = resolve
     setPromptModal({ title, value: '' })
+    setSkillQuery('')
+    setSelectedSkills([])
+    void loadSkills()
   })
   const confirmPrompt = (): void => {
     const resolve = promptResolveRef.current
     promptResolveRef.current = null
     const value = promptModal?.value ?? ''
+    const skills = [...selectedSkills]
     setPromptModal(null)
-    resolve?.(value)
+    resolve?.({ text: value, skills })
   }
   const cancelPrompt = (): void => {
     const resolve = promptResolveRef.current
     promptResolveRef.current = null
     setPromptModal(null)
     resolve?.(null)
+  }
+  const toggleSkill = (name: string): void => {
+    setSelectedSkills((prev) => prev.includes(name) ? prev.filter((item) => item !== name) : [...prev, name])
   }
   const AI_PROMPT_LABELS: Record<string, string> = {
     plan: 'AI 智能排序 / 今日计划',
@@ -344,8 +374,11 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   }
   const startAISession = async (mode: 'clarify' | 'consult' | 'breakdown' | 'execute' | 'review' | 'plan' | 'report' | 'idea_association' | 'idea_brainstorm' | 'knowledge_doc', task: Task | null, text: string, previousSessions: Array<Record<string, unknown>> = [], docContext?: { fileLink: string; content: string; name?: string; truncated?: boolean }): Promise<void> => {
     if (mode === 'clarify' && text.trim() === '') return
-    const customPrompt = mode === 'clarify' ? '' : await askUserPrompt(AI_PROMPT_LABELS[mode] ?? 'AI 会话')
-    if (customPrompt === null) return
+    // 澄清会话由自然语言快速录入直接触发，不弹提示词弹窗，也不参与技能选择（保持原流程）。
+    const promptInput = mode === 'clarify' ? { text: '', skills: [] as string[] } : await askUserPrompt(AI_PROMPT_LABELS[mode] ?? 'AI 会话')
+    if (promptInput === null) return
+    const customPrompt = promptInput.text
+    const skillNames = promptInput.skills
     const planAnchor = mode === 'plan' ? (/^\d{4}-\d{2}-\d{2}$/.test(text) ? text : localDateString()) : ''
     setBusy(true); setError(null)
     try {
@@ -494,7 +527,9 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
         if (task.aiPolicyCode !== 'execute') throw new Error('该任务未开启“可执行”，请先在任务详情中把 AI 策略改为“可执行”')
       }
       if (mode === 'clarify') setShowQuick(false)
-      const finalPrompt = customPrompt.trim() === '' ? prompt : `${prompt}\n\n用户补充要求：\n${customPrompt.trim()}`
+      const basePrompt = customPrompt.trim() === '' ? prompt : `${prompt}\n\n用户补充要求：\n${customPrompt.trim()}`
+      // 选中的技能以"加载指令"形式前置（不内联技能正文）；未选技能时逐字等于原提示词。
+      const finalPrompt = withSkillPromptBlock(basePrompt, skillNames)
       const result = await binding.session.prompt([{ type: 'text', text: finalPrompt }], 'queue')
       if (result.ok === false) throw new Error(result.error !== undefined ? String(result.error) : '发送失败')
       if (mode === 'plan') {
@@ -773,6 +808,15 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   const collapseAll = (): void => { setExpanded(new Set()); setTodayExpanded(new Set()); setCalendarExpanded(new Set()) }
 
   const priorityWeights = useMemo(() => new Map(dictOf('priority').map((d) => [d.code, Number(d.config.weight ?? 99)])), [dicts])
+  // 技能选择器：按名称/描述/适用场景过滤（大小写不敏感）
+  const visibleSkills = useMemo(() => {
+    const query = skillQuery.trim().toLowerCase()
+    if (query === '') return skillCatalog
+    return skillCatalog.filter((skill) =>
+      skill.name.toLowerCase().includes(query) ||
+      skill.description.toLowerCase().includes(query) ||
+      (skill.whenToUse ?? '').toLowerCase().includes(query))
+  }, [skillCatalog, skillQuery])
   const taskSorter = useMemo(() => createTaskSorter(taskSortKey, taskSortDir, priorityWeights), [taskSortKey, taskSortDir, priorityWeights])
   const visibleTaskTree = useMemo(() => {
     const source = archivedMode ? archivedTasks : tasks
@@ -876,8 +920,18 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   })()
 
   const sessionListSnapshot = runtime.sessions.list.getSnapshot()
-  /** 待你处理的事项数：待确认草稿 1 条 + 到期提醒 N 条。 */
-  const pendingCount = (pendingDraft === null ? 0 : 1) + reminders.length
+  /** 待你处理的事项数：待确认草稿 + 已暂存草稿 + 到期提醒。 */
+  const pendingCount = (pendingDraft === null ? 0 : 1) + deferredDrafts.length + reminders.length
+  /** 唤回一份暂存草稿：清掉暂存标记，它会立刻重新弹出待确认弹窗。 */
+  const resumeDeferredDraft = async (draftId: string): Promise<void> => {
+    try {
+      await api(`/api/workbench/drafts/${draftId}/resume`, { method: 'POST' })
+      setPendingOpen(false)
+      const res = await api<{ draft: DraftView | null; deferredDrafts?: DraftView[] }>('/api/workbench/drafts')
+      setPendingDraft(res.draft); setDeferredDrafts(res.deferredDrafts ?? [])
+      setNotice('已唤回，待你验收')
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)) }
+  }
   const linkedSessionIds = new Set((selected?.sessions ?? []).map((s) => typeof s.session_id === 'string' ? s.session_id : '').filter((id) => id !== ''))
   const sessionQuery = sessionPickerQuery.trim().toLowerCase()
   const sessionCandidates = sessionListSnapshot.ids
@@ -911,10 +965,53 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
 
       {promptModal !== null && (
         <div className="wb-modal-mask" onClick={cancelPrompt}>
-          <div className="wb-modal" onClick={(e) => e.stopPropagation()}>
+          <div className="wb-modal" style={skillsAvailable ? { width: 'min(620px, 94vw)' } : undefined} onClick={(e) => e.stopPropagation()}>
             <h4>补充 AI 提示词</h4>
             <p>{promptModal.title}：可留空，留空则继续使用原有默认提示词；填写后会在默认提示词末尾追加你的补充要求。</p>
             <textarea autoFocus value={promptModal.value} onChange={(e) => setPromptModal((prev) => prev === null ? prev : { ...prev, value: e.target.value })} placeholder="输入你想追加给 AI 的补充要求…" />
+            {skillsAvailable && (
+              <div className="wb-skill-picker">
+                <div className="wb-skill-picker-head">
+                  <span><Icon name="skill" size={13} /> 加载 Skill</span>
+                  <span className="wb-skill-count">{selectedSkills.length > 0 ? `已选 ${selectedSkills.length}` : '可选'}</span>
+                </div>
+                <input
+                  className="wb-skill-search"
+                  value={skillQuery}
+                  onChange={(e) => setSkillQuery(e.target.value)}
+                  placeholder={`搜索技能名或描述（共 ${skillCatalog.length} 个）`}
+                />
+                {selectedSkills.length > 0 && (
+                  <div className="wb-skill-selected">
+                    {selectedSkills.map((name) => (
+                      <button key={name} type="button" className="wb-skill-tag" onClick={() => toggleSkill(name)} title="点击移除">
+                        {name}<span aria-hidden="true">×</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <div className="wb-skill-list">
+                  {skillsLoading && <div className="wb-skill-hint">加载技能目录…</div>}
+                  {!skillsLoading && visibleSkills.length === 0 && (
+                    <div className="wb-skill-hint">{skillCatalog.length === 0 ? '本机暂无可选技能' : '没有匹配的技能'}</div>
+                  )}
+                  {!skillsLoading && visibleSkills.map((skill) => {
+                    const checked = selectedSkills.includes(skill.name)
+                    return (
+                      <label key={skill.name} className={`wb-skill-item${checked ? ' on' : ''}`} title={skill.whenToUse ?? skill.description}>
+                        <input type="checkbox" checked={checked} onChange={() => toggleSkill(skill.name)} />
+                        <span className="wb-skill-body">
+                          <span className="wb-skill-name">{skill.name}</span>
+                          <span className="wb-skill-desc">{skill.description || '（无描述）'}</span>
+                        </span>
+                        <span className="wb-skill-provider">{skill.provider}</span>
+                      </label>
+                    )
+                  })}
+                </div>
+                <div className="wb-skill-foot">选中后会在提示词开头注入“请加载这些技能”的指令，技能正文由 AI 按需加载。</div>
+              </div>
+            )}
             <div className="wb-modal-actions">
               <button className="wb-btn" onClick={cancelPrompt}>取消</button>
               <button className="wb-btn primary" onClick={confirmPrompt}>开始</button>
@@ -1845,6 +1942,23 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                   <span className="wb-switch-desc">AI 已提交，确认后才会写入工作台。</span>
                 </span>
                 <button className="wb-btn primary" onClick={() => setPendingOpen(false)}>知道了</button>
+              </div>
+            )}
+            {deferredDrafts.length > 0 && (
+              <div style={{ marginTop: pendingDraft === null ? 0 : 10 }}>
+                <div className="wb-hint" style={{ marginBottom: 4 }}>已暂存（{deferredDrafts.length}）· 验证完成后从这里唤回</div>
+                {deferredDrafts.map((draft) => (
+                  <div key={draft.id} className="wb-row" style={{ cursor: 'default', alignItems: 'flex-start' }}>
+                    <span style={{ flex: 1 }}>
+                      <b>{draftKindLabel(draft.kindCode)}</b>
+                      <span className="wb-switch-desc">
+                        暂存于 {fmtTime(draft.deferredAt ?? draft.updatedAt)}
+                        {draft.deferCount > 1 ? ` · 第 ${draft.deferCount} 次` : ''}
+                      </span>
+                    </span>
+                    <button className="wb-btn primary" onClick={() => void resumeDeferredDraft(draft.id)}>继续验收</button>
+                  </div>
+                ))}
               </div>
             )}
             {reminders.map((r) => (

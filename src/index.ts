@@ -10,6 +10,8 @@ import { makeDictionaryRoute } from './api/dictionaryRoute.js'
 import { makeLocalDirRoute } from './api/localDirRoute.js'
 import { makeOpenFileRoute } from './api/openFileRoute.js'
 import { makeRoutes } from './api/routes.js'
+import { makeSkillRoutes } from './api/routes/skills.js'
+import { probeSkills } from './api/skills.js'
 import { openWorkbenchDb, type WorkbenchDbConfig } from './db/database.js'
 import { seedDictionaries } from './db/seed.js'
 import { countFiredRemindersSince, countQueue, enqueueReminder, listQueue, markQueueAttempt, readMeta, removeQueueEntry } from './db/repo.js'
@@ -86,8 +88,9 @@ export function apply(ctx: Context, config: Config = {}): void {
       return outcome.ok ? { ok: true } : { ok: false, reason: outcome.reason }
     },
   })
-  // 独立路由文件：保证热重载时新增/修复的“选择文件”“打开文件”“字典管理”接口能随入口模块一起重新加载。
-  routes.unshift(makeDictionaryRoute(db), makeLocalDirRoute(), makeOpenFileRoute())
+  // 独立路由文件：保证热重载时新增/修复的“选择文件”“打开文件”“字典管理”“技能目录”接口能随入口模块一起重新加载。
+  // 技能目录每次请求实时探测宿主 skills 注册表（未安装时返回空列表，前端隐藏选择器）。
+  routes.unshift(makeDictionaryRoute(db), makeLocalDirRoute(), makeOpenFileRoute(), ...makeSkillRoutes({ probe: () => probeSkills(ctx) }))
 
   ctx.effect(
     () => {

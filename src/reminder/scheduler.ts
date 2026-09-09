@@ -22,6 +22,7 @@ import {
   appendEvent,
 } from '../db/repo.js'
 import { readReminderPolicy, type ReminderPolicy } from './config.js'
+import { countDraftNotifiesSince, flushDraftNotifications, scanDraftNotifications, type DraftNotifyDeps, type DraftNotifyResult } from './draft-notify.js'
 import { decideReminder, formatDigest, type ReminderCandidate, type ThrottleState } from './policy.js'
 import type { SendOutcome, WechatChannelAdapter } from './adapter.js'
 
@@ -51,6 +52,7 @@ const QUEUE_FLUSH_INTERVAL_MS = 60_000
 export class ReminderScheduler {
   private readonly deps: SchedulerDeps
   private scanning = false
+  private scanningDrafts = false
   private catchupDone = false
   private disposed = false
 
@@ -72,9 +74,35 @@ export class ReminderScheduler {
     dayStart.setHours(0, 0, 0, 0)
     const verdict = this.deps.adapter.circuitVerdict()
     return {
-      sentLastHour: countFiredRemindersSince(this.deps.db, hourAgo),
-      sentToday: countFiredRemindersSince(this.deps.db, dayStart.toISOString()),
+      // 草稿通知与到期提醒共用小时/日预算，避免两类通知各自刷满限额。
+      sentLastHour: countFiredRemindersSince(this.deps.db, hourAgo) + countDraftNotifiesSince(this.deps.db, hourAgo),
+      sentToday: countFiredRemindersSince(this.deps.db, dayStart.toISOString()) + countDraftNotifiesSince(this.deps.db, dayStart.toISOString()),
       circuitOpenUntil: verdict.open ? now.getTime() + verdict.retryAfterMs : null,
+    }
+  }
+
+  /** 草稿通知的依赖视图（与到期提醒共用适配层与节流口径）。 */
+  private draftDeps(): DraftNotifyDeps {
+    return {
+      db: this.deps.db,
+      adapter: this.deps.adapter,
+      isTargetConfigured: this.deps.isTargetConfigured,
+      throttleState: (policy, now) => this.throttleState(policy, now),
+      now: this.deps.now,
+    }
+  }
+
+  /** 扫描一次草稿通知（验收申请等）。与到期提醒同轮次执行，独立节流预算。 */
+  async scanDrafts(): Promise<DraftNotifyResult> {
+    const empty: DraftNotifyResult = { scanned: 0, sent: 0, queued: 0, skipped: 0, unavailable: 0 }
+    if (this.disposed || this.scanningDrafts) return empty
+    const policy = this.policy()
+    if (!policy.enabled) return empty
+    this.scanningDrafts = true
+    try {
+      return await scanDraftNotifications(this.draftDeps(), policy)
+    } finally {
+      this.scanningDrafts = false
     }
   }
 
@@ -175,7 +203,20 @@ export class ReminderScheduler {
     if (this.disposed) return { sent: 0, merged: 0, failed: 0 }
     const policy = this.policy()
     if (!policy.enabled) return { sent: 0, merged: 0, failed: 0 }
-    return this.deps.adapter.flushQueue()
+    const reminderOutcome = await this.deps.adapter.flushQueue()
+    // 草稿通知队列独立释放（同一轮次），失败不影响到期提醒的结果。
+    try {
+      const draftOutcome = await flushDraftNotifications(this.draftDeps(), policy)
+      return {
+        sent: reminderOutcome.sent + draftOutcome.sent,
+        merged: reminderOutcome.merged + draftOutcome.merged,
+        failed: reminderOutcome.failed + draftOutcome.failed,
+        reason: reminderOutcome.reason,
+      }
+    } catch (error) {
+      this.log(`draft flush failed: ${String(error)}`)
+      return reminderOutcome
+    }
   }
 
   /** 启动补发：进程启动后立即跑一次，只跑一次。 */
@@ -193,7 +234,10 @@ export class ReminderScheduler {
    * 返回 dispose 函数，供测试与手动关闭使用。
    */
   start(ctx: Context): () => void {
-    const scanDispose = ctx.interval(() => { void this.scan().catch((error) => this.log(`scan failed: ${String(error)}`)) }, SCAN_INTERVAL_MS)
+    const scanDispose = ctx.interval(() => {
+      void this.scan().catch((error) => this.log(`scan failed: ${String(error)}`))
+      void this.scanDrafts().catch((error) => this.log(`draft scan failed: ${String(error)}`))
+    }, SCAN_INTERVAL_MS)
     const flushDispose = ctx.interval(() => {
       void (async () => {
         if (this.deps.readInboundCount !== undefined) {

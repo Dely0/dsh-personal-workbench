@@ -4,8 +4,35 @@
  */
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import type { DatabaseSync } from 'node:sqlite'
-import { abandonDraft, addTaskMemory, completeTaskCascade, confirmDailyPlanDraft, confirmIdeaClusterDraft, confirmIdeaTaskDraft, confirmKnowledgeDraft, confirmReportDraft, confirmSubtaskPlanDraft, confirmTaskDraft, createDraft, createTaskReview, getDictionary, getDraft, getDraftBySession, getLatestPendingDraft, getTask, linkTaskSession, updateTaskWithCompletion } from '../../db/repo.js'
+import { abandonDraft, addTaskMemory, appendEvent, completeTaskCascade, confirmDailyPlanDraft, confirmIdeaClusterDraft, confirmIdeaTaskDraft, confirmKnowledgeDraft, confirmReportDraft, confirmSubtaskPlanDraft, confirmTaskDraft, createDraft, createTaskReview, deferDraft, getDictionary, getDraft, getDraftBySession, getLatestActiveDraft, getTask, isDeferrableDraftKind, linkTaskSession, listDeferredDrafts, resumeDraft, updateTaskWithCompletion } from '../../db/repo.js'
 import { DRAFTS_PREFIX, isLoopbackRequest, pathSegments, publicTask, readJsonBody, writeJson } from './helpers.js'
+
+/** 草稿 → 任务的事件与记忆：确认/驳回/暂存三类动作都要留痕（AI 后续会话据此知道发生了什么）。 */
+function taskIdOf(draft: { payload: Record<string, unknown> }): string | undefined {
+  return typeof draft.payload.taskId === 'string' && draft.payload.taskId !== '' ? draft.payload.taskId : undefined
+}
+
+function recordDraftFeedback(
+  db: DatabaseSync,
+  draft: { id: string; kindCode: string; payload: Record<string, unknown>; sessionId: string | null; deferCount?: number },
+  action: 'rejected' | 'deferred',
+  note: string,
+  at: string,
+): void {
+  const taskId = taskIdOf(draft)
+  if (taskId === undefined || getTask(db, taskId) === undefined) return
+  appendEvent(db, taskId, `completion_${action}`, {
+    actor: 'user',
+    note: `draft:${draft.id}${note === '' ? '' : ` | ${note}`}`,
+    after: { draftId: draft.id, kindCode: draft.kindCode, deferCount: draft.deferCount ?? 0 },
+    at,
+  })
+  const label = action === 'rejected' ? '驳回' : '暂存'
+  const content = note === ''
+    ? `【验收${label}】用户于 ${at} ${label}了 AI 提交的完成验收申请（草稿 ${draft.id}），未填写原因。继续修改后再次提交前，请先确认用户关心的问题。`
+    : `【验收${label}】用户于 ${at} ${label}了 AI 提交的完成验收申请（草稿 ${draft.id}）。用户反馈：${note}`
+  addTaskMemory(db, { taskId, kind: action === 'rejected' ? 'note' : 'context', content, sourceSessionId: draft.sessionId })
+}
 
 export function makeDraftRoutes(db: DatabaseSync): WebRoute[] {
   return [
@@ -22,7 +49,8 @@ export function makeDraftRoutes(db: DatabaseSync): WebRoute[] {
         if (segments.length === 0) {
           if (method === 'GET') {
             const sessionId = url.searchParams.get('session_id') ?? undefined
-            if (sessionId === undefined) return writeJson(res, 200, { ok: true, draft: getLatestPendingDraft(db) ?? null })
+            // 自动弹窗只取"未暂存"的最新草稿；暂存清单单独返回，供「待处理」弹窗的「已暂存」段使用。
+            if (sessionId === undefined) return writeJson(res, 200, { ok: true, draft: getLatestActiveDraft(db) ?? null, deferredDrafts: listDeferredDrafts(db) })
             const draft = getDraftBySession(db, sessionId)
             return writeJson(res, 200, { ok: true, draft: draft ?? null })
           }
@@ -96,8 +124,36 @@ export function makeDraftRoutes(db: DatabaseSync): WebRoute[] {
           }
         }
         if (method === 'POST' && action === 'abandon') {
+          const draft = getDraft(db, id)
+          if (draft === undefined) return writeJson(res, 404, { error: 'draft not found' })
+          if (draft.statusCode !== 'pending') return writeJson(res, 400, { error: `draft is already ${draft.statusCode}` })
+          const now = new Date().toISOString()
           abandonDraft(db, id)
+          // 驳回留痕：写任务事件 + 任务共享记忆，让执行会话知道自己被驳回以及原因。
+          if (draft.kindCode === 'completion') {
+            const reason = typeof body?.reason === 'string' ? body.reason.trim() : ''
+            recordDraftFeedback(db, draft, 'rejected', reason, now)
+          }
           return writeJson(res, 200, { ok: true })
+        }
+        if (method === 'POST' && action === 'defer') {
+          const draft = getDraft(db, id)
+          if (draft === undefined) return writeJson(res, 404, { error: 'draft not found' })
+          if (draft.statusCode !== 'pending') return writeJson(res, 400, { error: `draft is already ${draft.statusCode}` })
+          if (!isDeferrableDraftKind(draft.kindCode)) return writeJson(res, 400, { error: `draft kind "${draft.kindCode}" cannot be deferred` })
+          const now = new Date().toISOString()
+          const deferred = deferDraft(db, id, now)
+          if (deferred === undefined) return writeJson(res, 400, { error: 'defer failed' })
+          if (draft.kindCode === 'completion') {
+            const note = typeof body?.note === 'string' ? body.note.trim() : ''
+            recordDraftFeedback(db, deferred, 'deferred', note, now)
+          }
+          return writeJson(res, 200, { ok: true, draft: deferred })
+        }
+        if (method === 'POST' && action === 'resume') {
+          const resumed = resumeDraft(db, id)
+          if (resumed === undefined) return writeJson(res, 404, { error: 'draft not found or not pending' })
+          return writeJson(res, 200, { ok: true, draft: resumed })
         }
         return writeJson(res, 404, { error: 'not found' })
       },

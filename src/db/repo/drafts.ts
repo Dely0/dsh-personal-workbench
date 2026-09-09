@@ -69,6 +69,8 @@ export function createDraft(db: DatabaseSync, input: DraftInput, at = nowIso()):
     sessionId: input.sessionId ?? null,
     payload: input.payload,
     statusCode: 'pending',
+    deferredAt: null,
+    deferCount: 0,
     createdAt: at,
     updatedAt: at,
   }
@@ -185,6 +187,56 @@ export function confirmSubtaskPlanDraft(db: DatabaseSync, draftId: string, actor
 
 export function getLatestPendingDraft(db: DatabaseSync): DraftRow | undefined {
   return parseDraft(db.prepare("SELECT * FROM task_drafts WHERE status_code = 'pending' ORDER BY created_at DESC LIMIT 1").get() as RawDraftRow | undefined)
+}
+
+/**
+ * 自动弹窗的数据源：只取**未暂存**的最新待确认草稿。
+ * 暂存过的草稿仍是 pending（可确认/可驳回），只是不再打断用户。
+ */
+export function getLatestActiveDraft(db: DatabaseSync): DraftRow | undefined {
+  return parseDraft(db.prepare("SELECT * FROM task_drafts WHERE status_code = 'pending' AND deferred_at IS NULL ORDER BY created_at DESC LIMIT 1").get() as RawDraftRow | undefined)
+}
+
+/** 已暂存的待确认草稿（按暂存时间倒序），供「待处理」弹窗的「已暂存」段展示。 */
+export function listDeferredDrafts(db: DatabaseSync): DraftRow[] {
+  const rows = db.prepare("SELECT * FROM task_drafts WHERE status_code = 'pending' AND deferred_at IS NOT NULL ORDER BY deferred_at DESC").all() as unknown as RawDraftRow[]
+  return rows.map((row) => parseDraft(row)).filter((draft): draft is DraftRow => draft !== undefined)
+}
+
+/** 该任务是否已有暂存中的草稿（用于 AI 重提时提示）。 */
+export function getDeferredDraftForTask(db: DatabaseSync, kindCode: string, taskId: string): DraftRow | undefined {
+  const rows = db.prepare("SELECT * FROM task_drafts WHERE status_code = 'pending' AND deferred_at IS NOT NULL AND kind_code = ? ORDER BY deferred_at DESC").all(kindCode) as unknown as RawDraftRow[]
+  for (const row of rows) {
+    const draft = parseDraft(row)
+    if (draft !== undefined && draft.payload.taskId === taskId) return draft
+  }
+  return undefined
+}
+
+/**
+ * 可「暂存」的草稿类型白名单。
+ * 只开放验收类：完成验收申请（completion）与复盘草稿（review）——这两类需要用户先做验证/回看再决定。
+ */
+export const DEFERRABLE_DRAFT_KINDS = ['completion', 'review'] as const
+
+export function isDeferrableDraftKind(kindCode: string): boolean {
+  return (DEFERRABLE_DRAFT_KINDS as readonly string[]).includes(kindCode)
+}
+
+/** 暂存：仅 pending 且属于可暂存类型的草稿可暂存；返回 undefined 表示不允许。 */
+export function deferDraft(db: DatabaseSync, draftId: string, at = nowIso()): DraftRow | undefined {
+  const draft = getDraft(db, draftId)
+  if (draft === undefined || draft.statusCode !== 'pending' || !isDeferrableDraftKind(draft.kindCode)) return undefined
+  db.prepare('UPDATE task_drafts SET deferred_at = ?, defer_count = defer_count + 1, updated_at = ? WHERE id = ?').run(at, at, draftId)
+  return getDraft(db, draftId)
+}
+
+/** 唤回：清掉暂存标记，草稿重新进入自动弹窗队列。 */
+export function resumeDraft(db: DatabaseSync, draftId: string, at = nowIso()): DraftRow | undefined {
+  const draft = getDraft(db, draftId)
+  if (draft === undefined || draft.statusCode !== 'pending') return undefined
+  db.prepare('UPDATE task_drafts SET deferred_at = NULL, updated_at = ? WHERE id = ?').run(at, draftId)
+  return getDraft(db, draftId)
 }
 
 export function getPendingDraftForTask(db: DatabaseSync, kindCode: string, taskId: string): DraftRow | undefined {

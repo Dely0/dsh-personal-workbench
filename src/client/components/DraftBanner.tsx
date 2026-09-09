@@ -35,6 +35,8 @@ interface DraftPresentation {
   sessionId: string
   /** 底部补充说明 */
   note?: ReactNode
+  /** 是否提供「暂存」操作（验收类草稿：先去验证再决定） */
+  canDefer?: boolean
 }
 
 export function DraftBanner({ draft, onDone, runtime, closePanel, kindName }: DraftBannerProps): ReactNode {
@@ -56,6 +58,11 @@ export function DraftBanner({ draft, onDone, runtime, closePanel, kindName }: Dr
           <button className="wb-btn primary" disabled={busy} onClick={() => void act(`/api/workbench/drafts/${draft.id}/confirm`)}>
             {presentation.confirmLabel}
           </button>
+          {presentation.canDefer === true && (
+            <button className="wb-btn" disabled={busy} title="先去做回归测试，草稿保留待确认；之后从「待处理」里唤回" onClick={() => void act(`/api/workbench/drafts/${draft.id}/defer`)}>
+              ⏸ 暂存（先验证）
+            </button>
+          )}
           <button className="wb-btn" disabled={busy} onClick={() => void act(`/api/workbench/drafts/${draft.id}/abandon`)}>
             {presentation.abandonLabel}
           </button>
@@ -211,6 +218,7 @@ function describeDraft(draft: DraftView, kindName: (kind: string, code: string) 
       abandonLabel: '放弃',
       sessionLabel: '回到复盘会话',
       sessionId: sessionOf(),
+      canDefer: true,
     }
   }
 
@@ -221,13 +229,17 @@ function describeDraft(draft: DraftView, kindName: (kind: string, code: string) 
         <>
           <div style={{ fontSize: 13 }}><b>{String(payload.taskId ?? '')}</b></div>
           <div style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)', whiteSpace: 'pre-wrap' }}>{String(payload.summary ?? '')}</div>
+          {typeof payload.feedback === 'string' && payload.feedback !== '' && (
+            <div style={{ fontSize: 12, marginTop: 6, color: 'var(--dsw-alias-label-secondary)' }}>上次反馈处理：{String(payload.feedback)}</div>
+          )}
         </>
       ),
       confirmLabel: '验收通过（标记完成）',
       abandonLabel: '驳回',
       sessionLabel: '回到执行会话',
       sessionId: sessionOf(),
-      note: '驳回后请回到执行会话继续修改，AI 可再次提交验收申请。',
+      note: '驳回后请回到执行会话继续修改，AI 可再次提交验收申请；若你还需要跑回归测试，用「暂存」把这份申请先收起来。',
+      canDefer: true,
     }
   }
 

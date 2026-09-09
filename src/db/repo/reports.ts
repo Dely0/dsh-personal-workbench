@@ -6,6 +6,7 @@
 import { randomUUID } from 'node:crypto'
 import type { DatabaseSync } from 'node:sqlite'
 import { nowIso, getDraft, withDraftConfirm, type DraftRow } from '../repo.js'
+import { parseDraft, type RawDraftRow } from './shared.js'
 
 
 export type ReportPeriodCode = 'day' | 'week'
@@ -125,15 +126,7 @@ export function getPendingReportDraft(db: DatabaseSync, sessionId: string | null
     const payload = JSON.parse(row.payload_json) as Record<string, unknown>
     if (periodCode !== undefined && payload.periodCode !== periodCode) continue
     if (periodStart !== undefined && payload.periodStart !== periodStart) continue
-    return {
-      id: row.id,
-      kindCode: row.kind_code,
-      sessionId: row.session_id,
-      payload,
-      statusCode: row.status_code,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-    }
+    return parseDraft(row as unknown as RawDraftRow)
   }
   return undefined
 }

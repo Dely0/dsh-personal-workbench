@@ -14,13 +14,16 @@ import { checkThrottle, decideReminder, formatDigest, isQuietTime } from '../lib
 import { normalizeErrorCode, WechatChannelAdapter } from '../lib/reminder/adapter.js'
 import { ReminderScheduler } from '../lib/reminder/scheduler.js'
 
-function withDb(fn) {
+async function withDb(fn) {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-personal-workbench-reminder-'))
+  let db
   try {
-    const db = openWorkbenchDb({ dbPath: join(dir, 'workbench.db') })
+    db = openWorkbenchDb({ dbPath: join(dir, 'workbench.db') })
     seedDictionaries(db)
-    return fn(db)
+    return await fn(db)
   } finally {
+    // Windows 下删除被打开的文件会 EPERM：先关库再清目录（原来缺这一步，本机跑必失败）。
+    try { db?.close() } catch { /* 已关闭 */ }
     rmSync(dir, { recursive: true, force: true })
   }
 }

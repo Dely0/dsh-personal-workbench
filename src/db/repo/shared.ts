@@ -14,6 +14,10 @@ export interface DraftRow {
   sessionId: string | null
   payload: Record<string, unknown>
   statusCode: string
+  /** 非空表示该草稿已「暂存」：仍是 pending，但不再自动弹窗 */
+  deferredAt: string | null
+  /** 累计暂存次数（用于展示"第 N 次"） */
+  deferCount: number
   createdAt: string
   updatedAt: string
 }
@@ -24,6 +28,8 @@ export interface RawDraftRow {
   session_id: string | null
   payload_json: string
   status_code: string
+  deferred_at?: string | null
+  defer_count?: number | null
   created_at: string
   updated_at: string
 }
@@ -36,6 +42,8 @@ export function parseDraft(row: RawDraftRow | undefined): DraftRow | undefined {
     sessionId: row.session_id,
     payload: JSON.parse(row.payload_json) as Record<string, unknown>,
     statusCode: row.status_code,
+    deferredAt: row.deferred_at ?? null,
+    deferCount: row.defer_count ?? 0,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }

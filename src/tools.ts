@@ -5,7 +5,7 @@
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { DatabaseSync } from 'node:sqlite'
-import { addTaskMemory, assertValidFileLink, createDraft, getDictionary, getDraft, getIdea, getIdeaCluster, getPendingDailyPlanDraft, getPendingDraftForSession, getPendingDraftForTask, getPendingKnowledgeDraft, getPendingReportDraft, getTask, localDateString, updateDraft, updateTask } from './db/repo.js'
+import { addTaskMemory, assertValidFileLink, createDraft, getDeferredDraftForTask, getDictionary, getDraft, getIdea, getIdeaCluster, getPendingDailyPlanDraft, getPendingDraftForSession, getPendingDraftForTask, getPendingKnowledgeDraft, getPendingReportDraft, getTask, listTaskEvents, localDateString, updateDraft, updateTask } from './db/repo.js'
 
 function text(value: string): ContentBlock[] {
   return [{ type: 'text', text: value }]
@@ -557,10 +557,11 @@ export function requestCompletionTool(db: DatabaseSync) {
   return defineTool({
     name: 'workbench_request_completion',
     description:
-      '个人工作台执行验收工具：任意节点（含父任务）完成工作后调用，提交“完成验收申请”。用户验收通过后任务才会置为已完成；父任务验收通过时未完成子任务会级联完成。本工具不会自行完成任务。task_id 必填，summary 为完成总结（2-4 句）。',
+      '个人工作台执行验收工具：任意节点（含父任务）完成工作后调用，提交“完成验收申请”。用户验收通过后任务才会置为已完成；父任务验收通过时未完成子任务会级联完成。本工具不会自行完成任务。task_id 必填，summary 为完成总结（2-4 句）。若此前被驳回/暂存，务必带上 feedback 说明本次改了什么。返回里会附带该任务的提交历史。',
     parameters: {
       task_id: { type: 'string', required: true, description: '要申请完成的任务 id（任意节点，父任务也可）' },
       summary: { type: 'string', description: '完成总结（2-4 句）' },
+      feedback: { type: 'string', description: '可选：若上次验收被驳回/暂存，说明本次针对反馈做了哪些修改（1-2 句）' },
     },
     output: {
       schema: { type: 'string' },
@@ -575,12 +576,26 @@ export function requestCompletionTool(db: DatabaseSync) {
       if (task.archived === 1) return `错误：任务「${task.title}」已归档`
       if (task.aiPolicyCode !== 'execute') return `错误：任务「${task.title}」的 AI 策略不是“可执行”，不能申请完成`
       const summary = typeof args.summary === 'string' && args.summary.trim() !== '' ? args.summary.trim() : ''
+      const feedback = typeof args.feedback === 'string' && args.feedback.trim() !== '' ? args.feedback.trim() : ''
       const sessionId = exec?.agent?.session?.id ?? null
       const existing = getPendingDraftForTask(db, 'completion', taskId)
+      const payload = { taskId, summary, sessionId, ...(feedback === '' ? {} : { feedback }) }
       const draft = existing !== undefined
-        ? updateDraft(db, existing.id, { taskId, summary, sessionId })
-        : createDraft(db, { kindCode: 'completion', sessionId, payload: { taskId, summary, sessionId } })
-      return `完成验收申请已提交${existing !== undefined ? '（更新）' : ''}（草稿 id=${draft?.id}），等待用户在个人工作台验收。请勿声称任务已经完成。`
+        ? updateDraft(db, existing.id, payload)
+        : createDraft(db, { kindCode: 'completion', sessionId, payload })
+
+      // 提交历史：驳回/暂存次数与最近一次原因，让 AI 不必等用户口头转述就知道自己处于第几次提交。
+      const events = listTaskEvents(db, taskId).filter((event) => event.event_code === 'completion_rejected' || event.event_code === 'completion_deferred')
+      const rejected = events.filter((event) => event.event_code === 'completion_rejected').length
+      const deferred = events.filter((event) => event.event_code === 'completion_deferred').length
+      const history = events.length === 0
+        ? '本次是该任务的第 1 次验收提交。'
+        : `本次是第 ${events.length + 1} 次验收提交（此前被驳回 ${rejected} 次、暂存 ${deferred} 次）。最近一次：${String(events[0]?.note ?? '')}`
+      const deferredNow = getDeferredDraftForTask(db, 'completion', taskId)
+      const deferHint = deferredNow === undefined
+        ? ''
+        : `\n注意：该任务已有一份**暂存中**的验收申请（暂存于 ${deferredNow.deferredAt ?? '未知时间'}），用户正在验证；本次提交已更新该草稿内容，请勿重复催促。`
+      return `完成验收申请已提交${existing !== undefined ? '（更新）' : ''}（草稿 id=${draft?.id}），等待用户在个人工作台验收。${deferHint}\n${history}\n请勿声称任务已经完成；若用户驳回并给出反馈，请按反馈修改后再提交。`
     },
   })
 }

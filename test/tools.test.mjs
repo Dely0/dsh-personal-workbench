@@ -48,6 +48,12 @@ test('agent tools write pending drafts and update tasks', async () => {
     const deniedClose = await update.execute({ task_id: task.id, status_code: 'done' })
     assert.match(deniedClose, /不能直接/)
 
+    // 验收历史：首次提交返回"第 1 次"，被驳回后再提交带上反馈并回报历史
+    assert.match(done, /第 1 次验收提交/)
+    const rejected = await completion.execute({ task_id: task.id, summary: '完成总结 v3', feedback: '已按反馈补齐回归测试' }, { agent: { session: { id: 'sess-exec' } } })
+    assert.match(rejected, /已按反馈补齐回归测试|第 1 次|暂存/)
+    assert.equal(getPendingDraftForTask(db, 'completion', task.id).payload.feedback, '已按反馈补齐回归测试')
+
     // 任意节点（含父任务）均可申请完成；父任务不再被“叶子”限制拒绝
     const parent = createTask(db, { title: 'parent exec', typeCode: 'code_impl', priorityCode: 'p1', aiPolicyCode: 'execute' })
     createTask(db, { title: 'child', typeCode: 'code_impl', priorityCode: 'p1', parentId: parent.id })

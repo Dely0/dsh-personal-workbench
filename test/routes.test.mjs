@@ -14,6 +14,8 @@ import { createKnowledge, createTask, localDateString, updateTask } from '../lib
 
 function startTestServer() {
   const db = openWorkbenchDb({ dbPath: ':memory:' })
+  // 生产路径由 apply() 播种字典；测试里也要播，否则 POST /drafts 的 kind 校验会 400。
+  seedDictionaries(db)
   const routes = [makeDictionaryRoute(db), makeLocalDirRoute(), makeOpenFileRoute(), ...makeRoutes(db)]
   const server = http.createServer((req, res) => {
     const url = new URL(req.url ?? '/', 'http://localhost')
@@ -273,5 +275,58 @@ test('archive/restore a task that was already deleted returns 404 instead of cra
     const patchArchive = await request('PATCH', `/api/workbench/tasks/${task.id}`, { archived: true })
     assert.equal(patchArchive.status, 404)
     assert.match(patchArchive.body.error, /task not found/)
+  })
+})
+
+test('draft defer/resume/abandon API: 暂存不弹窗、可唤回、驳回留痕', async () => {
+  await withServer(async ({ db, request }) => {
+    const task = createTask(db, { title: 'defer test task', typeCode: 'code_impl', priorityCode: 'p1', aiPolicyCode: 'execute' })
+    const created = await request('POST', '/api/workbench/drafts', {
+      kindCode: 'completion',
+      sessionId: 'sess-defer',
+      payload: { taskId: task.id, summary: '完成总结', sessionId: 'sess-defer' },
+    })
+    assert.equal(created.status, 201)
+    const draftId = created.body.draft.id
+
+    // 未暂存：自动弹窗查询能取到
+    const before = await request('GET', '/api/workbench/drafts')
+    assert.equal(before.body.draft.id, draftId)
+    assert.deepEqual(before.body.deferredDrafts, [])
+
+    // 暂存：弹窗查询跳过，暂存清单出现
+    const deferred = await request('POST', `/api/workbench/drafts/${draftId}/defer`, { note: '先去跑回归' })
+    assert.equal(deferred.status, 200)
+    assert.equal(deferred.body.draft.deferredAt !== null, true)
+    assert.equal(deferred.body.draft.statusCode, 'pending')
+    const after = await request('GET', '/api/workbench/drafts')
+    assert.equal(after.body.draft, null)
+    assert.deepEqual(after.body.deferredDrafts.map((d) => d.id), [draftId])
+    // 留痕：任务事件 + 共享记忆
+    assert.equal(db.prepare("SELECT COUNT(*) AS c FROM task_events WHERE task_id = ? AND event_code = 'completion_deferred'").get(task.id).c, 1)
+
+    // 唤回：重新进入自动弹窗队列
+    const resumed = await request('POST', `/api/workbench/drafts/${draftId}/resume`)
+    assert.equal(resumed.status, 200)
+    assert.equal(resumed.body.draft.deferredAt, null)
+    const back = await request('GET', '/api/workbench/drafts')
+    assert.equal(back.body.draft.id, draftId)
+
+    // 驳回：带原因，留痕
+    const abandoned = await request('POST', `/api/workbench/drafts/${draftId}/abandon`, { reason: '回归测试未通过' })
+    assert.equal(abandoned.status, 200)
+    const rejectedEvent = db.prepare("SELECT note FROM task_events WHERE task_id = ? AND event_code = 'completion_rejected'").get(task.id)
+    assert.equal(rejectedEvent.note.includes('回归测试未通过'), true)
+    const memories = db.prepare('SELECT content FROM task_memories WHERE task_id = ? ORDER BY created_at DESC').all(task.id)
+    assert.equal(memories.some((row) => row.content.includes('回归测试未通过')), true)
+  })
+})
+
+test('draft defer API: 非验收类草稿不可暂存', async () => {
+  await withServer(async ({ request }) => {
+    const created = await request('POST', '/api/workbench/drafts', { kindCode: 'report', payload: { periodCode: 'day' } })
+    const res = await request('POST', `/api/workbench/drafts/${created.body.draft.id}/defer`)
+    assert.equal(res.status, 400)
+    assert.match(res.body.error, /cannot be deferred/)
   })
 })

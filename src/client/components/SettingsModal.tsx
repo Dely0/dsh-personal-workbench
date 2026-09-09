@@ -23,6 +23,16 @@ export interface DictionaryLike {
 type Section = 'general' | 'notify' | 'wechat' | 'dict'
 type DictKind = 'type' | 'status' | 'priority' | 'idea_kind'
 
+/** 草稿通知类型选项（与后端 policy.draftNotifyKinds 的取值对齐）。 */
+const DRAFT_NOTIFY_OPTIONS: Array<{ code: string; label: string }> = [
+  { code: 'completion', label: '完成验收申请' },
+  { code: 'review', label: '复盘草稿' },
+  { code: 'report', label: '日报/周报草稿' },
+  { code: 'knowledge', label: '知识条目草稿' },
+  { code: 'idea_cluster', label: '点子王提案' },
+  { code: 'idea_tasks', label: '点子落地提案' },
+]
+
 const SECTIONS: Array<{ key: Section; label: string }> = [
   { key: 'general', label: '通用' },
   { key: 'notify', label: '通知' },
@@ -254,6 +264,28 @@ export function SettingsModal(props: SettingsModalProps): ReactNode {
                   )}
 
                   <div className="wb-field-grid" style={{ marginTop: 14 }}>
+                    <label className="wb-field full">
+                      <span>草稿通知类型（推送到微信）</span>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, paddingTop: 4 }}>
+                        {DRAFT_NOTIFY_OPTIONS.map((option) => {
+                          const checked = (reminderPolicy.draftNotifyKinds ?? []).includes(option.code)
+                          return (
+                            <label key={option.code} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12.5, color: 'var(--dsw-alias-label-secondary)' }}>
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={(e) => {
+                                  const current = reminderPolicy.draftNotifyKinds ?? []
+                                  const next = e.target.checked ? [...current, option.code] : current.filter((code) => code !== option.code)
+                                  onReminderPolicyChange({ ...reminderPolicy, draftNotifyKinds: next })
+                                }}
+                              />
+                              {option.label}
+                            </label>
+                          )
+                        })}
+                      </div>
+                    </label>
                     <label className="wb-field">
                       <span>即时推送分级</span>
                       <input

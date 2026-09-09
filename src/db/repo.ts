@@ -139,6 +139,8 @@ export type { TaskReviewInput } from './repo/status.js'
 export {
   createDraft, updateDraft, getDraftBySession, confirmTaskDraft, confirmSubtaskPlanDraft,
   getLatestPendingDraft, getPendingDraftForTask, abandonDraft, toTaskInputFromDraftItem,
+  getLatestActiveDraft, listDeferredDrafts, getDeferredDraftForTask, deferDraft, resumeDraft,
+  isDeferrableDraftKind, DEFERRABLE_DRAFT_KINDS,
 } from './repo/drafts.js'
 export type { DraftTaskItem } from './repo/drafts.js'
 

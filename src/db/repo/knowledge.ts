@@ -6,6 +6,7 @@
 import { randomUUID } from 'node:crypto'
 import type { DatabaseSync } from 'node:sqlite'
 import { nowIso, getDraft, withDraftConfirm, type DraftRow } from '../repo.js'
+import { parseDraft, type RawDraftRow } from './shared.js'
 
 
 export interface KnowledgeInput {
@@ -171,15 +172,8 @@ export function getPendingKnowledgeDraft(db: DatabaseSync, sessionId: string | n
   }>
   for (const row of rows) {
     if (row.session_id !== sessionId) continue
-    return {
-      id: row.id,
-      kindCode: row.kind_code,
-      sessionId: row.session_id,
-      payload: JSON.parse(row.payload_json) as Record<string, unknown>,
-      statusCode: row.status_code,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-    }
+    // 统一走 parseDraft，避免新增草稿字段时各处手写映射漏字段。
+    return parseDraft(row as unknown as RawDraftRow)
   }
   return undefined
 }
