@@ -20,6 +20,7 @@ import {
   getTaskRootIdOrSelf,
   listDueReminders,
   appendEvent,
+  skipReminder,
 } from '../db/repo.js'
 import { readReminderPolicy, type ReminderPolicy } from './config.js'
 import { countDraftNotifiesSince, flushDraftNotifications, scanDraftNotifications, type DraftNotifyDeps, type DraftNotifyResult } from './draft-notify.js'
@@ -147,6 +148,8 @@ export class ReminderScheduler {
           if (fresh.includes(reminder)) continue
           result.skipped += 1
           result.skippedTooOld += 1
+          // 落终态（skipped_at）：否则它会永远停在「未处理」，前端「待处理」计数永远消不掉
+          this.markSkipped(reminder.reminderId, now)
           this.appendEventOnce(reminder.taskId, 'reminder_skipped', { reminderId: reminder.reminderId, reason: 'too-old' }, now)
         }
         if (fresh.length === 0) return result
@@ -173,6 +176,8 @@ export class ReminderScheduler {
           result.skipped += 1
           if (decision.reason === 'too-old') {
             result.skippedTooOld += 1
+            // 同上：太旧的提醒必须落终态，否则永久滞留
+            this.markSkipped(reminder.reminderId, now)
             this.appendEventOnce(reminder.taskId, 'reminder_skipped', { reminderId: reminder.reminderId, reason: 'too-old' }, now)
           }
           continue
@@ -300,6 +305,15 @@ export class ReminderScheduler {
     ).get(taskId, eventCode, `%${String(payload.reminderId ?? '')}%`) as { c: number }
     if (existing.c > 0) return
     appendEvent(this.deps.db, taskId, eventCode, { actor: 'system', note: String(payload.reminderId ?? ''), at: now.toISOString(), after: payload })
+  }
+
+  /** 把一条提醒落成「已跳过（太旧）」终态。 */
+  private markSkipped(reminderId: string, now: Date): void {
+    try {
+      skipReminder(this.deps.db, reminderId, now.toISOString())
+    } catch (error) {
+      this.log(`mark skipped failed for ${reminderId}: ${String(error)}`)
+    }
   }
 
   private log(message: string): void {

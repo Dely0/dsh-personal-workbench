@@ -18,6 +18,31 @@ export interface DueReminder {
   methodCode: string
 }
 
+/**
+ * 把窗口外仍未处理的提醒标记为已跳过（终态，幂等）。返回处理条数。
+ *
+ * 窗口过滤本身复用 reminder-queue.ts 的 `listDueRemindersInWindow`；这里只负责
+ * "把判定为太旧的落成终态"，否则它们会永远停在「未处理」、前端计数永远消不掉。
+ */
+export function skipStaleReminders(db: DatabaseSync, windowHours: number, now = new Date()): number {
+  const stale = listDueReminders(db, now).filter((reminder) => {
+    const fireMs = Date.parse(reminder.dueAt) - reminder.offsetMinutes * 60_000
+    return !Number.isFinite(fireMs) || fireMs < now.getTime() - Math.max(1, windowHours) * 60 * 60_000
+  })
+  if (stale.length === 0) return 0
+  const at = now.toISOString()
+  const stmt = db.prepare('UPDATE task_reminders SET skipped_at = ? WHERE id = ? AND skipped_at IS NULL')
+  db.exec('BEGIN')
+  try {
+    for (const reminder of stale) stmt.run(at, reminder.reminderId)
+    db.exec('COMMIT')
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
+  }
+  return stale.length
+}
+
 export function listDueReminders(db: DatabaseSync, now = new Date()): DueReminder[] {
   const rows = db.prepare(`
     SELECT r.id AS reminder_id, r.task_id, r.offset_minutes, r.method_code,
@@ -25,6 +50,7 @@ export function listDueReminders(db: DatabaseSync, now = new Date()): DueReminde
     FROM task_reminders r
     JOIN tasks t ON t.id = r.task_id
     WHERE r.enabled = 1 AND r.fired_at IS NULL
+      AND r.skipped_at IS NULL AND r.acknowledged_at IS NULL
       AND t.archived = 0
       AND t.status_code NOT IN ('done', 'cancelled')
   `).all() as Array<{
@@ -75,6 +101,8 @@ export interface TaskReminderRow {
   methodCode: string
   enabled: number
   firedAt: string | null
+  skippedAt: string | null
+  acknowledgedAt: string | null
   createdAt: string
 }
 
@@ -86,6 +114,8 @@ export function listReminders(db: DatabaseSync, taskId: string): TaskReminderRow
     method_code: string
     enabled: number
     fired_at: string | null
+    skipped_at?: string | null
+    acknowledged_at?: string | null
     created_at: string
   }>
   return rows.map((row) => ({
@@ -95,12 +125,29 @@ export function listReminders(db: DatabaseSync, taskId: string): TaskReminderRow
     methodCode: row.method_code,
     enabled: row.enabled,
     firedAt: row.fired_at,
+    skippedAt: row.skipped_at ?? null,
+    acknowledgedAt: row.acknowledged_at ?? null,
     createdAt: row.created_at,
   }))
 }
 
 export function fireReminder(db: DatabaseSync, reminderId: string, at = nowIso()): void {
   db.prepare('UPDATE task_reminders SET fired_at = ? WHERE id = ?').run(at, reminderId)
+}
+
+/** 用户点「知道了」：终态，但保留 acknowledged_at 以便「重新武装」。 */
+export function acknowledgeReminder(db: DatabaseSync, reminderId: string, at = nowIso()): void {
+  db.prepare('UPDATE task_reminders SET acknowledged_at = ? WHERE id = ?').run(at, reminderId)
+}
+
+/** 重新武装：清掉三个终态标记，提醒回到「未处理」（用于误点「知道了」或想重新提醒）。 */
+export function resetReminder(db: DatabaseSync, reminderId: string): boolean {
+  return db.prepare('UPDATE task_reminders SET fired_at = NULL, skipped_at = NULL, acknowledged_at = NULL WHERE id = ?').run(reminderId).changes > 0
+}
+
+/** 标记为已跳过（太旧）：只记终态，不碰 fired_at。 */
+export function skipReminder(db: DatabaseSync, reminderId: string, at = nowIso()): void {
+  db.prepare('UPDATE task_reminders SET skipped_at = ? WHERE id = ?').run(at, reminderId)
 }
 
 export function addReminder(

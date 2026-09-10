@@ -12,11 +12,11 @@ import { makeOpenFileRoute } from '../lib/api/openFileRoute.js'
 import { makeRoutes } from '../lib/api/routes.js'
 import { createKnowledge, createTask, localDateString, updateTask } from '../lib/db/repo.js'
 
-function startTestServer() {
+function startTestServer(options = {}) {
   const db = openWorkbenchDb({ dbPath: ':memory:' })
   // 生产路径由 apply() 播种字典；测试里也要播，否则 POST /drafts 的 kind 校验会 400。
   seedDictionaries(db)
-  const routes = [makeDictionaryRoute(db), makeLocalDirRoute(), makeOpenFileRoute(), ...makeRoutes(db)]
+  const routes = [makeDictionaryRoute(db), makeLocalDirRoute(), makeOpenFileRoute(), ...makeRoutes(db, options.deps ?? {})]
   const server = http.createServer((req, res) => {
     const url = new URL(req.url ?? '/', 'http://localhost')
     for (const route of routes) {
@@ -33,8 +33,8 @@ function startTestServer() {
   return { db, server }
 }
 
-async function withServer(fn) {
-  const { db, server } = startTestServer()
+async function withServer(fn, options = {}) {
+  const { db, server } = startTestServer(options)
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
   const port = server.address().port
   const request = async (method, path, body) => {
@@ -329,6 +329,14 @@ test('draft defer API: 非验收类草稿不可暂存', async () => {
     assert.equal(res.status, 400)
     assert.match(res.body.error, /cannot be deferred/)
   })
+})
+
+test('痛点回归：makeRoutes 必须尊重注入的 listDue（策略/窗口语义不能被硬编码覆盖）', async () => {
+  await withServer(async ({ request }) => {
+    const res = await request('GET', '/api/workbench/reminders/due')
+    assert.equal(res.status, 200)
+    assert.deepEqual(res.body.reminders, [{ reminderId: 'injected-only', taskId: 't', title: '来自注入实现' }])
+  }, { deps: { listDue: () => [{ reminderId: 'injected-only', taskId: 't', title: '来自注入实现' }] } })
 })
 
 test('点子文件夹：新建 / 改名 / 归入 / 移出 / 合并', async () => {

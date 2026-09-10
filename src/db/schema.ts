@@ -4,7 +4,7 @@
  */
 import type { DatabaseSync } from 'node:sqlite'
 
-export const SCHEMA_VERSION = 14
+export const SCHEMA_VERSION = 15
 
 export interface Migration {
   version: number
@@ -365,6 +365,18 @@ export const MIGRATIONS: Migration[] = [
         ) STRICT;
         CREATE INDEX idx_draft_notify_next ON draft_notify_queue(next_attempt_at, created_at);
       `)
+    },
+  },
+  {
+    version: 15,
+    name: 'reminder-status-semantics',
+    up(db) {
+      // 拆开原先由 fired_at 一肩挑的三种语义（历史事故：一条提醒永久停在「待处理」）：
+      //   fired_at        —— 已送达/已入队（调度器与队列的幂等键，语义不变）
+      //   skipped_at      —— 已判定"太旧"而放弃：终态，不再参与 /reminders/due
+      //   acknowledged_at —— 用户点了「知道了」：终态，但可重置
+      db.exec('ALTER TABLE task_reminders ADD COLUMN skipped_at TEXT')
+      db.exec('ALTER TABLE task_reminders ADD COLUMN acknowledged_at TEXT')
     },
   },
 ]

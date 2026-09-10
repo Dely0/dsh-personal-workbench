@@ -156,7 +156,10 @@ export type { TaskMemoryRow } from './repo/task-memory.js'
 
 // 提醒域已抽到 repo/reminders.ts
 import { addReminder } from './repo/reminders.js'
-export { listDueReminders, listReminders, fireReminder, addReminder } from './repo/reminders.js'
+export {
+  listDueReminders, skipStaleReminders, listReminders,
+  fireReminder, acknowledgeReminder, resetReminder, skipReminder, addReminder,
+} from './repo/reminders.js'
 export type { DueReminder, TaskReminderRow } from './repo/reminders.js'
 
 // meta 已抽到 repo/meta.ts

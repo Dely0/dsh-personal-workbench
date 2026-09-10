@@ -14,7 +14,7 @@ import { makeSkillRoutes } from './api/routes/skills.js'
 import { probeSkills } from './api/skills.js'
 import { openWorkbenchDb, type WorkbenchDbConfig } from './db/database.js'
 import { seedDictionaries } from './db/seed.js'
-import { countFiredRemindersSince, countQueue, enqueueReminder, listQueue, markQueueAttempt, readMeta, removeQueueEntry } from './db/repo.js'
+import { countFiredRemindersSince, countQueue, enqueueReminder, listDueRemindersInWindow, listQueue, markQueueAttempt, readMeta, removeQueueEntry, skipStaleReminders } from './db/repo.js'
 import { probeDshIm, WechatChannelAdapter } from './reminder/adapter.js'
 import { readReminderPolicy, writeReminderPolicy } from './reminder/config.js'
 import { ReminderScheduler } from './reminder/scheduler.js'
@@ -83,6 +83,18 @@ export function apply(ctx: Context, config: Config = {}): void {
       resolveTarget: () => adapter.resolveTarget(),
     },
     policy: { read: () => readReminderPolicy(db), write: (raw) => writeReminderPolicy(db, raw) },
+    /**
+     * 页内提醒（前端轮询）的两条语义修正：
+     * 1. **策略关闭时不返回任何提醒** —— 用户关掉提醒就该真的不弹（原先前端照旧弹）。
+     * 2. **只返回窗口内的提醒** —— 超过 catchupWindowHours 的先落成终态（skipped_at），
+     *    不再永久挂在「待处理」计数里；窗口内正常返回。
+     */
+    listDue: () => {
+      const policy = readReminderPolicy(db)
+      if (!policy.enabled) return []
+      skipStaleReminders(db, policy.catchupWindowHours)
+      return listDueRemindersInWindow(db, policy.catchupWindowHours)
+    },
     test: async () => {
       const outcome = await adapter.send({ title: '工作台 · 微信提醒测试', body: `如果你在手机上看到这条消息，说明微信提醒已打通。\n时间：${new Date().toLocaleString('zh-CN', { hour12: false })}` })
       return outcome.ok ? { ok: true } : { ok: false, reason: outcome.reason }

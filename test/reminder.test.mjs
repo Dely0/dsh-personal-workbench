@@ -6,8 +6,9 @@ import { join } from 'node:path'
 import { openWorkbenchDb } from '../lib/db/database.js'
 import { seedDictionaries } from '../lib/db/seed.js'
 import {
-  addReminder, countQueue, createTask, enqueueReminder, getTask, listDueRemindersInWindow,
-  listQueue, markQueueAttempt, readMeta, removeQueueEntry, writeMeta,
+  acknowledgeReminder, addReminder, countQueue, createTask, enqueueReminder, getTask, listDueReminders,
+  listDueRemindersInWindow, listReminders, listQueue, markQueueAttempt, readMeta, removeQueueEntry,
+  resetReminder, skipStaleReminders, writeMeta,
 } from '../lib/db/repo.js'
 import { normalizeReminderPolicy, readReminderPolicy, writeReminderPolicy, breakerCooldownMs, DEFAULT_REMINDER_POLICY } from '../lib/reminder/config.js'
 import { checkThrottle, decideReminder, formatDigest, isQuietTime } from '../lib/reminder/policy.js'
@@ -316,13 +317,106 @@ test('scheduler: too-old reminders are skipped with an event, not sent', async (
     const im = fakeIm()
     const adapter = makeAdapter(db, im)
     const task = createTask(db, { title: '很老的任务', typeCode: 'code_impl', priorityCode: 'p1', dueAt: new Date(Date.now() - 72 * 60 * 60_000).toISOString() })
-    addReminder(db, task.id, 0)
+    const reminderId = addReminder(db, task.id, 0)
     const scheduler = new ReminderScheduler({ db, adapter, isTargetConfigured: () => true })
     const result = await scheduler.scan()
     assert.equal(result.skippedTooOld, 1)
     assert.equal(im.sent.length, 0)
     const events = db.prepare("SELECT event_code FROM task_events WHERE task_id = ? AND event_code = 'reminder_skipped'").all(task.id)
     assert.equal(events.length, 1)
+    // 关键：太旧的提醒必须落终态，否则会永远停在「未处理」
+    const row = db.prepare('SELECT skipped_at, fired_at FROM task_reminders WHERE id = ?').get(reminderId)
+    assert.equal(row.skipped_at !== null, true)
+    assert.equal(row.fired_at, null, '不写 fired_at：它表示"已送达"')
+    assert.equal(listDueReminders(db).some((r) => r.reminderId === reminderId), false, '不再出现在待处理列表')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 提醒状态语义（v1.13.2）：窗口、终态、策略开关、确认与重新武装
+// ---------------------------------------------------------------------------
+
+test('reminder status: 窗口外的历史提醒不再返回，窗口内的正常返回', async () => {
+  await withDb(async (db) => {
+    const now = new Date()
+    const fresh = createTask(db, { title: '窗口内', typeCode: 'code_impl', priorityCode: 'p1', dueAt: new Date(now.getTime() - 2 * 60 * 60_000).toISOString() })
+    const stale = createTask(db, { title: '三个月前', typeCode: 'code_impl', priorityCode: 'p1', dueAt: new Date(now.getTime() - 90 * 24 * 60 * 60_000).toISOString() })
+    addReminder(db, fresh.id, 0)
+    addReminder(db, stale.id, 0)
+
+    // 不带窗口：两条都在（历史行为）
+    assert.equal(listDueReminders(db).length, 2)
+    // 带 24 小时窗口：只剩窗口内那条
+    const windowed = listDueRemindersInWindow(db, 24)
+    assert.deepEqual(windowed.map((r) => r.title), ['窗口内'])
+  })
+})
+
+test('reminder status: skipStaleReminders 把窗口外的落成终态且幂等', async () => {
+  await withDb(async (db) => {
+    const now = new Date()
+    const stale = createTask(db, { title: '很久以前', typeCode: 'code_impl', priorityCode: 'p1', dueAt: new Date(now.getTime() - 90 * 24 * 60 * 60_000).toISOString() })
+    const fresh = createTask(db, { title: '刚刚', typeCode: 'code_impl', priorityCode: 'p1', dueAt: new Date(now.getTime() - 60_000).toISOString() })
+    const staleReminder = addReminder(db, stale.id, 0)
+    addReminder(db, fresh.id, 0)
+
+    assert.equal(skipStaleReminders(db, 24), 1, '只跳过窗口外那条')
+    assert.equal(skipStaleReminders(db, 24), 0, '幂等：第二次没有可跳过的')
+    assert.equal(listDueReminders(db).map((r) => r.title).join(','), '刚刚')
+    assert.equal(listReminders(db, stale.id)[0].skippedAt !== null, true)
+    assert.equal(listReminders(db, stale.id)[0].id, staleReminder)
+  })
+})
+
+test('reminder status: 确认后不再返回，重新武装后回到未处理', async () => {
+  await withDb(async (db) => {
+    const task = createTask(db, { title: '待确认', typeCode: 'code_impl', priorityCode: 'p1', dueAt: new Date(Date.now() - 60_000).toISOString() })
+    const reminderId = addReminder(db, task.id, 0)
+    assert.equal(listDueReminders(db).length, 1)
+
+    acknowledgeReminder(db, reminderId)
+    assert.equal(listDueReminders(db).length, 0, '确认后不再出现在待处理')
+    assert.equal(listReminders(db, task.id)[0].acknowledgedAt !== null, true)
+
+    // 误点「知道了」可以重新武装
+    assert.equal(resetReminder(db, reminderId), true)
+    const after = listReminders(db, task.id)[0]
+    assert.equal(after.acknowledgedAt, null)
+    assert.equal(after.skippedAt, null)
+    assert.equal(after.firedAt, null)
+    assert.equal(listDueReminders(db).length, 1, '重新武装后回到待处理')
+  })
+})
+
+test('reminder status: 已跳过的提醒也能重新武装', async () => {
+  await withDb(async (db) => {
+    const task = createTask(db, { title: '老任务', typeCode: 'code_impl', priorityCode: 'p1', dueAt: new Date(Date.now() - 90 * 24 * 60 * 60_000).toISOString() })
+    const reminderId = addReminder(db, task.id, 0)
+    skipStaleReminders(db, 24)
+    assert.equal(listDueReminders(db).length, 0)
+    assert.equal(resetReminder(db, reminderId), true)
+    assert.equal(listReminders(db, task.id)[0].skippedAt, null)
+  })
+})
+
+test('reminder status: 策略关闭时 /reminders/due 返回空', async () => {
+  await withDb(async (db) => {
+    const task = createTask(db, { title: '到期了', typeCode: 'code_impl', priorityCode: 'p1', dueAt: new Date(Date.now() - 60_000).toISOString() })
+    addReminder(db, task.id, 0)
+
+    // 与 index.ts 注入的 listDue 同构：策略关闭 → 空；开启 → 窗口内
+    const listDue = () => {
+      const policy = readReminderPolicy(db)
+      if (!policy.enabled) return []
+      skipStaleReminders(db, policy.catchupWindowHours)
+      return listDueRemindersInWindow(db, policy.catchupWindowHours)
+    }
+    writeReminderPolicy(db, { enabled: false })
+    assert.deepEqual(listDue(), [], '关掉提醒策略后页内不应再弹')
+    writeReminderPolicy(db, { enabled: true, quietHours: null, catchupWindowHours: 24 })
+    assert.equal(listDue().length, 1, '开启后恢复返回')
+    writeReminderPolicy(db, { enabled: false })
+    assert.deepEqual(listDue(), [])
   })
 })
 

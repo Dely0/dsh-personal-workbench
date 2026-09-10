@@ -45,7 +45,16 @@ export function readDailyCapacityMinutes(db: DatabaseSync): number {
 
 export function makeRoutes(db: DatabaseSync, deps: ReminderRouteDeps = {}): WebRoute[] {
   return [
-    ...makeReminderRoutes(db, { channel: deps.channel, policy: deps.policy, test: deps.test, listDue: () => listDueReminders(db), fire: (id) => fireReminder(db, id) }),
+    ...makeReminderRoutes(db, {
+      channel: deps.channel,
+      policy: deps.policy,
+      test: deps.test,
+      // 优先用调用方注入的实现（入口会带上"策略开关 + 补发窗口"语义）；
+      // 未注入时退回朴素版本，供测试等场景直接使用。**不要在这里硬编码覆盖**——
+      // 曾经因为硬编码 listDueReminders(db) 把入口注入的策略/窗口语义悄悄吃掉。
+      listDue: deps.listDue ?? (() => listDueReminders(db)),
+      fire: deps.fire ?? ((id: string) => fireReminder(db, id)),
+    }),
     // ------------------------------------------------------------------ workspace ensure
     {
       kind: 'exact',

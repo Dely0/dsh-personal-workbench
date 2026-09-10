@@ -213,7 +213,26 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
     }).catch(() => undefined)
   }, [showSettings])
 
-  const notifiedRef = useRef<Set<string>>(new Set())
+  /**
+   * 桌面通知去重集合：持久化到 localStorage。
+   * 原先是纯内存 Set，刷新页面就会对同一条提醒重发一次系统通知。现在跨会话记住，
+   * 并在条目数超过上限时淘汰最旧的一半（避免无限增长）。
+   */
+  const notifiedRef = useRef<Set<string>>((() => {
+    try {
+      const raw = window.localStorage.getItem('dsh-workbench:desktop-notified')
+      const parsed: unknown = raw === null ? [] : JSON.parse(raw)
+      return Array.isArray(parsed) ? new Set(parsed.filter((id): id is string => typeof id === 'string')) : new Set<string>()
+    } catch { return new Set<string>() }
+  })())
+  const persistNotified = (): void => {
+    try {
+      const ids = [...notifiedRef.current]
+      const trimmed = ids.length > 500 ? ids.slice(-250) : ids
+      notifiedRef.current = new Set(trimmed)
+      window.localStorage.setItem('dsh-workbench:desktop-notified', JSON.stringify(trimmed))
+    } catch { /* localStorage 不可用时退化为内存去重 */ }
+  }
 
   // 提示 / 错误统一转成右上角 toast：不再作为文档流横幅把任务列表挤下去。
   // 保留既有 setNotice/setError 调用点不变，在这里做一次桥接。
@@ -240,9 +259,11 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
         setReminders(r.reminders)
         // 系统级桌面提醒：启用且浏览器已授权时，对每个到期提醒发一次系统通知。
         if (settings.desktopNotify && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+          let notifiedAny = false
           for (const reminder of r.reminders) {
             if (notifiedRef.current.has(reminder.reminderId)) continue
             notifiedRef.current.add(reminder.reminderId)
+            notifiedAny = true
             try {
               new Notification(`任务提醒：${reminder.title}`, {
                 body: `截止时间：${fmtTime(reminder.dueAt)}`,
@@ -250,6 +271,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
               })
             } catch { /* 部分浏览器限制通知构造，忽略降级为页内横幅 */ }
           }
+          if (notifiedAny) persistNotified()
         }
       } catch { /* 轮询失败下轮重试 */ }
     }
@@ -310,9 +332,26 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
     await patchTask(taskId, { dueAt: next.toISOString() })
     setNotice(`已推迟到 ${next.getMonth() + 1}/${next.getDate()}`)
   }
-  const fireReminder = async (reminderId: string): Promise<void> => {
-    await api(`/api/workbench/reminders/${reminderId}/fire`, { method: 'POST' })
+  /** 用户点「知道了」：写 acknowledged_at（终态），并把这条从待处理列表移除。 */
+  const ackReminder = async (reminderId: string): Promise<void> => {
+    try {
+      await api(`/api/workbench/reminders/${reminderId}/ack`, { method: 'POST' })
+    } catch {
+      // 老版本宿主没有 ack 端点时优雅退回 fire（写 fired_at）
+      await api(`/api/workbench/reminders/${reminderId}/fire`, { method: 'POST' }).catch(() => undefined)
+    }
     setReminders((list) => list.filter((r) => r.reminderId !== reminderId))
+    if (selectedRef.current !== null) await refresh()
+  }
+  /** 重新武装：清掉 fired/skipped/acknowledged，提醒回到「未处理」。 */
+  const resetReminderState = async (reminderId: string): Promise<void> => {
+    try {
+      await api(`/api/workbench/reminders/${reminderId}/reset`, { method: 'POST' })
+      setNotice('提醒已重新武装，到点会再次提醒')
+      await refresh()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
   }
   const addTaskReminder = async (offsetMinutes: number): Promise<void> => {
     const taskId = selectedRef.current
@@ -1253,7 +1292,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
             {reminders.map((r) => (
               <div key={r.reminderId} className="wb-row" style={{ cursor: 'default' }}>
                 <span style={{ flex: 1 }}>{r.title} · {fmtTime(r.dueAt)}</span>
-                <button className="wb-btn" onClick={() => void fireReminder(r.reminderId)}>知道了</button>
+                <button className="wb-btn" onClick={() => void ackReminder(r.reminderId)}>知道了</button>
               </div>
             ))}
           </div>
@@ -2042,7 +2081,26 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                       <>
                         <div className="wb-card">
                           <h4>提醒（{selected.reminders.length}）</h4>
-                          {selected.reminders.map((r) => <div key={r.id} style={{ fontSize: 12, color: '#999', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 5 }}><Icon name="bell" size={13} />{r.offsetMinutes === 0 ? '准时（截止时间）' : `提前 ${r.offsetMinutes} 分钟`} · {r.methodCode === 'os' ? '系统通知' : '页面/桌面通知'} · {r.firedAt === null ? '未触发' : `已触发 ${fmtTime(r.firedAt)}`}</div>)}
+                          {selected.reminders.map((r) => {
+                            // 三种终态分开显示：已送达 / 已跳过（太旧）/ 用户已确认 —— 原先把它们都塞在 fired_at 里
+                            const ackAt = r.acknowledgedAt ?? null
+                            const skipAt = r.skippedAt ?? null
+                            const state = ackAt !== null
+                              ? `已确认 ${fmtTime(ackAt)}`
+                              : skipAt !== null
+                                ? '已跳过（超出补发窗口）'
+                                : r.firedAt === null
+                                  ? '未触发'
+                                  : `已送达 ${fmtTime(r.firedAt)}`
+                            const settled = ackAt !== null || skipAt !== null || r.firedAt !== null
+                            return (
+                              <div key={r.id} style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
+                                <Icon name="bell" size={13} />
+                                {r.offsetMinutes === 0 ? '准时（截止时间）' : `提前 ${r.offsetMinutes} 分钟`} · {r.methodCode === 'os' ? '系统通知' : '页面/桌面通知'} · {state}
+                                {settled && <button className="wb-btn" style={{ padding: '1px 7px', fontSize: 11 }} title="清掉终态、回到未处理，到点会再提醒一次" onClick={() => void resetReminderState(r.id)}>重新武装</button>}
+                              </div>
+                            )
+                          })}
                           {selected.task.effectiveDueAt === null
                             ? <div style={{ fontSize: 12, color: '#999' }}>任务还没有截止时间，请先在详情里设置截止时间，再添加提醒。</div>
                             : selected.task.statusCode === 'done' || selected.task.statusCode === 'cancelled'
@@ -2243,7 +2301,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
             {reminders.map((r) => (
               <div key={r.reminderId} className="wb-row" style={{ cursor: 'default' }}>
                 <span style={{ flex: 1 }}>{r.title} · {fmtTime(r.dueAt)}</span>
-                <button className="wb-btn" onClick={() => void fireReminder(r.reminderId)}>知道了</button>
+                <button className="wb-btn" onClick={() => void ackReminder(r.reminderId)}>知道了</button>
               </div>
             ))}
             {pendingCount === 0 && <p className="wb-hint">暂无待处理事项。</p>}

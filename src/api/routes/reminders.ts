@@ -4,7 +4,7 @@
  */
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import type { DatabaseSync } from 'node:sqlite'
-import { listQueue, writeMeta } from '../../db/repo.js'
+import { acknowledgeReminder, listQueue, resetReminder, writeMeta } from '../../db/repo.js'
 import { isLoopbackRequest, pathSegments, readJsonBody, writeJson } from './helpers.js'
 
 export interface ReminderRouteDeps {
@@ -18,7 +18,7 @@ export interface ReminderRouteDeps {
   policy?: { read(): unknown; write(raw: unknown): unknown }
   /** 发送测试消息（设置页用） */
   test?: () => Promise<{ ok: boolean; reason?: string }>
-  /** 到期提醒列表（prefix 路由用） */
+  /** 到期提醒列表（prefix 路由用；由入口按策略开关与窗口过滤） */
   listDue?: () => unknown
   /** 标记提醒已触发（prefix 路由用） */
   fire?: (reminderId: string) => void
@@ -91,6 +91,18 @@ export function makeReminderRoutes(db: DatabaseSync, deps: ReminderRouteDeps = {
           if (deps.fire === undefined) return writeJson(res, 503, { error: 'reminders unavailable' })
           deps.fire(segments[0])
           return writeJson(res, 200, { ok: true })
+        }
+        // 用户点「知道了」：写 acknowledged_at 作为终态（与 fired_at 分离，便于重新武装）
+        if (segments.length === 2 && segments[1] === 'ack' && method === 'POST') {
+          const row = db.prepare('SELECT id FROM task_reminders WHERE id = ?').get(segments[0]) as { id: string } | undefined
+          if (row === undefined) return writeJson(res, 404, { error: 'reminder not found' })
+          acknowledgeReminder(db, segments[0])
+          return writeJson(res, 200, { ok: true })
+        }
+        // 重新武装：清掉 fired_at / skipped_at / acknowledged_at，回到「未处理」
+        if (segments.length === 2 && segments[1] === 'reset' && method === 'POST') {
+          const changed = resetReminder(db, segments[0])
+          return writeJson(res, changed ? 200 : 404, changed ? { ok: true } : { error: 'reminder not found' })
         }
         return writeJson(res, 404, { error: 'not found' })
       },

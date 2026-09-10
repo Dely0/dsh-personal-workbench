@@ -80,7 +80,7 @@ Turn your DSH into a **calendar + task list + AI assistant workbench**.
 
 ### 前置条件
 
-- [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) **0.1.0-rc.6** Web 版
+- [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) **0.1.5-rc.1** Web 版
 - Node.js `^22.19.0` 或 `>=24.0.0`
 - pnpm `>=11.7.0 <12`
 - 网络可访问 npm registry（或使用镜像）
@@ -132,12 +132,26 @@ dsh plugin --profile web add link:/path/to/dsh-personal-workbench
 
 ## 兼容性与已知限制
 
-- 当前版本针对 **DSH 0.1.0-rc.6 Web 版** 开发与测试。
-- 客户端侧边栏入口和中心列接管依赖 rc.6 的 DOM 结构契约（`data-pane`、`logoRow`、`centerCol` 等 class）。
-  **DSH 升级到新的大版本时，必须重新验证这些选择器，必要时适配。**
+- 当前版本针对 **DSH 0.1.5-rc.1 Web 版** 开发与测试（插件 v1.13.1）。
+- 入口分两条：**会话标题栏按钮**走 DSH 官方槽位 `conversation.session.header.actions`（稳定）；
+  DSH 侧栏入口仍沿用 DOM 契约（`data-pane`、`logoRow`、`centerCol` 等 class）。
+  **DSH 升级到新的大版本时，请重新验证侧栏入口这些选择器，必要时适配。**
 - 与 `dsh-web-ui`（task-board / ssh）共存时使用其 `data-dsh-*` 互斥协议；未安装时自动失效，**不依赖 dsh-web-ui**。
+- 微信提醒依赖 `@xmanrui/dsh-im`：**软探测**（`ctx.get('dshIm')`），未安装或未配置投递目标时静默降级为页内提醒 + 桌面通知，不影响其它功能。
+- 技能目录依赖宿主 `skills` 注册表：未安装时 Skill 选择器自动隐藏。
 - 仅支持单用户本地使用；无云同步、无多用户权限体系。
 - AI 能力依赖你在 DSH 中已配置的模型与凭证；执行/咨询等会真实消耗 token。
+
+## 版本历史
+
+| 版本 | 要点 |
+|---|---|
+| 1.13.1 | 修复会话标题栏入口导致前端加载失败（cordis 服务读取必须用 `ctx.get`）；新增点子「文件夹」（手动建/改名/删除/合并、多对多归入与移出、整体转任务树）；新增「今日容量」条与每天可投入时长设置；UI 视觉层统一（边框/阴影/字号/间距，浅色下保持模块可辨识）；用户入口改用官方槽位 |
+| 1.12.1 | 微信草稿通知正文精简（任务标题 + 摘要首行 + 一行操作）；修复 reminder 测试在 Windows 下未关库导致临时目录删除失败 |
+| 1.12.0 | 验收「暂存」（草稿保持待确认但不再自动弹窗，可唤回）；驳回/暂存留痕并回传提交历史给 AI；草稿通知接入微信（默认只开验收与复盘） |
+| 1.11.0 | Skill 选择器：AI 会话前可勾选本机已安装 Skill，注入「加载这些技能」指令（不内联正文） |
+| 1.10.x | 微信任务提醒：通道适配、分级/静默/节流/熔断、补发队列、策略配置界面 |
+| 1.9.0 | 工作台 UI 优化 P0-P2（大屏分栏、详情摘要卡与吸顶操作条、变更历史时间线、空状态 CTA） |
 
 ## 路线图
 
@@ -154,6 +168,12 @@ dsh plugin --profile web add link:/path/to/dsh-personal-workbench
 - [x] V2：今日/日历计划面板手动编辑（上下移、改备注、从今日任务增删计划项；保留 AI 生成 + 确认 + 完成/推迟）（1.5.0）
 - [x] V2：UI 美化（卡片/列表/表单/点子关联展示统一）
 - [x] V2：任务类型自定义 UI（设置页字典管理：类型/状态/优先级/点子类型）
+- [x] V2：任务到期提醒接入微信（1.10.x）
+- [x] V2：Skill 选择器（1.11.0）
+- [x] V2：验收暂存 / 驳回反馈闭环 / 草稿通知（1.12.0）
+- [x] V2：UI 视觉层重构 + 点子文件夹 + 官方槽位入口（1.13.x）
+- [x] V2：提醒状态语义修复（窗口/终态分离 + 重新武装）（1.13.2）
+- [ ] 待规划：客户端 `WorkbenchApp` 拆分（施工图见 `docs/design/2026-09-09-client-split-backlog.md`）
 - [ ] V2：定时自动化
 - [ ] 未来：多端同步、任务拖拽排序、数据导入导出
 
@@ -198,7 +218,7 @@ Then restart `dsh web` and hard-refresh the browser.
 
 ## Compatibility
 
-- Built and tested against **DeepSeek Harness 0.1.0-rc.6 Web**.
+- Built and tested against **DeepSeek Harness 0.1.5-rc.1 Web**.
 - Does **not** depend on `dsh-web-ui`; optional coexistence protocol only.
 - Node.js `^22.19.0 || >=24.0.0`, pnpm `>=11.7.0 <12`.
 
