@@ -494,7 +494,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
         } catch { /* 目录创建/注册失败则回退当前工作区 */ }
       }
       if (workspaceId === undefined) throw new Error('没有可用工作区，请先在 DSH 中打开一个工作区')
-      const id = await runtime.uiWorkspace.connectWorkspace(workspaceId)
+      const id = await connectWorkspace(workspaceId)
       const binding = runtime.sessions.binding(id)
       if (binding === undefined) throw new Error('会话绑定未就绪，请稍后重试')
       await binding.session.rename(mode === 'idea_association' ? '点子关联' : mode === 'idea_brainstorm' ? '点子头脑风暴' : mode === 'knowledge_doc' ? `知识总结：${docContext?.name ?? '本地文档'}` : mode === 'report' ? `${text.startsWith('week:') ? '周报' : '日报'}：${text.split(':')[1] ?? ''}` : mode === 'plan' ? `AI 计划：${planAnchor.slice(5)}` : mode === 'clarify' ? `澄清：${text.slice(0, 24)}` : mode === 'consult' ? `协助：${task?.title.slice(0, 24)}` : mode === 'breakdown' ? `拆解：${task?.title.slice(0, 24)}` : mode === 'review' ? `复盘：${task?.title.slice(0, 24)}` : `执行：${task?.title.slice(0, 24)}`).catch(() => undefined)
@@ -2335,7 +2335,57 @@ function conversationColumn(): HTMLElement | undefined {
 }
 
 export const name = 'personal-workbench-client'
-export const inject = ['sessions', 'workspaces', 'connection', 'uiWorkspace']
+/**
+ * 硬依赖只保留在旧版本 DSH 里也稳定存在的三个服务。
+ *
+ * `uiWorkspace` 是 DSH 0.1.5-rc.1 才引入的（0.1.1 的 dsh-client-ui-workspace 里
+ * 没有这个符号）。cordis 的 inject 是"缺一个就整个插件 pending"，所以把它放这里
+ * 会让老版本 DSH 直接报 "Failed to load plugins"；既然它只在启动 AI 会话时用一次，
+ * 就按插件既有原则做成软探测（见 connectWorkspace）。
+ */
+export const inject = ['sessions', 'workspaces', 'connection']
+
+/**
+ * 宿主上下文（由 apply() 记录），供需要软探测可选服务的模块级函数使用
+ * （例如 connectWorkspace 要试 uiWorkspace）。卸载时清空，避免持有已废弃的 fiber。
+ */
+let pluginCtx: unknown
+
+/** 软探测可选服务（cordis 代理访问未声明服务会抛错，必须用 ctx.get）。 */
+function optionalService<T>(ctx: unknown, name: string): T | undefined {
+  const getter = (ctx as { get?: (key: string) => unknown } | undefined)?.get
+  if (typeof getter !== 'function') return undefined
+  try {
+    return getter(name) as T | undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * 把一个 workspace 变成可用的会话（返回新会话 id）。
+ *
+ * 优先官方 uiWorkspace.connectWorkspace；老版本 DSH（如 0.1.1-rc.1）没有这个服务，
+ * 退到 workspaces.openPath；两者都不可用就抛出能指导用户的错误——**而不是**把
+ * uiWorkspace 放进 inject 让整个插件在旧版本上 pending。
+ *
+ * `ctx` 来自 apply() 记录的宿主上下文；没有它时退回 runtime 能力（workspaces.openPath）。
+ */
+async function connectWorkspace(workspaceId: string): Promise<string> {
+  const ctx = pluginCtx as { get?: (key: string) => unknown } | undefined
+  const uiWorkspace = optionalService<{ connectWorkspace?: (id: string) => Promise<string> }>(ctx, 'uiWorkspace')
+  if (typeof uiWorkspace?.connectWorkspace === 'function') return await uiWorkspace.connectWorkspace(workspaceId)
+  const runtime = pluginCtx as WorkbenchRuntime
+  const openPath = runtime?.workspaces?.openPath
+  if (typeof openPath === 'function') {
+    await openPath.call(runtime.workspaces, workspaceId)
+    const snapshot = runtime.sessions.list.getSnapshot()
+    const last = snapshot.ids[snapshot.ids.length - 1]
+    if (typeof snapshot.current === 'string' && snapshot.current !== '') return snapshot.current
+    if (typeof last === 'string' && last !== '') return last
+  }
+  throw new Error('当前 DSH 版本没有可用的工作区切换接口（需要 uiWorkspace 或 workspaces.openPath），请先手动切到任务工作区再发起 AI 会话')
+}
 
 /**
  * 官方槽位入口：会话标题栏的「工作台」按钮。
@@ -2392,6 +2442,7 @@ function WorkbenchHeaderEntry({ workbench }: { workbench: WorkbenchSlotApi }): J
 
 export function apply(ctx: unknown): () => void {
   const runtime = ctx as WorkbenchRuntime
+  pluginCtx = ctx
   let open = false
   ensureStyle()
   const setOpen = (value: boolean): void => {
@@ -2486,6 +2537,7 @@ export function apply(ctx: unknown): () => void {
     document.removeEventListener('click', onClickSidebarRow, true)
     entry.remove(); root.unmount(); view.remove()
     document.documentElement.removeAttribute(ACTIVE_ATTR)
+    if (pluginCtx === ctx) pluginCtx = undefined
   }
 }
 
