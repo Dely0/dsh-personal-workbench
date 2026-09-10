@@ -174,6 +174,79 @@ export function deleteIdeaCluster(db: DatabaseSync, id: string): boolean {
   return db.prepare('DELETE FROM idea_clusters WHERE id = ?').run(id).changes > 0
 }
 
+/** 文件夹改名/改摘要/改标签（点子王 = 文件夹，同一张表）。 */
+export function updateIdeaCluster(
+  db: DatabaseSync,
+  id: string,
+  patch: { title?: string; summaryMd?: string; tags?: string[] },
+  at = nowIso(),
+): IdeaClusterRow | undefined {
+  const current = getIdeaCluster(db, id)
+  if (current === undefined) return undefined
+  const title = patch.title === undefined ? current.title : patch.title.trim()
+  if (title === '') throw new Error('cluster title cannot be empty')
+  db.prepare('UPDATE idea_clusters SET title = ?, summary_md = ?, tags_json = ?, updated_at = ? WHERE id = ?')
+    .run(
+      title,
+      patch.summaryMd === undefined ? current.summaryMd : patch.summaryMd,
+      JSON.stringify(patch.tags === undefined ? current.tags : patch.tags),
+      at,
+      id,
+    )
+  return getIdeaCluster(db, id)
+}
+
+/** 把一个点子归入文件夹（多对多，幂等）。 */
+export function addIdeaToCluster(db: DatabaseSync, clusterId: string, ideaId: string, note: string | null = null, at = nowIso()): IdeaClusterRow | undefined {
+  if (getIdeaCluster(db, clusterId) === undefined) return undefined
+  if (getIdea(db, ideaId) === undefined) return undefined
+  db.prepare('INSERT OR IGNORE INTO idea_links (cluster_id, idea_id, note, created_at) VALUES (?, ?, ?, ?)')
+    .run(clusterId, ideaId, note, at)
+  db.prepare('UPDATE idea_clusters SET updated_at = ? WHERE id = ?').run(at, clusterId)
+  return getIdeaCluster(db, clusterId)
+}
+
+/** 把一个点子移出文件夹。 */
+export function removeIdeaFromCluster(db: DatabaseSync, clusterId: string, ideaId: string, at = nowIso()): IdeaClusterRow | undefined {
+  if (getIdeaCluster(db, clusterId) === undefined) return undefined
+  db.prepare('DELETE FROM idea_links WHERE cluster_id = ? AND idea_id = ?').run(clusterId, ideaId)
+  db.prepare('UPDATE idea_clusters SET updated_at = ? WHERE id = ?').run(at, clusterId)
+  return getIdeaCluster(db, clusterId)
+}
+
+/** 未归类点子：没有被任何文件夹引用的点子。 */
+export function listUnfiledIdeas(db: DatabaseSync, limit = 200): IdeaRow[] {
+  const rows = db.prepare(`
+    SELECT * FROM ideas i
+    WHERE NOT EXISTS (SELECT 1 FROM idea_links l WHERE l.idea_id = i.id)
+    ORDER BY i.created_at DESC LIMIT ?
+  `).all(Math.max(1, Math.min(limit, 500))) as unknown as RawIdeaRow[]
+  return rows.map((row) => parseIdea(row)).filter((idea): idea is IdeaRow => idea !== undefined)
+}
+
+/**
+ * 合并文件夹：把 source 的成员全部挂到 target，再删掉 source。
+ * 成员的 note 以 target 已有记录为准（INSERT OR IGNORE，不覆盖）。
+ */
+export function mergeIdeaClusters(db: DatabaseSync, sourceId: string, targetId: string, at = nowIso()): IdeaClusterRow | undefined {
+  if (sourceId === targetId) throw new Error('cannot merge a folder into itself')
+  const source = getIdeaCluster(db, sourceId)
+  const target = getIdeaCluster(db, targetId)
+  if (source === undefined || target === undefined) return undefined
+  db.exec('BEGIN')
+  try {
+    const insert = db.prepare('INSERT OR IGNORE INTO idea_links (cluster_id, idea_id, note, created_at) VALUES (?, ?, ?, ?)')
+    for (const idea of source.ideas) insert.run(targetId, idea.id, null, at)
+    db.prepare('DELETE FROM idea_clusters WHERE id = ?').run(sourceId)
+    db.prepare('UPDATE idea_clusters SET updated_at = ? WHERE id = ?').run(at, targetId)
+    db.exec('COMMIT')
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
+  }
+  return getIdeaCluster(db, targetId)
+}
+
 export function listIdeaClustersForIdea(db: DatabaseSync, ideaId: string): IdeaClusterRow[] {
   const rows = db.prepare('SELECT cluster_id FROM idea_links WHERE idea_id = ?').all(ideaId) as unknown as Array<{ cluster_id: string }>
   return rows.map((row) => getIdeaCluster(db, row.cluster_id)).filter((cluster): cluster is IdeaClusterRow => cluster !== undefined)

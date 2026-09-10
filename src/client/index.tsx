@@ -36,6 +36,7 @@ import type {
   ReminderPolicyView,
   SkillsResponse,
   SkillSummary,
+  WorkbenchSettings,
 } from '../shared/contracts.js'
 import { Icon } from './components/Icon.js'
 import { Badge, MultiSelectDropdown, TaskTreeRows, countTaskTree } from './components/TaskList.js'
@@ -76,7 +77,9 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   const [notice, setNotice] = useState<string | null>(null)
   const [reminderModalOpen, setReminderModalOpen] = useState(false)
   const [pendingOpen, setPendingOpen] = useState(false)
-  const [settings, setSettings] = useState<{ defaultWorkspace: string; autoCreateTypeFolders: boolean; desktopNotify: boolean }>({ defaultWorkspace: '', autoCreateTypeFolders: true, desktopNotify: true })
+  const [settings, setSettings] = useState<WorkbenchSettings>({ defaultWorkspace: '', autoCreateTypeFolders: true, desktopNotify: true, dailyCapacityMinutes: 390 })
+  /** 今日容量里「可投入时长」的行内编辑态（null = 只读展示） */
+  const [capacityEdit, setCapacityEdit] = useState<string | null>(null)
   const [notifyPerm, setNotifyPerm] = useState<NotificationPermission | 'unsupported'>(() => typeof Notification === 'undefined' ? 'unsupported' : Notification.permission)
   const [showSettings, setShowSettings] = useState(false)
   const [settingsSaving, setSettingsSaving] = useState(false)
@@ -113,7 +116,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   const [taskKnowledge, setTaskKnowledge] = useState<KnowledgeEntry[]>([])
   const [ideas, setIdeas] = useState<Idea[]>([])
   const [ideaClusters, setIdeaClusters] = useState<IdeaClusterView[]>([])
-  const [ideaTab, setIdeaTab] = useState<'ideas' | 'clusters'>('ideas')
+  const [ideaTab, setIdeaTab] = useState<'ideas' | 'unfiled' | 'clusters'>('ideas')
   const [ideaQuery, setIdeaQuery] = useState('')
   const [ideaKind, setIdeaKind] = useState('')
   const [selectedIdeaIds, setSelectedIdeaIds] = useState<Set<string>>(new Set())
@@ -121,6 +124,9 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   const [selectedCluster, setSelectedCluster] = useState<IdeaClusterView | null>(null)
   const [ideaForm, setIdeaForm] = useState<{ title: string; contentMd: string; kindCode: string; tags: string } | null>(null)
   const [ideaEditId, setIdeaEditId] = useState<string | null>(null)
+  // 文件夹（= 点子王）管理：新建/改名表单，以及「归入文件夹」菜单展开的卡片
+  const [folderForm, setFolderForm] = useState<{ mode: 'create' | 'rename'; id: string | null; title: string; summaryMd: string } | null>(null)
+  const [folderMenuIdeaId, setFolderMenuIdeaId] = useState<string | null>(null)
   const [ideaRefreshKey, setIdeaRefreshKey] = useState(0)
   const [reportRefreshKey, setReportRefreshKey] = useState(0)
   const [todayPlanSession, setTodayPlanSession] = useState<{ sessionId: string } | null>(null)
@@ -192,7 +198,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
     if (view === 'ideas') void loadIdeas().catch(() => undefined)
   }, [view, loadIdeas, ideaRefreshKey])
   useEffect(() => { void refresh().catch((e: unknown) => setError(e instanceof Error ? e.message : String(e))) }, [refresh])
-  useEffect(() => { void api<{ settings: { defaultWorkspace: string; autoCreateTypeFolders: boolean; desktopNotify: boolean } }>('/api/workbench/settings').then((r) => setSettings(r.settings)).catch(() => undefined) }, [])
+  useEffect(() => { void api<{ settings: WorkbenchSettings }>('/api/workbench/settings').then((r) => setSettings(r.settings)).catch(() => undefined) }, [])
 
   // 打开设置面板时加载微信提醒策略与通道状态（含自动发现的可选投递目标）
   useEffect(() => {
@@ -838,6 +844,147 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
     await api(`/api/workbench/plans/${localDateString()}`, { method: 'DELETE' })
     await refresh()
   }
+
+  /**
+   * 点子页的文件夹派生数据：
+   * - unfiledIdeas：没有被任何文件夹引用的点子（「未归类」区）
+   * - ideasOfFolder：按文件夹聚合的成员（同一数据在卡片里只显示前 2 条缩略）
+   * 数据层无需变更：idea_clusters = 文件夹，idea_links 已支持多对多。
+   */
+  const unfiledIdeas = useMemo(() => {
+    const filed = new Set(ideaClusters.flatMap((cluster) => cluster.ideas.map((idea) => idea.id)))
+    return ideas.filter((idea) => !filed.has(idea.id))
+  }, [ideas, ideaClusters])
+
+  const refreshIdeas = async (): Promise<void> => {
+    setIdeaRefreshKey((value) => value + 1)
+    setFolderMenuIdeaId(null)
+  }
+
+  /** 新建空文件夹 / 文件夹改名。 */
+  const saveFolder = async (): Promise<void> => {
+    if (folderForm === null) return
+    const title = folderForm.title.trim()
+    if (title === '') { setError('文件夹名称不能为空'); return }
+    try {
+      if (folderForm.mode === 'create') {
+        const res = await api<{ cluster: IdeaClusterView }>('/api/workbench/idea-clusters', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ title, summaryMd: folderForm.summaryMd }),
+        })
+        setNotice('文件夹已创建')
+        setSelectedCluster(res.cluster)
+      } else if (folderForm.id !== null) {
+        const res = await api<{ cluster: IdeaClusterView }>(`/api/workbench/idea-clusters/${folderForm.id}`, {
+          method: 'PATCH',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ title, summaryMd: folderForm.summaryMd }),
+        })
+        setNotice('文件夹已更新')
+        setSelectedCluster(res.cluster)
+      }
+      setFolderForm(null)
+      await refreshIdeas()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  /** 删除文件夹（点子本身保留，回到「未归类」）。 */
+  const deleteFolder = async (id: string): Promise<void> => {
+    try {
+      await api(`/api/workbench/idea-clusters/${id}`, { method: 'DELETE' })
+      if (selectedCluster?.id === id) setSelectedCluster(null)
+      setNotice('文件夹已删除，点子回到「未归类」')
+      await refreshIdeas()
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)) }
+  }
+
+  /** 把点子归入文件夹（可多对多；已在其中则忽略）。 */
+  const fileIdeaInto = async (ideaId: string, clusterId: string): Promise<void> => {
+    try {
+      await api(`/api/workbench/idea-clusters/${clusterId}/ideas`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ ideaId }),
+      })
+      setNotice('已归入文件夹')
+      await refreshIdeas()
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)) }
+  }
+
+  /** 把点子移出文件夹。 */
+  const unfileIdeaFrom = async (ideaId: string, clusterId: string): Promise<void> => {
+    try {
+      await api(`/api/workbench/idea-clusters/${clusterId}/ideas/${ideaId}`, { method: 'DELETE' })
+      await refreshIdeas()
+      const res = await api<{ cluster: IdeaClusterView }>(`/api/workbench/idea-clusters/${clusterId}`)
+      setSelectedCluster(res.cluster)
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)) }
+  }
+
+  /** 合并文件夹：把当前文件夹并入目标文件夹（成员挂过去，源文件夹删除）。 */
+  const mergeFolderInto = async (sourceId: string, targetId: string): Promise<void> => {
+    if (sourceId === targetId) return
+    try {
+      const res = await api<{ cluster: IdeaClusterView }>(`/api/workbench/idea-clusters/${sourceId}/merge`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ into: targetId }),
+      })
+      setNotice('文件夹已合并')
+      setSelectedCluster(res.cluster)
+      await refreshIdeas()
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)) }
+  }
+
+  /** 今日容量：当天要做的事（今天到期 + 无截止的进行中）按 estimatedMinutes 摊开。
+   * 没有估算的任务按每件 30 分钟兜底，避免"没填估算就当零成本"导致容量条失真。
+   */
+  const capacityTodayTasks = openTasks.filter((t) =>
+    t.effectiveDueAt === null
+      ? (t.statusCode === 'doing' || t.statusCode === 'blocked')
+      : isTaskDueOnDay(t, now))
+  const capacityTaskIds = new Set(capacityTodayTasks.map((t) => t.id))
+  const capacityFromPlan = (todayPlan?.items ?? []).filter((item) => capacityTaskIds.has(item.taskId)).length
+  const capacityPlanned = capacityTodayTasks.reduce((sum, t) => sum + (t.estimatedMinutes ?? 30), 0)
+  const capacityByPriority = {
+    p0: capacityTodayTasks.filter((t) => t.priorityCode === 'p0').reduce((sum, t) => sum + (t.estimatedMinutes ?? 30), 0),
+    p1: capacityTodayTasks.filter((t) => t.priorityCode === 'p1').reduce((sum, t) => sum + (t.estimatedMinutes ?? 30), 0),
+    p2: capacityTodayTasks.filter((t) => t.priorityCode === 'p2').reduce((sum, t) => sum + (t.estimatedMinutes ?? 30), 0),
+    p3: capacityTodayTasks.filter((t) => t.priorityCode !== 'p0' && t.priorityCode !== 'p1' && t.priorityCode !== 'p2').reduce((sum, t) => sum + (t.estimatedMinutes ?? 30), 0),
+  }
+  const capacityTotal = Math.max(settings.dailyCapacityMinutes, capacityPlanned, 1)
+  const capacity = {
+    planned: capacityPlanned,
+    free: Math.max(0, settings.dailyCapacityMinutes - capacityPlanned),
+    over: capacityPlanned > settings.dailyCapacityMinutes,
+    byPriority: capacityByPriority,
+    total: capacityTotal,
+    count: capacityTodayTasks.length,
+    planCovered: capacityFromPlan,
+  }
+
+  /** 保存「每天可投入时长」（分钟）；<30 视为无效，恢复默认 390。 */
+  const saveDailyCapacity = async (): Promise<void> => {    const raw = capacityEdit === null ? '' : capacityEdit.trim()
+    setCapacityEdit(null)
+    const parsed = Number(raw)
+    const next = Number.isFinite(parsed) && parsed >= 30 ? Math.min(1440, Math.round(parsed)) : 390
+    if (next === settings.dailyCapacityMinutes) return
+    try {
+      await api<{ settings: { dailyCapacityMinutes: number } }>('/api/workbench/settings', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ dailyCapacityMinutes: next }),
+      })
+      setSettings((prev) => ({ ...prev, dailyCapacityMinutes: next }))
+      setNotice(`每天可投入时长已设为 ${next} 分钟`)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
   const savePlan = async (date: string, items: Array<{ taskId: string; note: string }>): Promise<void> => {
     try {
       await api(`/api/workbench/plans/${date}`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ items: items.map((item, index) => ({ taskId: item.taskId, order: index + 1, note: item.note })) }) })
@@ -963,6 +1110,38 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
         <button className="wb-btn" onClick={() => closePanel()}><Icon name="back" /><span className="wb-label">返回对话</span></button>
       </div>
 
+      {folderForm !== null && (
+        <div className="wb-modal-mask" onClick={() => setFolderForm(null)}>
+          <div className="wb-modal" style={{ width: 'min(460px, 94vw)' }} onClick={(e) => e.stopPropagation()}>
+            <h4><Icon name="folder" />{folderForm.mode === 'create' ? '新建文件夹' : '重命名文件夹'}</h4>
+            <p>点子可以同时属于多个文件夹；删除文件夹不会删除点子，它们会回到「未归类」。</p>
+            <label style={{ display: 'block', marginBottom: 10 }}>
+              <span style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)' }}>文件夹名称</span>
+              <input
+                autoFocus
+                value={folderForm.title}
+                onChange={(e) => setFolderForm((prev) => prev === null ? prev : { ...prev, title: e.target.value })}
+                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void saveFolder() } }}
+                placeholder="例如：工作台 · 微信提醒方向"
+                style={{ width: '100%', marginTop: 4, boxSizing: 'border-box', background: 'var(--dsw-alias-bg-base,#17171a)', border: '1px solid var(--wb-line, rgba(127,127,127,.26))', color: 'inherit', borderRadius: 8, padding: '8px 10px', font: 'inherit' }}
+              />
+            </label>
+            <label style={{ display: 'block' }}>
+              <span style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)' }}>一句话说明（可选）</span>
+              <textarea
+                value={folderForm.summaryMd}
+                onChange={(e) => setFolderForm((prev) => prev === null ? prev : { ...prev, summaryMd: e.target.value })}
+                placeholder="这个文件夹收的是哪一类点子"
+                style={{ minHeight: 72 }}
+              />
+            </label>
+            <div className="wb-modal-actions">
+              <button className="wb-btn" onClick={() => setFolderForm(null)}>取消</button>
+              <button className="wb-btn primary" onClick={() => void saveFolder()}>{folderForm.mode === 'create' ? '创建' : '保存'}</button>
+            </div>
+          </div>
+        </div>
+      )}
       {promptModal !== null && (
         <div className="wb-modal-mask" onClick={cancelPrompt}>
           <div className="wb-modal" style={skillsAvailable ? { width: 'min(620px, 94vw)' } : undefined} onClick={(e) => e.stopPropagation()}>
@@ -1132,6 +1311,50 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                 <div className="wb-stat"><b>{bootstrap?.stats.todayDue ?? 0}</b><span>今天到期</span></div>
                 <div className="wb-stat"><b>{bootstrap?.stats.doing ?? 0}</b><span>进行中</span></div>
                 <div className="wb-stat"><b>{bootstrap?.stats.total ?? 0}</b><span>总数</span></div>
+              </div>
+
+              {/* 今日容量：把"今天投得进多少时间"显式化（estimatedMinutes 按优先级摊成一条时间轴） */}
+              <div className="wb-cap">
+                <div className="wb-cap-head">
+                  <h3>今日容量</h3>
+                  <div className="wb-cap-meta">
+                    <span>已排 <b>{capacity.planned}</b> min</span>
+                    <span>
+                      可投入{' '}
+                      <b>
+                        {capacityEdit === null
+                          ? <span className="wb-cap-edit" title="点击修改每天可投入时长" onClick={() => setCapacityEdit(String(settings.dailyCapacityMinutes))}>{settings.dailyCapacityMinutes}</span>
+                          : <input
+                              autoFocus
+                              type="number"
+                              min={30}
+                              max={1440}
+                              step={30}
+                              value={capacityEdit}
+                              style={{ width: 64, font: 'inherit', fontVariantNumeric: 'tabular-nums' }}
+                              onChange={(e) => setCapacityEdit(e.target.value)}
+                              onBlur={() => void saveDailyCapacity()}
+                              onKeyDown={(e) => { if (e.key === 'Enter') void saveDailyCapacity(); if (e.key === 'Escape') setCapacityEdit(null) }}
+                            />}
+                      </b>{' '}
+                      min
+                    </span>
+                    <span>余 <b>{capacity.free}</b> min</span>
+                  </div>
+                </div>
+                <div className="wb-cap-bar" role="img" aria-label={`今日任务时间占比：紧急 ${capacity.byPriority.p0} 分钟、高 ${capacity.byPriority.p1} 分钟、普通 ${capacity.byPriority.p2} 分钟、低 ${capacity.byPriority.p3} 分钟、空闲 ${capacity.free} 分钟`}>
+                  {(['p0', 'p1', 'p2', 'p3'] as const).map((code) => capacity.byPriority[code] > 0
+                    ? <i key={code} className={code} style={{ width: `${(capacity.byPriority[code] / capacity.total) * 100}%` }} title={`${code} · ${capacity.byPriority[code]} min`} />
+                    : null)}
+                  {capacity.free > 0 && <i className="free" style={{ width: `${(capacity.free / capacity.total) * 100}%` }} title={`空闲 · ${capacity.free} min`} />}
+                </div>
+                <div className="wb-cap-legend">
+                  <span><i style={{ background: 'var(--wb-p0)' }} />紧急 <b>{capacity.byPriority.p0}</b></span>
+                  <span><i style={{ background: 'var(--wb-p1)' }} />高 <b>{capacity.byPriority.p1}</b></span>
+                  <span><i style={{ background: 'var(--wb-p2)' }} />普通 <b>{capacity.byPriority.p2}</b></span>
+                  <span><i style={{ background: 'var(--wb-p3)' }} />低 <b>{capacity.byPriority.p3}</b></span>
+                  <span><i style={{ background: 'color-mix(in srgb, var(--wb-ok) 36%, transparent)' }} />空闲 <b>{capacity.free}</b></span>
+                </div>
               </div>
               <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
                 <button className="wb-btn primary" disabled={busy || openTasks.length === 0} onClick={() => void startAISession('plan', null, localDateString())}><Icon name="sparkles" />{todayPlan !== null || (pendingDraft?.kindCode === 'daily_plan' && String(pendingDraft.payload.planDate ?? '') === todayAnchor) ? '继续编辑今日计划' : 'AI 智能排序'}</button>
@@ -1337,75 +1560,106 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
 
           {view === 'ideas' && (
             <>
-              <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
-                <button className={`wb-seg ${ideaTab === 'ideas' ? 'on' : ''}`} onClick={() => { setIdeaTab('ideas'); setSelectedCluster(null) }}>点子（{ideas.length}）</button>
-                <button className={`wb-seg ${ideaTab === 'clusters' ? 'on' : ''}`} onClick={() => { setIdeaTab('clusters'); setSelectedIdea(null) }}>点子王（{ideaClusters.length}）</button>
-                {ideaTab === 'ideas' && <button className="wb-btn primary" onClick={() => { setIdeaEditId(null); setIdeaForm({ title: '', contentMd: '', kindCode: 'spark', tags: '' }); setSelectedIdea(null) }}><Icon name="plus" />记个点子</button>}
+              <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+                <div className="wb-segmented wb-sub-segmented">
+                  <button className={`wb-seg ${ideaTab === 'ideas' ? 'on' : ''}`} onClick={() => { setIdeaTab('ideas'); setSelectedCluster(null) }}>全部（{ideas.length}）</button>
+                  <button className={`wb-seg ${ideaTab === 'unfiled' ? 'on' : ''}`} onClick={() => { setIdeaTab('unfiled'); setSelectedCluster(null) }}>未归类（{unfiledIdeas.length}）</button>
+                  <button className={`wb-seg ${ideaTab === 'clusters' ? 'on' : ''}`} onClick={() => { setIdeaTab('clusters'); setSelectedIdea(null) }}>文件夹（{ideaClusters.length}）</button>
+                </div>
+                <input style={{ flex: 1, minWidth: 120, background: 'var(--dsw-alias-bg-base,#17171a)', border: '1px solid var(--wb-line, rgba(127,127,127,.26))', color: 'inherit', borderRadius: 8, padding: '7px 10px' }} placeholder="搜索点子或文件夹" value={ideaQuery} onChange={(e) => setIdeaQuery(e.target.value)} />
+                {ideas.length >= 2 && <button className="wb-btn primary" disabled={busy} onClick={() => { const ids = selectedIdeaIds.size >= 2 ? [...selectedIdeaIds] : ideas.map((idea) => idea.id); void startAISession('idea_association', null, ids.sort().join(',')) }}><Icon name="sparkles" />{selectedIdeaIds.size >= 2 ? `AI 关联（已选 ${selectedIdeaIds.size}）` : 'AI 自动关联'}</button>}
+                <button className="wb-btn" onClick={() => setFolderForm({ mode: 'create', id: null, title: '', summaryMd: '' })}><Icon name="folder" />新建文件夹</button>
+                <button className="wb-btn" onClick={() => { setIdeaEditId(null); setIdeaForm({ title: '', contentMd: '', kindCode: 'spark', tags: '' }); setSelectedIdea(null) }}><Icon name="plus" />记个点子</button>
               </div>
-              {ideaTab === 'ideas' ? (
+              {ideaTab === 'ideas' || ideaTab === 'clusters' ? (
                 <>
-                  <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
-                    <input style={{ flex: 1, minWidth: 120, background: 'var(--dsw-alias-bg-base,#17171a)', border: '1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.15))', color: 'inherit', borderRadius: 8, padding: '7px 10px' }} placeholder="搜索点子" value={ideaQuery} onChange={(e) => setIdeaQuery(e.target.value)} />
-                    <select style={{ background: 'var(--dsw-alias-bg-base,#17171a)', border: '1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.15))', color: 'inherit', borderRadius: 8, padding: '7px 10px' }} value={ideaKind} onChange={(e) => setIdeaKind(e.target.value)}>
-                      <option value="">全部类型</option>
-                      {dictOf('idea_kind').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}
-                    </select>
+                  {ideaClusters.length > 0 && (
+                    <>
+                      <div className="wb-idea-crumb">
+                        <b>文件夹</b> · {ideaClusters.length} 个
+                        <span style={{ flex: 1 }} />
+                        <span style={{ fontSize: 11.5, color: 'var(--dsw-alias-label-secondary)' }}>点开看成员；hover 可改名 / 删除</span>
+                      </div>
+                      <div className="wb-folder-grid">
+                        {ideaClusters.map((cluster) => (
+                          <div key={cluster.id} className={`wb-folder ${selectedCluster?.id === cluster.id ? 'selected' : ''}`} onClick={() => { setSelectedIdea(null); setSelectedCluster(cluster) }}>
+                            <div className="wb-folder-acts" onClick={(e) => e.stopPropagation()}>
+                              <button className="wb-icon-btn" title="重命名" onClick={() => setFolderForm({ mode: 'rename', id: cluster.id, title: cluster.title, summaryMd: cluster.summaryMd })}><Icon name="edit" size={13} /></button>
+                              <button className="wb-icon-btn" title="删除文件夹（点子保留）" onClick={() => void deleteFolder(cluster.id)}><Icon name="trash" size={13} /></button>
+                            </div>
+                            <div className="wb-folder-head">
+                              <span className="wb-folder-ic"><Icon name="folder" size={13} /></span>
+                              <h4>{cluster.title}</h4>
+                              <span className="wb-folder-cnt">{cluster.ideas.length}</span>
+                            </div>
+                            <div className="wb-folder-mini">
+                              {cluster.ideas.slice(0, 2).map((idea) => <span key={idea.id}>{idea.title}</span>)}
+                              {cluster.ideas.length > 2 && <span className="more">还有 {cluster.ideas.length - 2} 个…</span>}
+                              {cluster.ideas.length === 0 && <span className="more">空文件夹 · 可从下方点子归入</span>}
+                            </div>
+                          </div>
+                        ))}
+                        <div className="wb-folder new" onClick={() => setFolderForm({ mode: 'create', id: null, title: '', summaryMd: '' })}>+ 新建空文件夹<br /><span style={{ fontSize: 11.5 }}>也可以让 AI 自动关联</span></div>
+                      </div>
+                    </>
+                  )}
+                  <div className="wb-idea-crumb">
+                    <b>未归类</b> · {unfiledIdeas.length} 个
+                    <span style={{ flex: 1 }} />
+                    {selectedIdeaIds.size > 0 && <span style={{ fontSize: 11.5, color: 'var(--dsw-alias-label-secondary)' }}>已选 {selectedIdeaIds.size} 个</span>}
                   </div>
-                  <div style={{ display: 'flex', gap: 8, marginBottom: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-                    {ideas.length >= 2 && <button className="wb-btn primary" disabled={busy} onClick={() => { const ids = selectedIdeaIds.size >= 2 ? [...selectedIdeaIds] : ideas.map((idea) => idea.id); void startAISession('idea_association', null, ids.sort().join(',')) }}>{selectedIdeaIds.size >= 2 ? `AI 找关联（已选 ${selectedIdeaIds.size}）` : `AI 自动找关联（全部 ${ideas.length}）`}</button>}
-                    {selectedIdeaIds.size >= 1 && <button className="wb-btn" disabled={busy} onClick={() => void startAISession('idea_brainstorm', null, `idea:${[...selectedIdeaIds].sort().join(',')}`)}>AI 头脑风暴（已选 {selectedIdeaIds.size}）</button>}
-                    <span style={{ fontSize: 12, color: '#999' }}>已选 {selectedIdeaIds.size} 个点子；未选够 2 个时“找关联”会分析全部点子</span>
-                  </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(170px, 1fr))', gap: 8 }}>
-                    {ideas.map((idea) => (
-                      <div key={idea.id} className={`wb-card wb-idea-card ${selectedIdea?.id === idea.id || selectedIdeaIds.has(idea.id) ? 'selected' : ''}`} onClick={() => { setSelectedCluster(null); setSelectedIdea(idea) }}>
+                </>
+              ) : (
+                <div className="wb-idea-crumb"><b>未归类</b> · {unfiledIdeas.length} 个<span style={{ flex: 1 }} /></div>
+              )}
+              {ideaTab !== 'clusters' && (
+                <>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))', gap: 9 }}>
+                    {unfiledIdeas.map((idea) => (
+                      <div key={idea.id} className={`wb-card wb-idea-card ${selectedIdea?.id === idea.id || selectedIdeaIds.has(idea.id) ? 'selected' : ''}`} style={{ marginBottom: 0 }} onClick={() => { setSelectedCluster(null); setSelectedIdea(idea) }}>
                         <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6 }}>
-                          <input type="checkbox" checked={selectedIdeaIds.has(idea.id)} onClick={(e) => e.stopPropagation()} onChange={(e) => setSelectedIdeaIds((prev) => { const next = new Set(prev); if (e.target.checked) next.add(idea.id); else next.delete(idea.id); return next })} style={{ width: 18, height: 18, flex: 'none', accentColor: 'var(--dsw-alias-state-business-primary, #4f8ef7)', cursor: 'pointer' }} />
+                          <input type="checkbox" checked={selectedIdeaIds.has(idea.id)} onClick={(e) => e.stopPropagation()} onChange={(e) => setSelectedIdeaIds((prev) => { const next = new Set(prev); if (e.target.checked) next.add(idea.id); else next.delete(idea.id); return next })} style={{ width: 16, height: 16, flex: 'none', cursor: 'pointer' }} />
                           <b style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{idea.title}</b>
                         </div>
                         <div className="wb-idea-summary">{idea.contentMd.replace(/[#*`>]/g, '').slice(0, 80) || '（无内容）'}</div>
                         <div className="wb-idea-foot">
                           <Badge dict={dictOf('idea_kind')} code={idea.kindCode} />
-                          {idea.tags.slice(0, 4).map((tag) => <span key={tag} style={{ fontSize: 11, color: 'var(--dsw-alias-label-secondary)' }}>#{tag}</span>)}
+                          {idea.tags.slice(0, 3).map((tag) => <span key={tag} style={{ fontSize: 11, color: 'var(--dsw-alias-label-secondary)' }}>#{tag}</span>)}
+                        </div>
+                        <div style={{ marginTop: 8, position: 'relative' }} onClick={(e) => e.stopPropagation()}>
+                          <button className="wb-btn" style={{ fontSize: 11.5, padding: '3px 8px' }} disabled={ideaClusters.length === 0} title={ideaClusters.length === 0 ? '先在右上角新建一个文件夹' : '归入文件夹（一个点子可属于多个）'} onClick={() => setFolderMenuIdeaId((prev) => prev === idea.id ? null : idea.id)}>归入文件夹 ▾</button>
+                          {folderMenuIdeaId === idea.id && (
+                            <div style={{ position: 'absolute', zIndex: 30, top: '100%', left: 0, marginTop: 4, minWidth: 200, background: 'var(--dsw-alias-bg-layer-2, #1c1c1f)', border: '1px solid var(--wb-line, rgba(127,127,127,.26))', borderRadius: 10, boxShadow: '0 10px 30px rgba(0,0,0,.25)', padding: 4 }}>
+                              {ideaClusters.map((cluster) => (
+                                <button key={cluster.id} className="wb-btn" style={{ width: '100%', justifyContent: 'flex-start', border: 'none', background: 'transparent' }} onClick={() => void fileIdeaInto(idea.id, cluster.id)}>
+                                  <Icon name="folder" size={13} />{cluster.title}
+                                </button>
+                              ))}
+                              <button className="wb-btn" style={{ width: '100%', justifyContent: 'flex-start', border: 'none', background: 'transparent' }} onClick={() => { setFolderMenuIdeaId(null); setFolderForm({ mode: 'create', id: null, title: '', summaryMd: '' }) }}>
+                                <Icon name="plus" size={13} />新建文件夹…
+                              </button>
+                            </div>
+                          )}
                         </div>
                       </div>
                     ))}
-                    {ideas.length === 0 && (
-                      <div className="wb-empty" style={{ gridColumn: '1 / -1', padding: '30px 18px' }}>
-                        <div style={{ marginBottom: 6, color: 'var(--dsw-alias-state-business-primary, #4f8ef7)' }}><Icon name="idea" size={30} /></div>
-                        <div style={{ fontWeight: 600, marginBottom: 4 }}>还没有点子</div>
-                        <div style={{ fontSize: 12, opacity: .8, marginBottom: 12 }}>把一闪而过的灵感先记下来，之后可以 AI 找关联、头脑风暴</div>
+                    {unfiledIdeas.length === 0 && (
+                      <div className="wb-empty" style={{ gridColumn: '1 / -1', padding: '26px 18px' }}>
+                        <div className="wb-empty-ic"><Icon name="idea" size={17} /></div>
+                        <div style={{ fontWeight: 600, marginBottom: 4 }}>{ideas.length === 0 ? '还没有点子' : '所有点子都已归类'}</div>
+                        <div style={{ fontSize: 12, opacity: .8, marginBottom: 12 }}>{ideas.length === 0 ? '把一闪而过的灵感先记下来，之后可以 AI 找关联、头脑风暴' : '新记的点子会先出现在这里'}</div>
                         <button className="wb-btn primary" onClick={() => { setIdeaEditId(null); setIdeaForm({ title: '', contentMd: '', kindCode: 'spark', tags: '' }); setSelectedIdea(null) }}>记个点子</button>
                       </div>
                     )}
                   </div>
                 </>
-              ) : (
-                <div className="wb-list">
-                  {ideaClusters.map((cluster) => (
-                    <div key={cluster.id} className={`wb-row ${selectedCluster?.id === cluster.id ? 'selected' : ''}`} onClick={() => { setSelectedIdea(null); setSelectedCluster(cluster) }}>
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontWeight: 600 }}>👑 {cluster.title} <span style={{ fontSize: 12, color: '#999' }}>（{cluster.ideas.length} 个点子）</span></div>
-                        <div className="wb-cluster-meta">
-                          {cluster.summaryMd || cluster.ideas.map((idea) => idea.title).join(' / ')}
-                          {(() => {
-                            const counts = new Map<string, number>()
-                            for (const idea of cluster.ideas) counts.set(idea.kindCode, (counts.get(idea.kindCode) ?? 0) + 1)
-                            const parts = [...counts.entries()].map(([code, n]) => `${dictOf('idea_kind').find((d) => d.code === code)?.name ?? code} ${n}`)
-                            return parts.length > 0 ? ` · ${parts.join(' · ')}` : ''
-                          })()}
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                  {ideaClusters.length === 0 && (
-                    <div className="wb-empty" style={{ padding: '28px 18px' }}>
-                      <div style={{ marginBottom: 6, color: 'var(--dsw-alias-state-business-primary, #4f8ef7)' }}><Icon name="idea" size={30} /></div>
-                      <div style={{ fontWeight: 600, marginBottom: 4 }}>还没有点子王</div>
-                      <div style={{ fontSize: 12, opacity: .8, marginBottom: 12 }}>选中至少 2 个点子后点“AI 找关联”，自动聚合同类灵感</div>
-                      <button className="wb-btn primary" onClick={() => { setIdeaTab('ideas'); setSelectedCluster(null); setSelectedIdea(null); setSelectedIdeaIds(new Set()) }}>去选点子</button>
-                    </div>
-                  )}
+              )}
+              {ideaTab === 'clusters' && ideaClusters.length === 0 && (
+                <div className="wb-empty" style={{ padding: '26px 18px' }}>
+                  <div className="wb-empty-ic"><Icon name="folder" size={17} /></div>
+                  <div style={{ fontWeight: 600, marginBottom: 4 }}>还没有文件夹</div>
+                  <div style={{ fontSize: 12, opacity: .8, marginBottom: 12 }}>先手动建一个，或者选中 2 个以上点子点「AI 关联」自动生成</div>
+                  <button className="wb-btn primary" onClick={() => setFolderForm({ mode: 'create', id: null, title: '', summaryMd: '' })}>新建文件夹</button>
                 </div>
               )}
             </>
@@ -1507,15 +1761,40 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
               : selectedCluster !== null
                 ? (
                   <div className="wb-card">
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <h4 style={{ flex: 1, margin: 0 }}>👑 {selectedCluster.title}</h4>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      <h4 style={{ flex: 1, margin: 0, minWidth: 120 }}><Icon name="folder" />{selectedCluster.title}</h4>
+                      <button className="wb-btn" onClick={() => setFolderForm({ mode: 'rename', id: selectedCluster.id, title: selectedCluster.title, summaryMd: selectedCluster.summaryMd })}><Icon name="edit" />重命名</button>
+                      {ideaClusters.length > 1 && (
+                        <select
+                          className="wb-plan-add"
+                          value=""
+                          title="合并到…（把本文件夹的成员挂到目标文件夹，然后删除本文件夹）"
+                          onChange={(e) => { const target = e.target.value; if (target !== '') void mergeFolderInto(selectedCluster.id, target) }}
+                        >
+                          <option value="">合并到…</option>
+                          {ideaClusters.filter((cluster) => cluster.id !== selectedCluster.id).map((cluster) => <option key={cluster.id} value={cluster.id}>{cluster.title}</option>)}
+                        </select>
+                      )}
                       <button className="wb-btn primary" disabled={busy} onClick={() => void startAISession('idea_brainstorm', null, `cluster:${selectedCluster.id}`)}>AI 头脑风暴</button>
-                      <button className="wb-btn" onClick={() => { if (window.confirm('删除这个点子王？（不会删除点子）')) { void api(`/api/workbench/idea-clusters/${selectedCluster.id}`, { method: 'DELETE' }).then(() => { setSelectedCluster(null); setIdeaRefreshKey((v) => v + 1); setNotice('点子王已删除') }).catch((err: unknown) => setError(err instanceof Error ? err.message : String(err))) } }}><Icon name="trash" />删除</button>
+                      <button className="wb-btn" onClick={() => void deleteFolder(selectedCluster.id)}><Icon name="trash" />删除</button>
                     </div>
-                    <MarkdownText text={selectedCluster.summaryMd || '（暂无总结）'} />
+                    <MarkdownText text={selectedCluster.summaryMd || '（暂无总结，可在重命名里补充）'} />
                     <div style={{ marginTop: 10 }}>
                       <b>包含点子（{selectedCluster.ideas.length}）</b>
-                      {selectedCluster.ideas.map((idea) => <div key={idea.id} className="wb-row" onClick={() => { setSelectedCluster(null); setSelectedIdea(idea) }} style={{ cursor: 'pointer', marginTop: 4 }}><span style={{ flex: 1 }}>{idea.title}</span><Badge dict={dictOf('idea_kind')} code={idea.kindCode} /></div>)}
+                      {selectedCluster.ideas.map((idea) => (
+                        <div key={idea.id} className="wb-member">
+                          <span className="t" onClick={() => { setSelectedCluster(null); setSelectedIdea(idea) }} style={{ cursor: 'pointer' }}>{idea.title}</span>
+                          <Badge dict={dictOf('idea_kind')} code={idea.kindCode} />
+                          <button className="wb-icon-btn" title="移出文件夹" onClick={() => void unfileIdeaFrom(idea.id, selectedCluster.id)}><Icon name="back" size={12} /></button>
+                        </div>
+                      ))}
+                      {selectedCluster.ideas.length === 0 && (
+                        <div style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)', padding: '8px 2px' }}>空文件夹。可以从下方「未归类」的点子上点「归入文件夹」。</div>
+                      )}
+                    </div>
+                    <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
+                      <button className="wb-btn" disabled={busy} onClick={() => void startAISession('idea_association', null, selectedCluster.ideas.map((idea) => idea.id).sort().join(','))}>AI 继续补充关联</button>
+                      <button className="wb-btn" disabled={busy} onClick={() => void startAISession('idea_brainstorm', null, `cluster:${selectedCluster.id}`)}>整体转成任务树</button>
                     </div>
                   </div>
                 )
@@ -2000,6 +2279,59 @@ function conversationColumn(): HTMLElement | undefined {
 export const name = 'personal-workbench-client'
 export const inject = ['sessions', 'workspaces', 'connection', 'uiWorkspace']
 
+/**
+ * 官方槽位入口：会话标题栏的「工作台」按钮。
+ *
+ * 为什么用它：原先只有"往 DSH 侧栏插 DOM"一条路（依赖宿主 class 名，升级就可能失效）。
+ * 这里改用 DSH 官方槽位 `conversation.session.header.actions`（作用域 = session，
+ * 所以每个会话的标题栏都会出现这个按钮），与 dsh-cost-meter / dsh-pocket 的接法一致。
+ *
+ * 契约：组件通过 `inject` 拿到 { workbench }，含 open / close / toggle / isOpen。
+ * 通过 rAF 轮询刷新激活态，避免把 store 接口扩展进 WorkbenchRuntime 类型。
+ */
+export interface SlotRegistration {
+  name: string
+  id: string
+  order: number
+  inject: () => Record<string, unknown>
+}
+export interface SlotsService {
+  register: (options: SlotRegistration, component: (props: { workbench: WorkbenchSlotApi }) => JSX.Element) => () => void
+  inject: (name: string, callback: () => (() => void) | void) => void
+}
+
+interface WorkbenchSlotApi {
+  open: () => void
+  close: () => void
+  toggle: () => void
+  isOpen: () => boolean
+}
+
+/** 槽位组件的 props 由 `register(..., { inject })` 注入，与 dsh-cost-meter 的写法一致。 */
+function WorkbenchHeaderEntry({ workbench }: { workbench: WorkbenchSlotApi }): JSX.Element {
+  const [, setTick] = useState(0)
+  useEffect(() => {
+    // 订阅激活属性：本按钮与侧栏入口、工作台内「返回对话」保持同步高亮。
+    const observer = new MutationObserver(() => setTick((value) => value + 1))
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: [ACTIVE_ATTR] })
+    return () => observer.disconnect()
+  }, [])
+  const active = workbench.isOpen()
+  return (
+    <button
+      type="button"
+      className="wb-header-entry"
+      title={active ? '收起工作台' : '打开工作台（任务 / 日历 / 知识库 / 点子）'}
+      aria-pressed={active}
+      {...(active ? { 'data-active': '' } : {})}
+      onClick={() => workbench.toggle()}
+    >
+      <Icon name="today" size={14} />
+      工作台
+    </button>
+  )
+}
+
 export function apply(ctx: unknown): () => void {
   const runtime = ctx as WorkbenchRuntime
   let open = false
@@ -2012,6 +2344,35 @@ export function apply(ctx: unknown): () => void {
       document.dispatchEvent(new CustomEvent(ACTIVATE_EVENT, { detail: PANEL_NAME }))
     } else document.documentElement.removeAttribute(ACTIVE_ATTR)
   }
+
+  // 供槽位组件使用的运行时句柄；类型上放在 runtime 的扩展位，避免污染 WorkbenchRuntime。
+  const slotApi: WorkbenchSlotApi = {
+    open: () => setOpen(true),
+    close: () => setOpen(false),
+    toggle: () => setOpen(!open),
+    isOpen: () => open,
+  }
+  const slots = (() => {
+    // cordis 代理对未声明 inject 的服务，属性访问会直接抛错（"cannot get property ... without inject"），
+    // 不能用 runtime.slots；必须走非严格的 ctx.get 软读取（与 dsh-cost-meter 的 ctx.get('slots') 一致）。
+    const withGet = runtime as unknown as { get?: (name: string) => unknown }
+    const candidate = withGet.get?.('slots')
+    if (candidate === undefined || candidate === null) return undefined
+    if (typeof (candidate as SlotsService).inject !== 'function') return undefined
+    return candidate as SlotsService
+  })()
+  if (slots !== undefined) {
+    // 与 dsh-cost-meter / dsh-pocket 同构：inject 保证宿主槽位存在时才注册。
+    try {
+      slots.inject('conversation.session.header.actions', () => slots.register(
+        { name: 'conversation.session.header.actions', id: 'personal-workbench', order: -4, inject: () => ({ workbench: slotApi }) },
+        WorkbenchHeaderEntry,
+      ))
+    } catch (error) {
+      console.warn('[workbench] header slot registration failed, falling back to sidebar entry only:', String(error))
+    }
+  }
+
   const entry = document.createElement('button')
   entry.type = 'button'
   entry.setAttribute(ENTRY_ATTR, '')

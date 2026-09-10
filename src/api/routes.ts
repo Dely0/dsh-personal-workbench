@@ -34,6 +34,14 @@ const PACKAGE_VERSION: string = (() => {
   } catch { return 'unknown' }
 })()
 
+/** 每天可投入时长（分钟）：存 meta，缺省 390（6.5 小时），夹在 30–1440 之间。 */
+export const DEFAULT_DAILY_CAPACITY_MINUTES = 390
+export function readDailyCapacityMinutes(db: DatabaseSync): number {
+  const raw = Number(readMeta(db, 'daily_capacity_minutes'))
+  if (!Number.isFinite(raw) || raw < 30) return DEFAULT_DAILY_CAPACITY_MINUTES
+  return Math.min(1440, Math.round(raw))
+}
+
 
 export function makeRoutes(db: DatabaseSync, deps: ReminderRouteDeps = {}): WebRoute[] {
   return [
@@ -70,6 +78,7 @@ export function makeRoutes(db: DatabaseSync, deps: ReminderRouteDeps = {}): WebR
               defaultWorkspace: readMeta(db, 'ai_default_workspace') ?? '',
               autoCreateTypeFolders: (readMeta(db, 'auto_create_type_folders') ?? '1') === '1',
               desktopNotify: (readMeta(db, 'desktop_notify') ?? '1') === '1',
+              dailyCapacityMinutes: readDailyCapacityMinutes(db),
             },
           })
         }
@@ -79,10 +88,15 @@ export function makeRoutes(db: DatabaseSync, deps: ReminderRouteDeps = {}): WebR
           if (typeof body.defaultWorkspace === 'string') writeMeta(db, 'ai_default_workspace', body.defaultWorkspace)
           if (body.autoCreateTypeFolders === true || body.autoCreateTypeFolders === false) writeMeta(db, 'auto_create_type_folders', body.autoCreateTypeFolders ? '1' : '0')
           if (body.desktopNotify === true || body.desktopNotify === false) writeMeta(db, 'desktop_notify', body.desktopNotify ? '1' : '0')
+          if (typeof body.dailyCapacityMinutes === 'number' && Number.isFinite(body.dailyCapacityMinutes)) {
+            const minutes = Math.min(1440, Math.max(30, Math.round(body.dailyCapacityMinutes)))
+            writeMeta(db, 'daily_capacity_minutes', String(minutes))
+          }
           return writeJson(res, 200, { ok: true, settings: {
             defaultWorkspace: readMeta(db, 'ai_default_workspace') ?? '',
             autoCreateTypeFolders: (readMeta(db, 'auto_create_type_folders') ?? '1') === '1',
             desktopNotify: (readMeta(db, 'desktop_notify') ?? '1') === '1',
+            dailyCapacityMinutes: readDailyCapacityMinutes(db),
           } })
         }
         return writeJson(res, 405, { error: 'method not allowed' })

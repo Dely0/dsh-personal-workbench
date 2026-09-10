@@ -185,6 +185,8 @@ export interface WorkbenchSettings {
   defaultWorkspace: string
   autoCreateTypeFolders: boolean
   desktopNotify: boolean
+  /** 每天可投入时长（分钟），用于「今日容量」对比；缺省 390（6.5 小时） */
+  dailyCapacityMinutes: number
 }
 
 // ---------------------------------------------------------------------------

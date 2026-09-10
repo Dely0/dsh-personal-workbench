@@ -199,6 +199,7 @@ export type { KnowledgeInput, KnowledgeRow } from './repo/knowledge.js'
 export {
   createIdea, getIdea, listIdeas, updateIdea, deleteIdea,
   createIdeaCluster, getIdeaCluster, listIdeaClusters, deleteIdeaCluster, listIdeaClustersForIdea,
+  updateIdeaCluster, addIdeaToCluster, removeIdeaFromCluster, listUnfiledIdeas, mergeIdeaClusters,
   confirmIdeaClusterDraft, confirmIdeaTaskDraft, getPendingDraftForSession,
 } from './repo/ideas.js'
 export type { IdeaInput, IdeaRow, IdeaClusterInput, IdeaClusterRow } from './repo/ideas.js'

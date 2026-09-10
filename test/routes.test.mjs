@@ -330,3 +330,49 @@ test('draft defer API: 非验收类草稿不可暂存', async () => {
     assert.match(res.body.error, /cannot be deferred/)
   })
 })
+
+test('点子文件夹：新建 / 改名 / 归入 / 移出 / 合并', async () => {
+  await withServer(async ({ request }) => {
+    const a = await request('POST', '/api/workbench/ideas', { title: '点子 A', kindCode: 'plugin', tags: [] })
+    const b = await request('POST', '/api/workbench/ideas', { title: '点子 B', kindCode: 'spark', tags: [] })
+    assert.equal(a.status, 201)
+    assert.equal(b.status, 201)
+
+    // 手动建两个空文件夹
+    const f1 = await request('POST', '/api/workbench/idea-clusters', { title: '微信提醒方向' })
+    const f2 = await request('POST', '/api/workbench/idea-clusters', { title: 'UI 与交互' })
+    assert.equal(f1.status, 201)
+    assert.equal(f2.status, 201)
+    assert.deepEqual(f1.body.cluster.ideas, [])
+
+    // 改名
+    const renamed = await request('PATCH', `/api/workbench/idea-clusters/${f1.body.cluster.id}`, { title: '微信提醒（已改名）' })
+    assert.equal(renamed.status, 200)
+    assert.equal(renamed.body.cluster.title, '微信提醒（已改名）')
+
+    // 归入：一个点子可进多个文件夹（多对多）
+    const in1 = await request('POST', `/api/workbench/idea-clusters/${f1.body.cluster.id}/ideas`, { ideaId: a.body.idea.id })
+    assert.equal(in1.body.cluster.ideas.length, 1)
+    const in2 = await request('POST', `/api/workbench/idea-clusters/${f2.body.cluster.id}/ideas`, { ideaId: a.body.idea.id })
+    assert.equal(in2.body.cluster.ideas.length, 1)
+
+    // 未归类只含 B（A 已被两个文件夹引用）
+    const ideas = await request('GET', '/api/workbench/ideas')
+    const clusters = await request('GET', '/api/workbench/idea-clusters')
+    const filedIds = new Set(clusters.body.clusters.flatMap((cluster) => cluster.ideas.map((idea) => idea.id)))
+    assert.equal(ideas.body.ideas.filter((idea) => !filedIds.has(idea.id)).map((idea) => idea.title).join(','), '点子 B')
+
+    // 移出
+    const out = await request('DELETE', `/api/workbench/idea-clusters/${f1.body.cluster.id}/ideas/${a.body.idea.id}`)
+    assert.equal(out.status, 200)
+    assert.equal(out.body.cluster.ideas.length, 0)
+
+    // 合并：把 f2 并入 f1（f2 的成员挂过去、f2 删除；f1 原有成员保留）
+    await request('POST', `/api/workbench/idea-clusters/${f2.body.cluster.id}/ideas`, { ideaId: b.body.idea.id })
+    const merged = await request('POST', `/api/workbench/idea-clusters/${f2.body.cluster.id}/merge`, { into: f1.body.cluster.id })
+    assert.equal(merged.status, 200)
+    assert.deepEqual(merged.body.cluster.ideas.map((idea) => idea.title).sort(), ['点子 A', '点子 B'])
+    const after = await request('GET', `/api/workbench/idea-clusters/${f2.body.cluster.id}`)
+    assert.equal(after.status, 404)
+  })
+})
