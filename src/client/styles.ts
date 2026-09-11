@@ -83,7 +83,7 @@ html[${PENDING_ATTR}] [${ENTRY_ATTR}]::after { content:''; position:absolute; to
 .wb-quick-dialog .wb-dialog-head { padding:14px 16px; background:transparent; border-bottom:1px solid var(--dsw-alias-border-l1, rgba(255,255,255,.12)); }
 .wb-quick-dialog .wb-dialog-head h3 { font-size:15px; }
 .wb-quick-dialog .wb-dialog-body { padding:16px; }
-.wb-quick-dialog .wb-dialog-foot { padding:12px 16px; background:transparent; border-top:1px solid var(--dsw-alias-border-l1, rgba(255,255,255,.12)); }
+.wb-quick-dialog .wb-dialog-foot { padding:12px 16px; background:transparent; border-top:1px solid var(--dsw-alias-border-l1, rgba(255,255,255,.12)); justify-content:flex-end; }
 .wb-quick-modal { display:flex; flex-direction:column; gap:10px; }
 .wb-quick-input textarea { min-height:110px; line-height:1.55; background:var(--dsw-alias-bg-base,#17171a); border-color:var(--dsw-alias-border-l1, rgba(255,255,255,.18)); color:var(--dsw-alias-label-primary, #eee); border-radius:10px; }
 .wb-quick-image-rail { display:flex; gap:8px; flex-wrap:wrap; }
@@ -91,7 +91,9 @@ html[${PENDING_ATTR}] [${ENTRY_ATTR}]::after { content:''; position:absolute; to
 .wb-quick-image-item img { width:100%; height:100%; object-fit:cover; display:block; }
 .wb-quick-doc-label { font-size:11px; font-weight:700; color:var(--dsw-alias-label-secondary); }
 .wb-quick-image-remove { position:absolute; top:3px; right:3px; width:18px; height:18px; border:0; border-radius:50%; background:rgba(0,0,0,.58); color:#fff; cursor:pointer; line-height:18px; padding:0; font-size:13px; }
-.wb-quick-actions { display:flex; align-items:center; gap:6px; margin-right:auto; min-width:0; }
+.wb-quick-actions { display:flex; align-items:center; gap:6px; margin-left:auto; min-width:0; }
+.wb-quick-submit { width:34px; height:34px; padding:0; justify-content:center; border-radius:8px; }
+.wb-quick-submit svg { width:16px; height:16px; }
 .wb-model-picker { flex:none; }
 .wb-model-trigger { min-width:110px; max-width:180px; justify-content:flex-start; overflow:hidden; }
 .wb-model-trigger-label { display:block; min-width:0; overflow:hidden; text-align:left; white-space:nowrap; line-height:1.2; }

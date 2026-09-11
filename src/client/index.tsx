@@ -2496,13 +2496,14 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                   alignRight
                 />
               </div>
-              <button className="wb-btn" onClick={() => setShowQuick(false)}>取消</button>
               <button
-                className="wb-btn primary"
+                className="wb-btn primary wb-quick-submit"
                 disabled={busy || (quickText.trim() === '' && quickAttachments.length === 0)}
                 onClick={() => void startAISession('clarify', null, quickText, [], undefined, quickAttachments)}
+                aria-label="创建澄清会话"
+                title="创建澄清会话"
               >
-                创建澄清会话
+                <Icon name="upload" />
               </button>
             </>
           )}
