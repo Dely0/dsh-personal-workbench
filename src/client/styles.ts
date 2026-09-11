@@ -84,6 +84,24 @@ html[${PENDING_ATTR}] [${ENTRY_ATTR}]::after { content:''; position:absolute; to
 .wb-quick-image-item img { width:100%; height:100%; object-fit:cover; display:block; }
 .wb-quick-doc-label { font-size:11px; font-weight:700; color:var(--dsw-alias-label-secondary); }
 .wb-quick-image-remove { position:absolute; top:3px; right:3px; width:18px; height:18px; border:0; border-radius:50%; background:rgba(0,0,0,.58); color:#fff; cursor:pointer; line-height:18px; padding:0; font-size:13px; }
+.wb-quick-actions { display:flex; align-items:center; gap:6px; }
+.wb-model-picker { flex:none; }
+.wb-model-trigger { min-width:110px; max-width:180px; justify-content:flex-start; overflow:hidden; }
+.wb-model-trigger-label { display:block; min-width:0; overflow:hidden; text-align:left; white-space:nowrap; line-height:1.2; }
+.wb-model-trigger-label span { display:block; overflow:hidden; text-overflow:ellipsis; }
+.wb-model-trigger-label small { display:block; overflow:hidden; text-overflow:ellipsis; color:var(--dsw-alias-label-secondary); font-size:10.5px; font-weight:400; line-height:1.2; margin-top:1px; }
+.wb-quick-actions .wb-model-trigger { border-color:transparent; background:transparent; color:var(--dsw-alias-label-primary); font-weight:400; padding:0 4px; }
+.wb-quick-actions .wb-model-trigger:hover { background:transparent; color:var(--dsw-alias-label-primary); }
+.wb-model-menu { position:absolute; bottom:calc(100% + 8px); z-index:260; width:max-content; min-width:190px; max-width:280px; max-height:310px; overflow:auto; padding:7px; border:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.28)); border-radius:8px; background:var(--dsw-alias-bg-layer-2, #1c1c1f); box-shadow:0 16px 38px rgba(0,0,0,.34); color:var(--dsw-alias-label-primary); }
+.wb-model-group + .wb-model-group { margin-top:6px; padding-top:6px; border-top:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.16)); }
+.wb-model-group-title { padding:3px 7px 5px; color:var(--dsw-alias-label-secondary); font-size:11px; line-height:1.2; }
+.wb-model-empty { padding:8px 7px; color:var(--dsw-alias-label-secondary); font-size:12px; white-space:nowrap; }
+.wb-model-option { width:100%; display:flex; align-items:center; gap:7px; border:1px solid transparent; background:transparent; color:inherit; border-radius:7px; padding:6px 7px; cursor:pointer; font:inherit; font-size:12px; text-align:left; }
+.wb-model-option svg { flex:none; width:13px; height:13px; color:var(--dsw-alias-state-business-primary, #4f8ef7); }
+.wb-model-option-name { display:block; white-space:nowrap; line-height:1.35; }
+.wb-model-option-effort { display:block; color:var(--dsw-alias-label-secondary); font-size:10.5px; white-space:nowrap; line-height:1.35; margin-top:2px; }
+.wb-model-option:hover { background:color-mix(in srgb, var(--dsw-alias-label-primary,#fff) 7%, transparent); }
+.wb-model-option.selected { background:color-mix(in srgb, var(--dsw-alias-state-business-primary,#4f8ef7) 14%, transparent); border-color:color-mix(in srgb, var(--dsw-alias-state-business-primary,#4f8ef7) 34%, transparent); }
 .wb-modal-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:12px; }
 /* 技能选择器（AI 会话前的提示词弹窗内） */
 .wb-skill-picker { margin-top:12px; border:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.22)); border-radius:10px; padding:10px; background: color-mix(in srgb, var(--dsw-alias-label-primary, #fff) 3%, transparent); }

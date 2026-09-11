@@ -43,6 +43,31 @@ export interface TaskDetail { task: Task; children: Task[]; sessions: Array<Reco
 
 export type ImageMediaType = 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif'
 export type PromptContentPart = { type: 'text'; text: string } | { type: 'image'; mediaType: ImageMediaType; data: string; name?: string }
+export interface ModelSelection { provider: string; model: string; reasoningEffort?: string }
+export interface ModelProviderGroup {
+  id: string
+  name: string
+  models: ReadonlyArray<{
+    id: string
+    name: string
+    reasoning?: { defaultEffort?: string; efforts: ReadonlyArray<{ id: string; name: string }> }
+  }>
+}
+export interface ModelDirectoryState {
+  current: ModelSelection | null
+  groups: readonly ModelProviderGroup[]
+  failures: ReadonlyArray<{ id: string; name: string; message: string }>
+  status: 'idle' | 'loading' | 'ready' | 'selecting' | 'error'
+  error: string | null
+}
+export interface ModelDirectoryRuntime {
+  store: {
+    getSnapshot(): ModelDirectoryState
+    subscribe(listener: () => void): () => void
+  }
+  load(): Promise<ModelDirectoryState>
+  select(selection: ModelSelection): Promise<void>
+}
 
 export interface SessionDriver {
   sessionId: string
@@ -81,5 +106,8 @@ export interface WorkbenchRuntime {
     generation: {
       getSnapshot(): { host: { home: string } } | undefined
     }
+  }
+  modelDirectories?: {
+    directoryFor(sessionId: string): ModelDirectoryRuntime
   }
 }

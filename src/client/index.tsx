@@ -5,7 +5,7 @@
  *  - AI 澄清/咨询/拆解统一跳官方会话区；工作台侧边栏显示待确认草稿红点
  */
 import { createRoot, type Root } from 'react-dom/client'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import {
   buildTaskTree,
   countTaskTreeBy,
@@ -47,7 +47,8 @@ import {
 } from './format.js'
 import type {
   Bootstrap, DailyPlanItemView, DailyPlanView, Dict, DshSessionListState, DshSessionSummary, Idea, IdeaClusterView,
-  ImageMediaType, KnowledgeEntry, PromptContentPart, SessionDriver, Task, TaskDetail, TaskReportView, WorkbenchRuntime,
+  ImageMediaType, KnowledgeEntry, ModelProviderGroup, ModelSelection, PromptContentPart, SessionDriver, Task, TaskDetail,
+  TaskReportView, WorkbenchRuntime,
 } from './viewTypes.js'
 
 const CSS = WORKBENCH_CSS
@@ -62,14 +63,55 @@ interface QuickDocumentDraft {
   file: File
 }
 type QuickAttachmentDraft = QuickImageDraft | QuickDocumentDraft
+interface QuickModelSelection extends ModelSelection {
+  label: string
+  effortLabel?: string
+}
 
+const QUICK_MODEL_STORAGE_KEY = 'dsh-workbench.quickModelSelection'
 const QUICK_IMAGE_MEDIA_TYPES = new Set<string>(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
 const QUICK_DOCUMENT_MEDIA_TYPES = new Set<string>(['application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'])
 const QUICK_DOCUMENT_EXTENSIONS = /\.(pdf|docx)$/i
+const EMPTY_MODEL_DIRECTORY_STATE = {
+  current: null,
+  groups: [],
+  failures: [],
+  status: 'idle',
+  error: null,
+} as const
 
 const createClientId = (): string => {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID()
   return `task_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`
+}
+const readQuickModelSelection = (): QuickModelSelection | null => {
+  if (typeof localStorage === 'undefined') return null
+  try {
+    const raw = localStorage.getItem(QUICK_MODEL_STORAGE_KEY)
+    if (raw === null) return null
+    const parsed = JSON.parse(raw) as Partial<QuickModelSelection>
+    if (typeof parsed.provider !== 'string' || parsed.provider === '') return null
+    if (typeof parsed.model !== 'string' || parsed.model === '') return null
+    const fallbackLabel = `${parsed.provider}/${parsed.model}`
+    return {
+      provider: parsed.provider,
+      model: parsed.model,
+      label: typeof parsed.label === 'string' && parsed.label !== '' ? parsed.label : fallbackLabel,
+      ...(typeof parsed.reasoningEffort === 'string' && parsed.reasoningEffort !== '' ? { reasoningEffort: parsed.reasoningEffort } : {}),
+      ...(typeof parsed.effortLabel === 'string' && parsed.effortLabel !== '' ? { effortLabel: parsed.effortLabel } : {}),
+    }
+  } catch {
+    return null
+  }
+}
+const writeQuickModelSelection = (selection: QuickModelSelection | null): void => {
+  if (typeof localStorage === 'undefined') return
+  try {
+    if (selection === null) localStorage.removeItem(QUICK_MODEL_STORAGE_KEY)
+    else localStorage.setItem(QUICK_MODEL_STORAGE_KEY, JSON.stringify(selection))
+  } catch {
+    // localStorage may be unavailable in hardened webviews.
+  }
 }
 const isQuickImageFile = (file: File): boolean => QUICK_IMAGE_MEDIA_TYPES.has(file.type)
 const isQuickDocumentFile = (file: File): boolean => QUICK_DOCUMENT_MEDIA_TYPES.has(file.type) || QUICK_DOCUMENT_EXTENSIONS.test(file.name)
@@ -126,6 +168,125 @@ const quickDocumentToContext = async (document: QuickDocumentDraft): Promise<str
   )
   return `附件：${res.name}${res.truncated ? '（内容已截断）' : ''}\n"""\n${res.content}\n"""`
 }
+
+function QuickModelPicker({ runtime, value, onChange, disabled = false, onError, alignRight = false }: {
+  runtime: WorkbenchRuntime
+  value: QuickModelSelection | null
+  onChange: (selection: QuickModelSelection | null) => void
+  disabled?: boolean
+  onError: (message: string) => void
+  alignRight?: boolean
+}): JSX.Element {
+  const [open, setOpen] = useState(false)
+  const [loading, setLoading] = useState(false)
+  const sessions = runtime.sessions.list.getSnapshot()
+  const directorySessionId = sessions.current ?? sessions.ids[0] ?? ''
+  const directory = useMemo(() => {
+    if (runtime.modelDirectories === undefined || directorySessionId === '') return undefined
+    try { return runtime.modelDirectories.directoryFor(directorySessionId) } catch { return undefined }
+  }, [runtime.modelDirectories, directorySessionId])
+  const subscribeModelDirectory = useCallback(
+    (listener: () => void) => directory?.store.subscribe(listener) ?? (() => undefined),
+    [directory],
+  )
+  const getModelDirectorySnapshot = useCallback(
+    () => directory?.store.getSnapshot() ?? EMPTY_MODEL_DIRECTORY_STATE,
+    [directory],
+  )
+  const state = useSyncExternalStore(subscribeModelDirectory, getModelDirectorySnapshot, () => EMPTY_MODEL_DIRECTORY_STATE)
+
+  useEffect(() => {
+    if (directory === undefined || state.status !== 'idle') return
+    setLoading(true)
+    void directory.load().catch(() => undefined).finally(() => setLoading(false))
+  }, [directory, state.status])
+
+  const selectionLabel = useCallback((selection: ModelSelection): string => {
+    for (const group of state.groups) {
+      if (group.id !== selection.provider) continue
+      const model = group.models.find((item) => item.id === selection.model)
+      if (model !== undefined) {
+        const effort = model.reasoning?.efforts.find((item) => item.id === selection.reasoningEffort)
+        return effort === undefined ? model.name : `${model.name} · ${effort.name}`
+      }
+    }
+    return `${selection.provider}/${selection.model}`
+  }, [state.groups])
+  const selectedLabel = useMemo(() => {
+    if (value === null && state.current !== null) return selectionLabel(state.current)
+    if (value === null) return loading || state.status === 'loading' ? '读取模型...' : '选择模型'
+    const liveLabel = selectionLabel(value)
+    if (liveLabel !== `${value.provider}/${value.model}`) return liveLabel
+    return value.effortLabel === undefined ? value.label : `${value.label} · ${value.effortLabel}`
+  }, [loading, selectionLabel, state.current, state.status, value])
+  const selectedLabelParts = useMemo(() => {
+    const separator = ' · '
+    const index = selectedLabel.lastIndexOf(separator)
+    if (index < 0) return { model: selectedLabel, effort: '' }
+    return { model: selectedLabel.slice(0, index), effort: selectedLabel.slice(index + separator.length) }
+  }, [selectedLabel])
+  const openPicker = (): void => {
+    if (directory === undefined) {
+      onError('当前 DSH 未提供模型选择接口，无法读取模型列表')
+      return
+    }
+    setOpen((prev) => !prev)
+    setLoading(true)
+    void directory.load().catch((e: unknown) => onError(e instanceof Error ? e.message : String(e))).finally(() => setLoading(false))
+  }
+  const chooseModel = (group: ModelProviderGroup, model: ModelProviderGroup['models'][number]): void => {
+    const effortId = model.reasoning?.defaultEffort
+    const effort = model.reasoning?.efforts.find((item) => item.id === effortId)
+    onChange({
+      provider: group.id,
+      model: model.id,
+      label: model.name,
+      ...(effortId !== undefined && effortId !== '' ? { reasoningEffort: effortId } : {}),
+      ...(effort !== undefined ? { effortLabel: effort.name } : {}),
+    })
+    setOpen(false)
+  }
+  return (
+    <div className="wb-model-picker" style={{ position: 'relative' }}>
+      <button className="wb-btn wb-model-trigger" disabled={disabled} onClick={openPicker} title="选择快速录入使用的模型">
+        <span className="wb-model-trigger-label">
+          <span>{selectedLabelParts.model}</span>
+          {selectedLabelParts.effort !== '' && <small>{selectedLabelParts.effort}</small>}
+        </span>
+      </button>
+      {open && (
+        <div className="wb-model-menu" style={{ [alignRight ? 'right' : 'left']: 0 }}>
+          {state.error !== null && <div className="wb-model-empty">{state.error}</div>}
+          {state.groups.length === 0 && state.error === null && <div className="wb-model-empty">{loading ? '正在读取模型...' : '暂无可选模型'}</div>}
+          {state.groups.map((group) => (
+            <div className="wb-model-group" key={group.id}>
+              <div className="wb-model-group-title">{group.name}</div>
+              {group.models.map((model) => {
+                const effortId = model.reasoning?.defaultEffort
+                const effort = model.reasoning?.efforts.find((item) => item.id === effortId)
+                const selected = value?.provider === group.id && value.model === model.id && (value.reasoningEffort ?? '') === (effortId ?? '')
+                return (
+                  <button className={`wb-model-option${selected ? ' selected' : ''}`} key={model.id} onClick={() => chooseModel(group, model)}>
+                    {selected && <Icon name="check" />}
+                    <span>
+                      <span className="wb-model-option-name">{model.name}</span>
+                      {effort !== undefined && <span className="wb-model-option-effort">{effort.name}</span>}
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+          ))}
+          {value !== null && (
+            <button className="wb-model-option" onClick={() => { onChange(null); setOpen(false) }}>
+              使用当前会话默认模型
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
 function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; closePanel: () => void }): JSX.Element {
   const [view, setView] = useState<'today' | 'calendar' | 'list' | 'knowledge' | 'ideas'>('today')
   const [bootstrap, setBootstrap] = useState<Bootstrap | null>(null)
@@ -143,6 +304,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   const [showQuick, setShowQuick] = useState(false)
   const [quickText, setQuickText] = useState('')
   const [quickAttachments, setQuickAttachments] = useState<QuickAttachmentDraft[]>([])
+  const [quickModelSelectionState, setQuickModelSelectionState] = useState<QuickModelSelection | null>(() => readQuickModelSelection())
   const quickAttachmentsRef = useRef<QuickAttachmentDraft[]>([])
   const [pendingDraft, setPendingDraft] = useState<DraftView | null>(null)
   // 已暂存的待确认草稿（验收类）：不自动弹窗，只在「待处理」弹窗里等你唤回
@@ -256,6 +418,21 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
       return []
     })
   }, [])
+  const setQuickModelSelection = useCallback((selection: QuickModelSelection | null): void => {
+    setQuickModelSelectionState(selection)
+    writeQuickModelSelection(selection)
+  }, [])
+  const applyQuickModelSelection = useCallback(async (sessionId: string): Promise<void> => {
+    if (quickModelSelectionState === null) return
+    const directory = runtime.modelDirectories?.directoryFor(sessionId)
+    if (directory === undefined) throw new Error('当前 DSH 未提供模型选择接口，无法为快速录入切换模型')
+    await directory.load()
+    await directory.select({
+      provider: quickModelSelectionState.provider,
+      model: quickModelSelectionState.model,
+      ...(quickModelSelectionState.reasoningEffort === undefined ? {} : { reasoningEffort: quickModelSelectionState.reasoningEffort }),
+    })
+  }, [quickModelSelectionState, runtime.modelDirectories])
 
   const refresh = useCallback(async () => {
     const [boot, list] = await Promise.all([api<Bootstrap>('/api/workbench/bootstrap'), api<{ tasks: Task[] }>('/api/workbench/tasks')])
@@ -608,6 +785,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
       }
       if (workspaceId === undefined) throw new Error('没有可用工作区，请先在 DSH 中打开一个工作区')
       const id = await connectWorkspace(workspaceId)
+      if (mode === 'clarify') await applyQuickModelSelection(id)
       const binding = runtime.sessions.binding(id)
       if (binding === undefined) throw new Error('会话绑定未就绪，请稍后重试')
       await binding.session.rename(mode === 'idea_association' ? '点子关联' : mode === 'idea_brainstorm' ? '点子头脑风暴' : mode === 'knowledge_doc' ? `知识总结：${docContext?.name ?? '本地文档'}` : mode === 'report' ? `${text.startsWith('week:') ? '周报' : '日报'}：${text.split(':')[1] ?? ''}` : mode === 'plan' ? `AI 计划：${planAnchor.slice(5)}` : mode === 'clarify' ? `澄清：${text.slice(0, 24)}` : mode === 'consult' ? `协助：${task?.title.slice(0, 24)}` : mode === 'breakdown' ? `拆解：${task?.title.slice(0, 24)}` : mode === 'review' ? `复盘：${task?.title.slice(0, 24)}` : `执行：${task?.title.slice(0, 24)}`).catch(() => undefined)
@@ -2308,6 +2486,16 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
           footer={(
             <>
               <span className="wb-foot-note">会跳转到官方会话区，由 AI 澄清后生成任务草稿</span>
+              <div className="wb-quick-actions">
+                <QuickModelPicker
+                  runtime={runtime}
+                  value={quickModelSelectionState}
+                  onChange={setQuickModelSelection}
+                  disabled={busy}
+                  onError={setError}
+                  alignRight
+                />
+              </div>
               <button className="wb-btn" onClick={() => setShowQuick(false)}>取消</button>
               <button
                 className="wb-btn primary"
@@ -2489,7 +2677,7 @@ export const name = 'dsh-workbench-client'
  * 会让老版本 DSH 直接报 "Failed to load plugins"；既然它只在启动 AI 会话时用一次，
  * 就按插件既有原则做成软探测（见 connectWorkspace）。
  */
-export const inject = ['sessions', 'workspaces', 'connection']
+export const inject = ['sessions', 'workspaces', 'connection', 'modelDirectories']
 
 /**
  * 宿主上下文（由 apply() 记录），供需要软探测可选服务的模块级函数使用
