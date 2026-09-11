@@ -2486,16 +2486,6 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
           footer={(
             <>
               <span className="wb-foot-note">会跳转到官方会话区，由 AI 澄清后生成任务草稿</span>
-              <div className="wb-quick-actions">
-                <QuickModelPicker
-                  runtime={runtime}
-                  value={quickModelSelectionState}
-                  onChange={setQuickModelSelection}
-                  disabled={busy}
-                  onError={setError}
-                  alignRight
-                />
-              </div>
               <button className="wb-btn" onClick={() => setShowQuick(false)}>取消</button>
               <button
                 className="wb-btn primary"
@@ -2507,42 +2497,55 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
             </>
           )}
         >
-          <label className="wb-field">
-            <span>一句话描述任务</span>
-            <textarea
-              autoFocus
-              rows={3}
-              value={quickText}
-              onChange={(e) => setQuickText(e.target.value)}
-              onPaste={(e) => {
-                const files = Array.from(e.clipboardData.files).filter(isQuickAttachmentFile)
-                if (files.length > 0) addQuickAttachments(files)
-              }}
-              onDragOver={(e) => {
-                if (Array.from(e.dataTransfer.types).includes('Files')) e.preventDefault()
-              }}
-              onDrop={(e) => {
-                const files = Array.from(e.dataTransfer.files).filter(isQuickAttachmentFile)
-                if (files.length === 0) return
-                e.preventDefault()
-                addQuickAttachments(files)
-              }}
-              placeholder="例如：周五 10:30 接待重要客户，也可以粘贴或拖入图片、PDF、DOCX"
-            />
-          </label>
-          {quickAttachments.length > 0 && (
-            <div className="wb-quick-image-rail" aria-label="快速录入附件">
-              {quickAttachments.map((attachment) => (
-                <div className="wb-quick-image-item" key={attachment.id} title={attachment.file.name || '附件'}>
-                  {isQuickImageDraft(attachment)
-                    ? <img src={attachment.previewUrl} alt={attachment.file.name || '图片'} />
-                    : <span className="wb-quick-doc-label">{attachment.file.name.toLowerCase().endsWith('.pdf') || attachment.file.type === 'application/pdf' ? 'PDF' : 'DOCX'}</span>}
-                  <button type="button" className="wb-quick-image-remove" onClick={() => removeQuickAttachment(attachment.id)} aria-label="移除附件">×</button>
-                </div>
-              ))}
+          <div className="wb-quick-modal">
+            <label className="wb-field wb-quick-input">
+              <span>一句话描述任务</span>
+              <textarea
+                autoFocus
+                rows={4}
+                value={quickText}
+                onChange={(e) => setQuickText(e.target.value)}
+                onPaste={(e) => {
+                  const files = Array.from(e.clipboardData.files).filter(isQuickAttachmentFile)
+                  if (files.length > 0) addQuickAttachments(files)
+                }}
+                onDragOver={(e) => {
+                  if (Array.from(e.dataTransfer.types).includes('Files')) e.preventDefault()
+                }}
+                onDrop={(e) => {
+                  const files = Array.from(e.dataTransfer.files).filter(isQuickAttachmentFile)
+                  if (files.length === 0) return
+                  e.preventDefault()
+                  addQuickAttachments(files)
+                }}
+                placeholder="例如：周五 10:30 接待重要客户，也可以粘贴或拖入图片、PDF、DOCX"
+              />
+            </label>
+            <div className="wb-quick-meta">
+              <span className="wb-quick-meta-label">澄清模型</span>
+              <QuickModelPicker
+                runtime={runtime}
+                value={quickModelSelectionState}
+                onChange={setQuickModelSelection}
+                disabled={busy}
+                onError={setError}
+                alignRight
+              />
             </div>
-          )}
-          <p className="wb-hint">AI 会先澄清必要信息（一次一个主题，最多 5 轮），再提交任务草稿由你确认。</p>
+            {quickAttachments.length > 0 && (
+              <div className="wb-quick-image-rail" aria-label="快速录入附件">
+                {quickAttachments.map((attachment) => (
+                  <div className="wb-quick-image-item" key={attachment.id} title={attachment.file.name || '附件'}>
+                    {isQuickImageDraft(attachment)
+                      ? <img src={attachment.previewUrl} alt={attachment.file.name || '图片'} />
+                      : <span className="wb-quick-doc-label">{attachment.file.name.toLowerCase().endsWith('.pdf') || attachment.file.type === 'application/pdf' ? 'PDF' : 'DOCX'}</span>}
+                    <button type="button" className="wb-quick-image-remove" onClick={() => removeQuickAttachment(attachment.id)} aria-label="移除附件">×</button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <p className="wb-hint">AI 会先澄清必要信息（一次一个主题，最多 5 轮），再提交任务草稿由你确认。</p>
+          </div>
         </Modal>
       )}
 
