@@ -2485,7 +2485,6 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
           onClose={() => setShowQuick(false)}
           footer={(
             <>
-              <span className="wb-foot-note">会跳转到官方会话区，由 AI 澄清后生成任务草稿</span>
               <button className="wb-btn" onClick={() => setShowQuick(false)}>取消</button>
               <button
                 className="wb-btn primary"
@@ -2544,7 +2543,6 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                 ))}
               </div>
             )}
-            <p className="wb-hint">AI 会先澄清必要信息（一次一个主题，最多 5 轮），再提交任务草稿由你确认。</p>
           </div>
         </Modal>
       )}
