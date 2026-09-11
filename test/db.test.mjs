@@ -19,8 +19,9 @@ import {
 
 test('db migrations, dictionaries and task tree', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-workbench-db-'))
+  let db
   try {
-    const db = openWorkbenchDb({ dbPath: join(dir, 'workbench.db') })
+    db = openWorkbenchDb({ dbPath: join(dir, 'workbench.db') })
     seedDictionaries(db)
     const dicts = db.prepare('SELECT kind, COUNT(*) AS c FROM dictionaries GROUP BY kind ORDER BY kind').all()
     assert.ok(dicts.some((d) => d.kind === 'type' && d.c >= 8))
@@ -148,8 +149,8 @@ test('db migrations, dictionaries and task tree', () => {
     const tasks = confirmIdeaTaskDraft(db, taskDraft.id)
     assert.equal(tasks.length, 1)
     assert.deepEqual(tasks[0].extra.sourceIdeaIds, [i1.id])
-    db.close()
   } finally {
+    db?.close()
     rmSync(dir, { recursive: true, force: true })
   }
 })

@@ -5,7 +5,7 @@
  *  - AI 澄清/咨询/拆解统一跳官方会话区；工作台侧边栏显示待确认草稿红点
  */
 import { createRoot, type Root } from 'react-dom/client'
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   buildTaskTree,
   countTaskTreeBy,
@@ -19,324 +19,39 @@ import {
   type TaskSortKey,
   type TaskTreeNode,
 } from './taskFilterSort.js'
-import { isAutoTaskWorkspacePath, isWslStylePath, joinPath, normalizeWindowsPathToWsl, taskWorkspaceFolderName } from './workspacePath.js'
+import { isWslStylePath, joinPath, normalizeWindowsPathToWsl } from './workspacePath.js'
+import { WORKBENCH_CSS } from './styles.js'
+import { ACTIVATE_EVENT, ACTIVE_ATTR, ENTRY_ATTR, PANEL_NAME, PENDING_ATTR, SIBLING_ATTRS, VIEW_ATTR } from './constants.js'
+import { Modal } from './components/Modal.js'
+import { SettingsModal } from './components/SettingsModal.js'
+import { DraftBanner } from './components/DraftBanner.js'
+import { MarkdownText } from './components/MarkdownText.js'
+import { ToastHost, useToasts } from './components/Toast.js'
+import { api } from './api.js'
+import { withSkillPromptBlock } from './skillPrompt.js'
+import type {
+  DraftView,
+  ReminderChannelStatus as ReminderChannelView,
+  ReminderOptionsView,
+  ReminderPolicyView,
+  SkillsResponse,
+  SkillSummary,
+  WorkbenchSettings,
+} from '../shared/contracts.js'
+import { Icon } from './components/Icon.js'
+import { Badge, MultiSelectDropdown, TaskTreeRows, countTaskTree } from './components/TaskList.js'
+import { PlanPanel } from './components/PlanPanel.js'
+import {
+  clientFileLinkToPath, draftKindLabel, eventIcon, eventLabel, fmtTime, folderForText, localDateString,
+  roleLabel, sameDay, shortId, startOfDay, startOfWeek, toLocalInput,
+} from './format.js'
+import type {
+  Bootstrap, DailyPlanItemView, DailyPlanView, Dict, DshSessionListState, DshSessionSummary, Idea, IdeaClusterView,
+  ImageMediaType, KnowledgeEntry, PromptContentPart, SessionDriver, Task, TaskDetail, TaskReportView, WorkbenchRuntime,
+} from './viewTypes.js'
 
-const PANEL_NAME = 'dsh-workbench'
-const ACTIVE_ATTR = 'data-dsh-workbench-active'
-const PENDING_ATTR = 'data-dsh-workbench-pending'
-const VIEW_ATTR = 'data-dsh-workbench-view'
-const ENTRY_ATTR = 'data-dsh-workbench-entry'
-const SIBLING_ATTRS = ['data-dsh-taskboard-active', 'data-dsh-ssh-active']
-const ACTIVATE_EVENT = 'dsh-panel-activate'
+const CSS = WORKBENCH_CSS
 
-const CSS = `
-[data-pane='conversation'], [class*='centerCol'] { position: relative; }
-[${VIEW_ATTR}] {
-  position: absolute; inset: 0; display: none; z-index: 60;
-  background: var(--dsw-alias-bg-base, #111); color: var(--dsw-alias-label-primary, #eee);
-  font-family: var(--dsw-font-family, system-ui); overflow: hidden;
-}
-html[${ACTIVE_ATTR}]:not([data-dsh-taskboard-active]):not([data-dsh-ssh-active]) [${VIEW_ATTR}] { display: block; }
-html[${ACTIVE_ATTR}]:not([data-dsh-taskboard-active]):not([data-dsh-ssh-active]) [data-pane='conversation'] > :not([${VIEW_ATTR}]),
-html[${ACTIVE_ATTR}]:not([data-dsh-taskboard-active]):not([data-dsh-ssh-active]) [class*='centerCol'] > :not([${VIEW_ATTR}]) { display: none !important; }
-[${ENTRY_ATTR}] { position:relative; display:flex; align-items:center; gap:8px; width:100%; height:32px; padding:0 12px; background:transparent; border:none; border-radius:8px; color:var(--dsw-alias-label-secondary); cursor:pointer; font-size:13px; white-space:nowrap; text-align:left; }
-[${ENTRY_ATTR}] svg { width:16px; height:16px; flex:none; }
-[${ENTRY_ATTR}]:hover { background: var(--dsw-specific-sidebar-nav-item-hover); color: var(--dsw-alias-label-primary); }
-[${ENTRY_ATTR}][data-active] { background: var(--dsw-specific-sidebar-nav-item-active); color: var(--dsw-alias-label-primary); font-weight:600; }
-html[${PENDING_ATTR}] [${ENTRY_ATTR}]::after { content:''; position:absolute; top:6px; right:10px; width:7px; height:7px; border-radius:50%; background:#e74c3c; }
-[data-dsh-frame][data-sidebar-collapsed] [${ENTRY_ATTR}] { justify-content:center; padding:0; width:100%; }
-[data-dsh-frame][data-sidebar-collapsed] [${ENTRY_ATTR}] .wb-label { display:none; }
-[data-dsh-workbench-slash-menu] { position:fixed; z-index:2147483600; min-width:260px; max-width:min(360px, calc(100vw - 24px)); padding:6px; border:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.18)); border-radius:10px; background:var(--dsw-alias-bg-layer-1, #202124); color:var(--dsw-alias-label-primary, #f3f4f6); box-shadow:0 14px 40px rgba(0,0,0,.32); font-family:var(--dsw-font-family, system-ui); }
-[data-dsh-workbench-slash-menu] button { width:100%; display:grid; grid-template-columns:28px 1fr; gap:8px; align-items:center; border:0; border-radius:8px; padding:8px 10px; background:transparent; color:inherit; text-align:left; cursor:pointer; font:inherit; }
-[data-dsh-workbench-slash-menu] button:hover, [data-dsh-workbench-slash-menu] button:focus-visible { background:color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 16%, transparent); outline:none; }
-[data-dsh-workbench-slash-menu] .wb-slash-icon { width:24px; height:24px; display:inline-flex; align-items:center; justify-content:center; border-radius:7px; background:color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 18%, transparent); color:var(--dsw-alias-state-business-primary, #4f8ef7); font-weight:700; }
-[data-dsh-workbench-slash-menu] .wb-slash-title { display:block; font-size:13px; font-weight:650; line-height:1.2; }
-[data-dsh-workbench-slash-menu] .wb-slash-desc { display:block; margin-top:2px; font-size:11px; line-height:1.25; color:var(--dsw-alias-label-secondary, #aaa); }
-.wb-app { height:100%; display:flex; flex-direction:column; }
-.wb-h { flex:none; display:flex; align-items:center; gap:12px; padding:14px 18px; border-bottom:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.22)); background:var(--dsw-alias-bg-layer-1, rgba(255,255,255,.02)); }
-.wb-title { display:flex; align-items:center; gap:8px; font-size:16px; font-weight:700; letter-spacing:.02em; white-space:nowrap; }
-.wb-title svg { width:19px; height:19px; color:var(--dsw-alias-state-business-primary, #8fa8c8); }
-.wb-segmented { display:inline-flex; padding:3px; border-radius:10px; background:var(--dsw-alias-bg-base, #111); border:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.20)); }
-.wb-seg { display:inline-flex; align-items:center; gap:6px; border:none; background:transparent; color:var(--dsw-alias-label-secondary); padding:7px 16px; border-radius:8px; cursor:pointer; font:inherit; font-weight:600; font-size:13.5px; }
-.wb-seg svg { width:15px; height:15px; }
-.wb-seg.on { background: color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 14%, transparent); color:var(--dsw-alias-label-primary); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 32%, transparent); }
-.wb-sub-segmented { padding:2px; }
-.wb-sub-segmented .wb-seg { padding:6px 14px; font-size:12.5px; }
-.wb-sub-segmented .count { min-width:17px; height:17px; padding:0 5px; border-radius:9px; background: color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 14%, transparent); color: var(--dsw-alias-label-primary); font-size:11px; display:inline-flex; align-items:center; justify-content:center; }
-.wb-btn { display:inline-flex; align-items:center; gap:6px; border:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.26)); background:var(--dsw-alias-bg-layer-1, transparent); color:var(--dsw-alias-label-secondary); border-radius:9px; padding:7px 11px; cursor:pointer; font:inherit; font-size:13px; }
-.wb-btn svg { width:15px; height:15px; }
-.wb-btn:hover { background: color-mix(in srgb, var(--dsw-alias-label-primary, #fff) 6%, transparent); color:var(--dsw-alias-label-primary); }
-.wb-btn.primary { background: color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 16%, transparent); border:1px solid color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 38%, transparent); color:var(--dsw-alias-label-primary); }
-.wb-pending-pill { display:inline-flex; align-items:center; gap:6px; border:1px solid color-mix(in srgb, #d9a03f 42%, transparent); background:color-mix(in srgb, #d9a03f 13%, transparent); color:var(--dsw-alias-label-primary); border-radius:999px; padding:6px 10px; cursor:pointer; font:inherit; font-size:12.5px; font-weight:700; white-space:nowrap; }
-.wb-pending-pill svg { width:13px; height:13px; }
-.wb-pending-pill .count { display:inline-flex; align-items:center; justify-content:center; min-width:18px; height:18px; padding:0 5px; border-radius:999px; background:color-mix(in srgb, #d9a03f 24%, transparent); font-size:11px; }
-.wb-pending-pill:hover { border-color:color-mix(in srgb, #d9a03f 62%, transparent); background:color-mix(in srgb, #d9a03f 18%, transparent); }
-.wb-body { flex:1; min-height:0; display:flex; }
-.wb-nav { flex:0 0 min(56%, 880px); min-width:420px; overflow:auto; padding:0 18px 16px; box-sizing:border-box; border-right:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.14)); }
-.wb-nav > :first-child:not(.wb-stats-sticky) { margin-top:16px; }
-.wb-detail { flex:1; min-width:0; overflow:auto; padding:16px 18px; box-sizing:border-box; }
-.wb-stats { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin-bottom:12px; }
-.wb-stat { border:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.20)); background:var(--dsw-alias-bg-layer-1, rgba(255,255,255,.03)); border-radius:12px; padding:12px 14px; box-shadow:0 2px 8px rgba(0,0,0,.06); }
-.wb-stat b { font-size:20px; }
-.wb-stat span { display:block; color:var(--dsw-alias-label-secondary); font-size:12px; }
-.wb-stats-sticky { position:sticky; top:0; z-index:12; margin:0 -18px 12px; padding:12px 18px 14px; background:var(--dsw-alias-bg-base,#111); box-shadow:none; border-bottom:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.24)); }
-.wb-card { border:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.26)); background: var(--dsw-alias-bg-layer-1, rgba(255,255,255,.03)); border-radius:14px; padding:16px; margin-bottom:14px; box-shadow:0 6px 18px rgba(0,0,0,.08); }
-.wb-card h4 { margin:0 0 10px; padding-bottom:10px; border-bottom:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.16)); display:flex; align-items:center; gap:8px; font-size:14px; font-weight:700; }
-.wb-card h4 svg { width:16px; height:16px; color:var(--dsw-alias-state-business-primary, #8fa8c8); flex:none; }
-.wb-plan { border-left:4px solid var(--dsw-alias-state-business-primary, #8fa8c8); background: linear-gradient(90deg, color-mix(in srgb, var(--dsw-alias-state-business-primary, #8fa8c8) 9%, transparent), color-mix(in srgb, var(--dsw-alias-state-business-primary, #8fa8c8) 3%, transparent) 45%, var(--dsw-alias-bg-layer-1, rgba(255,255,255,.03)) 100%); }
-.wb-plan-item { display:flex; align-items:center; margin:7px 0; font-size:13.5px; }
-.wb-plan-num { display:inline-flex; width:20px; height:20px; border-radius:50%; background: color-mix(in srgb, var(--dsw-alias-state-business-primary, #8fa8c8) 16%, transparent); border:1px solid color-mix(in srgb, var(--dsw-alias-state-business-primary, #8fa8c8) 40%, transparent); color:var(--dsw-alias-label-primary); font-size:11px; font-weight:700; align-items:center; justify-content:center; margin-right:8px; flex:none; }
-.wb-plan-note { color:var(--dsw-alias-label-secondary); margin-left:8px; font-size:12.5px; }
-.wb-plan-scroll { max-height:min(27vh,280px); overflow-y:auto; overscroll-behavior:contain; scrollbar-width:thin; scrollbar-color: color-mix(in srgb, var(--dsw-alias-label-primary, #888) 38%, transparent) transparent; padding-right:4px; }
-.wb-plan-scroll::-webkit-scrollbar { width:8px; }
-.wb-plan-scroll::-webkit-scrollbar-track { background:transparent; }
-.wb-plan-scroll::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--dsw-alias-label-primary, #888) 38%, transparent); border-radius:4px; }
-.wb-plan-expanded .wb-plan-scroll { max-height:min(70vh,720px); }
-.wb-plan-footer { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-top:10px; padding-top:10px; border-top:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.14)); font-size:12px; color:var(--dsw-alias-label-secondary); }
-.wb-plan-item { min-width:0; gap:6px; }
-.wb-plan-item b, .wb-plan-item .wb-plan-note { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.wb-plan-item b { flex:0 1 auto; }
-.wb-plan-item .wb-plan-note { flex:1 1 36%; }
-.wb-plan-item-actions { display:inline-flex; gap:4px; flex:none; margin-left:auto; }
-.wb-plan-act { display:inline-flex; align-items:center; border:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.22)); background:color-mix(in srgb, var(--dsw-alias-label-primary, #fff) 3%, transparent); color:var(--dsw-alias-label-secondary); border-radius:6px; padding:2px 7px; font-size:11px; cursor:pointer; line-height:1.5; }
-.wb-plan-act:hover { color:var(--dsw-alias-label-primary); border-color:color-mix(in srgb, var(--dsw-alias-label-primary, #fff) 35%, transparent); }
-.wb-plan-act:disabled { opacity:.45; cursor:default; }
-.wb-plan-act.done { color:color-mix(in srgb, #2E9B7B 85%, #fff); border-color:color-mix(in srgb, #2E9B7B 45%, transparent); }
-.wb-plan-act.defer { color:color-mix(in srgb, #d9a03f 85%, #fff); border-color:color-mix(in srgb, #d9a03f 45%, transparent); }
-.wb-plan-item.closed { opacity:.55; }
-.wb-plan-item.closed b { text-decoration:line-through; }
-.wb-plan-edit-note { flex:1 1 36%; min-width:0; background:var(--dsw-alias-bg-base,#17171a); border:1px solid var(--dsw-alias-border-l1, rgba(255,255,255,.18)); color:inherit; border-radius:6px; padding:3px 7px; font-size:12px; }
-.wb-plan-edit-actions { display:inline-flex; gap:4px; flex:none; margin-left:auto; }
-.wb-plan-edit-actions .wb-btn { padding:2px 7px; font-size:11px; }
-.wb-plan-add { max-width:220px; background:var(--dsw-alias-bg-base,#17171a); border:1px solid var(--dsw-alias-border-l1, rgba(255,255,255,.18)); color:inherit; border-radius:8px; padding:5px 8px; font-size:12px; }
-.wb-modal-mask { position:fixed; inset:0; z-index:200; background:rgba(0,0,0,.55); display:flex; align-items:center; justify-content:center; }
-.wb-modal { width:min(520px, 92vw); background:var(--dsw-alias-bg-layer-2, #1c1c1f); border:1px solid var(--dsw-alias-border-l1, rgba(255,255,255,.25)); border-radius:14px; padding:18px; box-shadow:0 18px 50px rgba(0,0,0,.4); color:var(--dsw-alias-label-primary, #eee); font-family:var(--dsw-font-family, system-ui); }
-.wb-modal h4 { margin:0 0 8px; }
-.wb-modal p { margin:0 0 12px; font-size:12.5px; color:var(--dsw-alias-label-secondary); }
-.wb-modal textarea { width:100%; min-height:110px; box-sizing:border-box; background:var(--dsw-alias-bg-base,#17171a); border:1px solid var(--dsw-alias-border-l1, rgba(255,255,255,.2)); color:inherit; border-radius:10px; padding:10px; font:inherit; resize:vertical; }
-.wb-modal-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:12px; }
-.wb-list { border:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.24)); border-radius:12px; overflow:hidden; background:var(--dsw-alias-bg-layer-1, rgba(255,255,255,.03)); }
-.wb-row { display:flex; align-items:center; gap:8px; padding:11px 12px; border-bottom:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.12)); cursor:pointer; transition:background .12s ease; }
-.wb-row:last-child { border-bottom:none; }
-.wb-row:hover { background: color-mix(in srgb, var(--dsw-alias-label-primary, #fff) 5%, transparent); }
-.wb-row.selected { background: color-mix(in srgb, var(--dsw-alias-state-business-primary, #8fa8c8) 12%, transparent); box-shadow:inset 3px 0 0 var(--dsw-alias-state-business-primary, #8fa8c8); }
-.wb-row-context { opacity:.55; }
-.wb-row-context .wb-row-title { color: var(--dsw-alias-label-secondary); }
-.wb-card { transition: border-color .16s ease, box-shadow .16s ease, transform .16s ease; }
-.wb-card.selected { border-color: color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 65%, transparent) !important; box-shadow: 0 0 0 1px color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 35%, transparent), 0 6px 18px rgba(0,0,0,.10); transform: translateY(-1px); }
-.wb-row-title { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.wb-row-meta { flex:none; display:grid; grid-template-columns:68px 46px 56px 88px; align-items:center; gap:6px; }
-.wb-row-meta .wb-chip { display:inline-flex; align-items:center; justify-content:center; width:100%; padding-left:0; padding-right:0; text-align:center; }
-.wb-due { text-align:right; color:var(--dsw-alias-label-secondary); font-size:12px; font-variant-numeric:tabular-nums; white-space:nowrap; }
-.wb-chip { display:inline-flex; align-items:center; justify-content:center; border-radius:6px; padding:2px 7px; font-size:11px; white-space:nowrap; }
-.wb-cal-nav { display:flex; align-items:center; gap:8px; margin-bottom:10px; }
-.wb-week { display:grid; grid-template-columns:repeat(7,1fr); gap:6px; margin-bottom:10px; }
-.wb-day { border:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.18)); background:var(--dsw-alias-bg-layer-1, rgba(255,255,255,.03)); border-radius:12px; min-height:92px; padding:8px; cursor:pointer; transition:border-color .12s ease, background .12s ease; }
-.wb-day.today { border-color: color-mix(in srgb, var(--dsw-alias-state-business-primary, #8fa8c8) 50%, transparent); }
-.wb-day.selected { border-color:var(--dsw-alias-state-business-primary, #8fa8c8); background: color-mix(in srgb, var(--dsw-alias-state-business-primary, #8fa8c8) 10%, transparent); }
-.wb-month { display:grid; grid-template-columns:repeat(7,1fr); gap:6px; margin-bottom:10px; }
-.wb-mday { min-height:52px; border:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.16)); background:var(--dsw-alias-bg-layer-1, rgba(255,255,255,.03)); border-radius:10px; padding:5px; cursor:pointer; color:var(--dsw-alias-label-secondary); }
-.wb-mday.other { opacity:.35; }
-.wb-mday.today { border-color: var(--dsw-alias-state-business-primary, #4f8ef7); }
-.wb-mday.selected { background: color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 12%, transparent); }
-.wb-form { display:grid; grid-template-columns:1fr 1fr; gap:10px; border:1px solid var(--dsw-alias-border-l1, rgba(255,255,255,.12)); border-radius:10px; padding:12px; }
-.wb-form-panel { border:1px solid color-mix(in srgb, var(--dsw-alias-state-business-primary, #8fa8c8) 45%, transparent) !important; border-left:4px solid var(--dsw-alias-state-business-primary, #8fa8c8) !important; border-radius:14px !important; padding:16px !important; background: color-mix(in srgb, var(--dsw-alias-state-business-primary, #8fa8c8) 8%, var(--dsw-alias-bg-base, #111)) !important; box-shadow:0 10px 28px rgba(0,0,0,.15); margin-bottom:12px; }
-.wb-form-panel h4 { margin:0 0 10px; font-size:15px; color:var(--dsw-alias-label-primary); display:flex; align-items:center; gap:8px; }
-.wb-form-panel h4 svg { width:16px; height:16px; color:var(--dsw-alias-state-business-primary, #8fa8c8); }
-.wb-btn.lg { padding:8px 16px; font-size:14px; font-weight:600; }
-.wb-form label { display:flex; flex-direction:column; gap:4px; font-size:12px; color:var(--dsw-alias-label-secondary); }
-.wb-form input, .wb-form select, .wb-form textarea { background: var(--dsw-alias-bg-base,#17171a); border:1px solid var(--dsw-alias-border-l1, rgba(255,255,255,.15)); color:inherit; border-radius:8px; padding:7px 10px; font:inherit; }
-.wb-form .full { grid-column:1 / -1; }
-.wb-empty { padding:24px; text-align:center; color:var(--dsw-alias-label-secondary); }
-.wb-banner { border:1px solid rgba(127,127,127,.35); border-left:6px solid #8fa8c8; border-radius:14px; padding:16px; margin:10px 14px 0; box-shadow:0 10px 28px rgba(0,0,0,.18); }
-.wb-banner.draft { border-color:rgba(143,168,200,.45); border-left-color:#8fa8c8; background:color-mix(in srgb, #8fa8c8 10%, transparent); }
-.wb-banner.review { border-color:rgba(143,168,200,.6); border-left-color:#8fa8c8; background:color-mix(in srgb, #8fa8c8 12%, transparent); }
-.wb-banner.completion { border-color:rgba(245,184,61,.55); border-left-color:#f5b83d; background:color-mix(in srgb, #f5b83d 10%, transparent); }
-.wb-banner.error { border-color:rgba(231,76,60,.55); border-left-color:#e74c3c; background:color-mix(in srgb, #e74c3c 10%, transparent); }
-.wb-banner.notice { border-color:rgba(143,168,200,.5); border-left-color:#8fa8c8; background:color-mix(in srgb, #8fa8c8 8%, transparent); }
-.wb-banner h4 { margin:0 0 8px; font-size:15px; }
-
-/* 边界增强：用主题文字色计算边框，亮/暗主题都保证对比；不改卡片底色 */
-.wb-app { --wb-border: color-mix(in srgb, var(--dsw-alias-label-primary, #888) 26%, transparent); --wb-border-soft: color-mix(in srgb, var(--dsw-alias-label-primary, #888) 15%, transparent); }
-.wb-card, .wb-list, .wb-stat { border-color: var(--wb-border) !important; }
-.wb-card h4 { border-bottom-color: var(--wb-border-soft) !important; }
-.wb-row { border-bottom-color: var(--wb-border-soft) !important; }
-.wb-h { border-bottom-color: var(--wb-border) !important; }
-.wb-nav { border-right-color: var(--wb-border-soft) !important; }
-.wb-day, .wb-mday, .wb-form { border-color: var(--wb-border-soft) !important; }
-/* 今日卡片高亮：周/月视图统一加亮边框 + 浅色背景 + 日期数字高亮 */
-.wb-day.today { border-color: var(--dsw-alias-state-business-primary, #4f8ef7) !important; background: color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 12%, transparent) !important; }
-.wb-day.today .wb-day-date { color: var(--dsw-alias-state-business-primary, #4f8ef7); font-weight: 700; }
-.wb-day.today.selected { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 70%, transparent); }
-.wb-mday.today { border-color: var(--dsw-alias-state-business-primary, #4f8ef7) !important; background: color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 14%, transparent) !important; color: var(--dsw-alias-label-primary); }
-.wb-mday.today .wb-mday-date { color: var(--dsw-alias-state-business-primary, #4f8ef7); font-weight: 700; }
-.wb-mday.today.selected { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 70%, transparent); }
-.wb-mday.other.today { opacity: 1; }
-
-/* ---- UI 美化：统一卡片/列表/表单视觉，强化 hover/selected/focus 态 ---- */
-.wb-card { transition: border-color .16s ease, box-shadow .16s ease, transform .16s ease; }
-.wb-card:hover { border-color: color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 42%, transparent); box-shadow: 0 10px 26px rgba(0,0,0,.12); }
-.wb-card.selected { border-color: color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 70%, transparent) !important; box-shadow: 0 0 0 1px color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 35%, transparent), 0 10px 26px rgba(0,0,0,.14); transform: translateY(-1px); }
-.wb-stat { transition: border-color .16s ease, box-shadow .16s ease; }
-.wb-stat:hover { border-color: color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 42%, transparent); box-shadow: 0 4px 14px rgba(0,0,0,.10); }
-.wb-row { transition: background .14s ease, box-shadow .14s ease; }
-.wb-row.done { opacity: .58; }
-.wb-row.done .wb-row-title { text-decoration: line-through; }
-.wb-row.selected { box-shadow: inset 3px 0 0 var(--dsw-alias-state-business-primary, #4f8ef7); }
-.wb-form input:focus, .wb-form select:focus, .wb-form textarea:focus { border-color: color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 65%, transparent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 16%, transparent); outline: none; }
-.wb-idea-card { display: flex; flex-direction: column; margin-bottom: 0; padding: 12px; cursor: pointer; }
-.wb-idea-card .wb-idea-summary { font-size: 12px; color: var(--dsw-alias-label-secondary); line-height: 1.5; min-height: 36px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-.wb-idea-card .wb-idea-foot { display: flex; gap: 5px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
-.wb-file-chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--wb-border, rgba(127,127,127,.22)); background: color-mix(in srgb, var(--dsw-alias-label-primary, #888) 5%, transparent); border-radius: 99px; padding: 3px 10px; font-size: 12px; color: var(--dsw-alias-label-secondary); }
-.wb-file-chip code { background: transparent; border: none; padding: 0; }
-.wb-cluster-meta { font-size: 12px; color: var(--dsw-alias-label-secondary); margin-top: 2px; }
-.wb-empty { border: 1px dashed var(--wb-border-soft, rgba(127,127,127,.16)); border-radius: 12px; margin: 4px; }
-/* ---- P0: 任务详情摘要 + Tabs + 吸顶操作条 ---- */
-.wb-detail-actions { position: sticky; top: 0; z-index: 16; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; padding: 9px 12px; border: 1px solid var(--wb-border-soft, rgba(127,127,127,.18)); border-radius: 12px; background: color-mix(in srgb, var(--dsw-alias-bg-base, #111) 88%, transparent); backdrop-filter: blur(8px); box-shadow: 0 6px 18px rgba(0,0,0,.08); }
-.wb-detail-tabs { display: flex; gap: 4px; margin: 4px 0 12px; border-bottom: 1px solid var(--wb-border-soft, rgba(127,127,127,.16)); }
-.wb-detail-tab { border: none; background: transparent; color: var(--dsw-alias-label-secondary); font: inherit; font-size: 13px; font-weight: 600; padding: 7px 13px; border-radius: 8px 8px 0 0; cursor: pointer; white-space: nowrap; }
-.wb-detail-tab:hover { color: var(--dsw-alias-label-primary); background: color-mix(in srgb, var(--dsw-alias-label-primary, #fff) 6%, transparent); }
-.wb-detail-tab.on { color: var(--dsw-alias-label-primary); box-shadow: inset 0 -2px 0 var(--dsw-alias-state-business-primary, #4f8ef7); }
-.wb-detail-tab .count { margin-left: 4px; font-size: 11px; opacity: .8; }
-/* ---- P1: 会话 Chip + 事件时间线 ---- */
-.wb-session-chip { display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--wb-border-soft, rgba(127,127,127,.18)); background: color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 6%, transparent); border-radius: 99px; padding: 5px 11px; font-size: 12px; color: var(--dsw-alias-label-secondary); cursor: pointer; margin: 0 6px 6px 0; transition: border-color .12s ease, background .12s ease; }
-.wb-session-chip:hover { border-color: color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 55%, transparent); color: var(--dsw-alias-label-primary); background: color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 12%, transparent); }
-.wb-session-id { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; opacity: .75; }
-.wb-session-list { display: flex; flex-direction: column; gap: 6px; }
-.wb-session-row { display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px 12px; border: 1px solid var(--wb-border-soft, rgba(127,127,127,.16)); background: color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 5%, transparent); border-radius: 10px; text-align: left; cursor: pointer; font: inherit; font-size: 13px; color: var(--dsw-alias-label-primary); transition: border-color .12s ease, background .12s ease; }
-.wb-session-row:hover { border-color: color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 55%, transparent); background: color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 10%, transparent); }
-.wb-session-role { flex: none; font-size: 12px; font-weight: 600; color: var(--dsw-alias-state-business-primary, #4f8ef7); background: color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 10%, transparent); border: 1px solid color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 30%, transparent); border-radius: 6px; padding: 2px 7px; white-space: nowrap; }
-.wb-session-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.wb-session-open { flex: none; font-size: 12px; opacity: .65; }
-.wb-session-picker { margin-top: 10px; border: 1px solid var(--wb-border, rgba(127,127,127,.18)); border-radius: 12px; padding: 10px; background: color-mix(in srgb, var(--dsw-alias-bg-base, #111) 90%, transparent); }
-.wb-session-picker-bar { display: flex; gap: 8px; margin-bottom: 8px; }
-.wb-session-search { flex: 1; min-width: 0; background: var(--dsw-alias-bg-base,#17171a); border: 1px solid var(--dsw-alias-border-l1, rgba(255,255,255,.16)); color: inherit; border-radius: 8px; padding: 7px 10px; font: inherit; font-size: 13px; }
-.wb-session-search:focus { border-color: color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 65%, transparent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 14%, transparent); outline: none; }
-.wb-session-role-select { background: var(--dsw-alias-bg-base,#17171a); border: 1px solid var(--dsw-alias-border-l1, rgba(255,255,255,.16)); color: inherit; border-radius: 8px; padding: 7px 10px; font: inherit; font-size: 13px; }
-.wb-quick-composer { position:relative; }
-.wb-quick-textarea { width:100%; min-height:118px; background:var(--dsw-alias-bg-base,#17171a); border:1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.18)); color:inherit; border-radius:14px; padding:12px 12px 56px; box-sizing:border-box; font:inherit; font-size:14px; resize:vertical; }
-.wb-quick-composer.has-attachments .wb-quick-textarea { min-height:184px; padding-bottom:124px; }
-.wb-quick-textarea:focus { border-color: color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 65%, transparent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 14%, transparent); outline:none; }
-.wb-quick-image-rail { position:absolute; left:12px; right:12px; bottom:50px; display:flex; gap:8px; overflow-x:auto; scrollbar-width:none; padding:2px 0; }
-.wb-quick-image-rail::-webkit-scrollbar { display:none; }
-.wb-quick-image-item { position:relative; flex:0 0 58px; width:58px; height:58px; border-radius:14px; overflow:hidden; border:1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.18)); background:color-mix(in srgb, var(--dsw-alias-label-primary,#fff) 7%, transparent); }
-.wb-quick-image-item img { width:100%; height:100%; object-fit:cover; display:block; }
-.wb-quick-doc-label { width:100%; height:100%; display:grid; place-items:center; padding:0 5px; box-sizing:border-box; font-size:11px; font-weight:700; color:var(--dsw-alias-state-business-primary,#4f8ef7); background:color-mix(in srgb, var(--dsw-alias-state-business-primary,#4f8ef7) 12%, transparent); }
-.wb-quick-image-remove { position:absolute; top:4px; right:4px; width:18px; height:18px; display:grid; place-items:center; border:none; border-radius:50%; padding:0; color:var(--dsw-alias-label-primary-inverted,#111); background:var(--dsw-alias-label-primary,#fff); cursor:pointer; font-size:13px; line-height:1; opacity:.92; }
-.wb-quick-actions { position:absolute; right:10px; bottom:10px; display:flex; align-items:center; justify-content:flex-end; gap:7px; max-width:none; overflow:visible; }
-.wb-quick-actions .wb-btn { height:32px; overflow:visible; border-radius:999px; padding:0 10px; font-size:12.5px; white-space:nowrap; background:color-mix(in srgb, var(--dsw-alias-bg-layer-2,#222) 84%, transparent); }
-.wb-quick-actions .wb-model-trigger-label { white-space:nowrap; line-height:1.2; }
-.wb-quick-actions .wb-model-trigger { border-color:transparent; background:transparent; color:var(--dsw-alias-label-primary); font-weight:400; padding:0 4px; }
-.wb-quick-actions .wb-model-trigger:hover { background:transparent; color:var(--dsw-alias-label-primary); }
-.wb-send-button { width:32px; height:32px; display:inline-flex; align-items:center; justify-content:center; border:1px solid color-mix(in srgb, var(--dsw-alias-state-business-primary,#4f8ef7) 38%, transparent); border-radius:50%; background:color-mix(in srgb, var(--dsw-alias-state-business-primary,#4f8ef7) 16%, transparent); color:var(--dsw-alias-label-primary); cursor:pointer; padding:0; flex:none; transition:transform .12s ease, box-shadow .12s ease, opacity .12s ease, background .12s ease, border-color .12s ease; }
-.wb-send-button svg { width:18px; height:18px; stroke-width:2.1; }
-.wb-send-button:hover:not(:disabled) { transform:translateY(-1px); background:color-mix(in srgb, var(--dsw-alias-state-business-primary,#4f8ef7) 24%, transparent); border-color:color-mix(in srgb, var(--dsw-alias-state-business-primary,#4f8ef7) 52%, transparent); box-shadow:0 6px 16px rgba(0,0,0,.22); }
-.wb-send-button:disabled { opacity:.45; cursor:default; }
-.wb-model-option { width:100%; display:flex; align-items:center; gap:7px; border:1px solid transparent; background:transparent; color:inherit; border-radius:7px; padding:6px 7px; cursor:pointer; font:inherit; font-size:12px; text-align:left; }
-.wb-model-option-name { display:block; white-space:nowrap; line-height:1.35; }
-.wb-model-option-effort { display:block; color:var(--dsw-alias-label-secondary); font-size:10.5px; white-space:nowrap; line-height:1.35; margin-top:2px; }
-.wb-model-option:hover { background: color-mix(in srgb, var(--dsw-alias-label-primary,#fff) 7%, transparent); }
-.wb-model-option.selected { background: color-mix(in srgb, var(--dsw-alias-state-business-primary,#4f8ef7) 14%, transparent); border-color: color-mix(in srgb, var(--dsw-alias-state-business-primary,#4f8ef7) 34%, transparent); }
-.wb-session-picker-list { display: flex; flex-direction: column; gap: 4px; max-height: 260px; overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; }
-.wb-session-option { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 10px; border: 1px solid transparent; background: color-mix(in srgb, var(--dsw-alias-label-primary, #888) 4%, transparent); border-radius: 8px; text-align: left; cursor: pointer; font: inherit; font-size: 13px; color: var(--dsw-alias-label-primary); transition: border-color .12s ease, background .12s ease; }
-.wb-session-option:hover:not(:disabled) { border-color: color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 45%, transparent); background: color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 9%, transparent); }
-.wb-session-option:disabled { opacity: .5; cursor: default; }
-.wb-session-cwd { flex: none; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--dsw-alias-label-secondary); opacity: .8; }
-.wb-session-add { flex: none; font-size: 12px; font-weight: 600; color: var(--dsw-alias-state-business-primary, #4f8ef7); }
-.wb-session-option:disabled .wb-session-add { color: var(--dsw-alias-label-secondary); }
-.wb-event-group-date { display: flex; align-items: center; gap: 8px; margin: 10px 0 4px; font-size: 12px; font-weight: 700; color: var(--dsw-alias-label-secondary); }
-.wb-event-group-date::after { content: ''; flex: 1; height: 1px; background: var(--wb-border-soft, rgba(127,127,127,.16)); }
-.wb-event-row { display: flex; align-items: flex-start; gap: 8px; padding: 5px 0; font-size: 12px; color: var(--dsw-alias-label-secondary); }
-.wb-event-icon { flex: none; width: 18px; text-align: center; line-height: 1.4; }
-.wb-event-main { flex: 1; min-width: 0; }
-.wb-event-title { color: var(--dsw-alias-label-primary); font-weight: 600; }
-.wb-event-meta { opacity: .8; margin-top: 1px; word-break: break-all; }
-/* ---- P2: 顶栏窄屏自适应 ---- */
-@media (max-width: 1100px) {
-  .wb-h { gap: 8px; padding: 10px 12px; }
-  .wb-h .wb-label { display: none; }
-  .wb-h > .wb-btn { width: 34px; height: 34px; padding: 0; justify-content: center; }
-  .wb-h .wb-segmented { flex-wrap: wrap; }
-  .wb-h .wb-seg { padding: 6px 9px; font-size: 12.5px; }
-  .wb-h .wb-title { font-size: 14px; letter-spacing: 0; }
-}
-/* ---- P2: Markdown 代码块复制 ---- */
-.wb-code-block { position: relative; margin: 8px 0; }
-.wb-code-block pre { background: rgba(127,127,127,.10); padding: 10px 12px; border-radius: 8px; overflow: auto; font-size: 12px; margin: 0; }
-.wb-code-copy { position: absolute; top: 6px; right: 6px; border-radius: 6px; padding: 2px 7px; font-size: 11px; opacity: .75; }
-.wb-blockquote { border-left: 3px solid var(--dsw-alias-state-business-primary, #4f8ef7); background: color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 7%, transparent); border-radius: 0 8px 8px 0; padding: 6px 12px; margin: 8px 0; }
-`
-
-interface Dict { kind: string; code: string; name: string; config: Record<string, unknown>; builtin?: number; active?: number; sortOrder?: number; createdAt?: string; updatedAt?: string }
-interface Task {
-  id: string
-  parentId: string | null
-  title: string
-  description: string
-  typeCode: string
-  statusCode: string
-  priorityCode: string
-  aiPolicyCode: string
-  dueAt: string | null
-  effectiveDueAt: string | null
-  allDay: boolean
-  estimatedMinutes: number | null
-  source: string
-  workspacePath: string | null
-  effectiveWorkspacePath: string | null
-  archived: boolean
-  extra: Record<string, unknown>
-  recurrenceCode: string | null
-  recurrenceRule: Record<string, unknown>
-  recurrenceMasterId: string | null
-  recurrenceLastGenerated: string | null
-  createdAt: string
-  updatedAt: string
-  completedAt: string | null
-  cancelledAt: string | null
-}
-interface DailyPlanItemView { taskId: string; order: number; title: string; note: string }
-interface DailyPlanView { id: string; planDate: string; summary: string; items: DailyPlanItemView[]; sourceCode: string; sessionId: string | null; createdAt: string; updatedAt: string }
-interface TaskReportView { id: string; periodCode: 'day' | 'week'; periodStart: string; title: string; summaryMd: string; stats: Record<string, unknown>; sessionId: string | null; createdAt: string; updatedAt: string }
-
-interface ReminderPolicyView {
-  enabled: boolean
-  immediatePriorities: string[]
-  digestPriorities: string[]
-  digestAt: string
-  quietHours: { start: string; end: string } | null
-  quietHoursBypassPriorities: string[]
-  hourlyLimit: number
-  dailyLimit: number
-  catchupWindowHours: number
-  catchupMaxItems: number
-  breakerCooldownMinutes: number
-  channel: 'auto' | 'wechat' | 'browser'
-}
-
-interface ReminderChannelView {
-  installed: boolean
-  configured: boolean
-  botId: string | null
-  targetId: string | null
-  botLabel: string | null
-  circuitOpen: boolean
-  circuitUntil: string | null
-  queued: number
-}
-
-interface ReminderOptionsView {
-  installed: boolean
-  bots: Array<{ botId: string; label: string; targets: Array<{ targetId: string; label: string; kind: string }> }>
-}interface KnowledgeEntry { id: string; kindCode: string; title: string; contentMd: string; tags: string[]; sourceTaskId: string | null; sourceSessionId: string | null; sourceReviewId: string | null; fileLink: string | null; createdAt: string; updatedAt: string }
-interface Idea { id: string; title: string; contentMd: string; kindCode: string; tags: string[]; sourceSessionId: string | null; createdAt: string; updatedAt: string }
-interface IdeaClusterView { id: string; title: string; summaryMd: string; tags: string[]; ideas: Idea[]; createdAt: string; updatedAt: string }
-interface Bootstrap { dictionaries: Dict[]; stats: { overdue: number; todayDue: number; doing: number; total: number }; todayPlan?: DailyPlanView | null }
-interface TaskDetail { task: Task; children: Task[]; sessions: Array<Record<string, unknown>>; reminders: Array<{ id: string; taskId: string; offsetMinutes: number; methodCode: string; firedAt: string | null }>; events: Array<Record<string, unknown>>; reviews: Array<Record<string, unknown>> }
-interface DraftView { id: string; kindCode: string; statusCode: string; sessionId: string | null; payload: Record<string, unknown> }
-
-type ImageMediaType = 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif'
-type PromptContentPart = { type: 'text'; text: string } | { type: 'image'; mediaType: ImageMediaType; data: string; name?: string }
 interface QuickImageDraft {
   id: string
   file: File
@@ -347,118 +62,14 @@ interface QuickDocumentDraft {
   file: File
 }
 type QuickAttachmentDraft = QuickImageDraft | QuickDocumentDraft
-interface SessionDriver {
-  sessionId: string
-  prompt(content: PromptContentPart[], mode: 'queue'): Promise<{ ok?: boolean; error?: unknown }>
-  rename(title: string): Promise<unknown>
-}
-interface ModelSelection {
-  provider: string
-  model: string
-  reasoningEffort?: string
-}
-interface QuickModelSelection extends ModelSelection {
-  label: string
-  effortLabel?: string
-}
-interface ModelProviderGroup {
-  id: string
-  name: string
-  models: ReadonlyArray<{ id: string; name: string; reasoning?: { defaultEffort?: string; efforts: ReadonlyArray<{ id: string; name: string }> } }>
-}
-interface ModelDirectoryState {
-  current: ModelSelection | null
-  groups: readonly ModelProviderGroup[]
-  failures: ReadonlyArray<{ id: string; name: string; message: string }>
-  status: 'idle' | 'loading' | 'ready' | 'selecting' | 'error'
-  error: string | null
-}
-interface ModelDirectoryRuntime {
-  store: {
-    getSnapshot(): ModelDirectoryState
-    subscribe(listener: () => void): () => void
-  }
-  load(): Promise<ModelDirectoryState>
-  select(selection: ModelSelection): Promise<void>
-}
-interface DshSessionSummary {
-  id: string
-  title?: string
-  displayTitle: string
-  cwd?: string
-  running?: boolean
-  blank?: boolean
-  updatedAt?: number
-}
-interface DshSessionListState {
-  ids: string[]
-  byId: Record<string, DshSessionSummary>
-  current?: string
-}
-interface WorkbenchRuntime {
-  sessions: {
-    list: { getSnapshot(): DshSessionListState }
-    binding(id: string): { session: SessionDriver } | undefined
-    open(id: string): void
-  }
-  workspaces: {
-    list: { getSnapshot(): { items: readonly { workspaceId: string; path?: string }[] } }
-    create?(input: { path: string }): Promise<{ workspaceId?: string }>
-    openPath?(path: string): Promise<void>
-  }
-  uiWorkspace: {
-    connectWorkspace(workspaceId: string): Promise<string>
-  }
-  modelDirectories?: {
-    directoryFor(sessionId: string): ModelDirectoryRuntime
-  }
-  connection?: {
-    generation: {
-      getSnapshot(): { host: { home: string } } | undefined
-    }
-  }
-}
 
-const api = async <T,>(path: string, init?: RequestInit): Promise<T> => {
-  const res = await fetch(path, init)
-  const body = await res.json().catch(() => ({}))
-  if (!res.ok) throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`)
-  return body as T
-}
-
-const DEFAULT_AI_WORKSPACE_HINT = '自动：Documents\\dsh-workbench\\tasks'
-const QUICK_MODEL_STORAGE_KEY = 'dsh-workbench.quickModelSelection'
 const QUICK_IMAGE_MEDIA_TYPES = new Set<string>(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
 const QUICK_DOCUMENT_MEDIA_TYPES = new Set<string>(['application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'])
 const QUICK_DOCUMENT_EXTENSIONS = /\.(pdf|docx)$/i
-const EMPTY_MODEL_DIRECTORY_STATE: ModelDirectoryState = { current: null, groups: [], failures: [], status: 'idle', error: null }
+
 const createClientId = (): string => {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID()
   return `task_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`
-}
-const readQuickModelSelection = (): QuickModelSelection | null => {
-  try {
-    const raw = localStorage.getItem(QUICK_MODEL_STORAGE_KEY)
-    if (raw === null) return null
-    const value = JSON.parse(raw) as Partial<QuickModelSelection>
-    if (typeof value.provider !== 'string' || value.provider === '') return null
-    if (typeof value.model !== 'string' || value.model === '') return null
-    return {
-      provider: value.provider,
-      model: value.model,
-      label: typeof value.label === 'string' && value.label !== '' ? value.label : `${value.provider}/${value.model}`,
-      ...(typeof value.reasoningEffort === 'string' && value.reasoningEffort !== '' ? { reasoningEffort: value.reasoningEffort } : {}),
-      ...(typeof value.effortLabel === 'string' && value.effortLabel !== '' ? { effortLabel: value.effortLabel } : {}),
-    }
-  } catch {
-    return null
-  }
-}
-const writeQuickModelSelection = (selection: QuickModelSelection | null): void => {
-  try {
-    if (selection === null) localStorage.removeItem(QUICK_MODEL_STORAGE_KEY)
-    else localStorage.setItem(QUICK_MODEL_STORAGE_KEY, JSON.stringify(selection))
-  } catch { /* ignore localStorage failures */ }
 }
 const isQuickImageFile = (file: File): boolean => QUICK_IMAGE_MEDIA_TYPES.has(file.type)
 const isQuickDocumentFile = (file: File): boolean => QUICK_DOCUMENT_MEDIA_TYPES.has(file.type) || QUICK_DOCUMENT_EXTENSIONS.test(file.name)
@@ -483,27 +94,15 @@ const quickTaskPlaceholder = (text: string, attachments: readonly QuickAttachmen
   if (documents > 0) return '（见附件文档）'
   return '（未提供内容）'
 }
-const buildQuickIntakePrompt = (input: {
-  taskText: string
-  attachments: readonly QuickAttachmentDraft[]
-  nowIso: string
-  workspaceRootLabel: string
-  reservedTaskId: string
-  taskFolderPath: string
-  taskFolderRelative: string
-}): string => {
-  const attachmentInstruction = quickAttachmentSummary(input.attachments)
-  return `你是“个人工作台”的任务澄清助手。请按 workbench-intake 规范执行。\n\n用户想创建的任务是：\n「${quickTaskPlaceholder(input.taskText, input.attachments)}」${attachmentInstruction === '' ? '' : `\n\n${attachmentInstruction}`}\n\n当前时间：${input.nowIso}\nAI 工作区根目录：${input.workspaceRootLabel}\n本次预分配任务 id：${input.reservedTaskId}${input.taskFolderPath !== '' ? `\n任务资料夹：${input.taskFolderPath}${input.taskFolderRelative !== '' ? `\n任务资料夹相对路径：./${input.taskFolderRelative}/` : ''}` : ''}\n\n请先澄清必要信息（一次一个主题，最多5轮）。除非用户明确要求为这条任务指定资料夹，否则不要再询问工作区路径。信息足够后只能调用 workbench_submit_task 提交结构化任务草稿，并且必须传入 task_id="${input.reservedTaskId}"${input.taskFolderPath !== '' ? `、workspace_path="${input.taskFolderPath}"` : ''}。如需在澄清阶段创建文件，请放在${input.taskFolderRelative !== '' ? `工作区内的 ./${input.taskFolderRelative}/` : '任务资料夹'}。不要执行任务本身。`
-}
 const fileToBase64 = (file: File): Promise<string> => new Promise((resolve, reject) => {
   const reader = new FileReader()
   reader.onload = () => {
     const result = typeof reader.result === 'string' ? reader.result : ''
     const comma = result.indexOf(',')
-    if (comma < 0) reject(new Error('图片读取失败'))
+    if (comma < 0) reject(new Error('附件读取失败'))
     else resolve(result.slice(comma + 1))
   }
-  reader.onerror = () => reject(reader.error ?? new Error('图片读取失败'))
+  reader.onerror = () => reject(reader.error ?? new Error('附件读取失败'))
   reader.readAsDataURL(file)
 })
 const quickImageToPromptPart = async (image: QuickImageDraft): Promise<PromptContentPart> => ({
@@ -527,833 +126,6 @@ const quickDocumentToContext = async (document: QuickDocumentDraft): Promise<str
   )
   return `附件：${res.name}${res.truncated ? '（内容已截断）' : ''}\n"""\n${res.content}\n"""`
 }
-const clientFileLinkToPath = (link: string): string => {
-  const trimmed = link.trim()
-  if (!/^file:/i.test(trimmed)) return trimmed
-  try {
-    const url = new URL(trimmed)
-    let pathname = decodeURIComponent(url.pathname)
-    if (/^\/[A-Za-z]:[\\/]/.test(pathname)) pathname = pathname.slice(1)
-    return pathname
-  } catch {
-    return trimmed
-  }
-}
-const localDateString = (d = new Date()): string => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-const toLocalInput = (iso: string | null): string => {
-  if (iso === null) return ''
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return ''
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}T${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
-}
-const fmtTime = (iso: string): string => {
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return iso
-  return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
-}
-
-/** 草稿类型的中文短标签（待处理入口用）。 */
-const DRAFT_KIND_LABELS: Record<string, string> = {
-  task: '任务草稿',
-  subtask_plan: '子任务提案',
-  daily_plan: '今日计划提案',
-  report: '报告草稿',
-  knowledge: '知识条目',
-  idea_cluster: '点子王提案',
-  idea_tasks: '点子落地提案',
-  completion: '完成验收申请',
-  review: '复盘草稿',
-}
-const draftKindLabel = (kindCode: string): string => DRAFT_KIND_LABELS[kindCode] ?? '草稿'
-
-const ROLE_LABELS: Record<string, string> = {
-  clarify: '澄清会话',
-  consult: '协助会话',
-  breakdown: '拆解会话',
-  execute: '执行会话',
-  review: '复盘会话',
-  plan: 'AI 计划会话',
-  report: '日报/周报会话',
-  idea_association: '点子关联会话',
-  idea_brainstorm: '点子头脑风暴',
-  knowledge_doc: '知识总结会话',
-}
-const roleLabel = (code: string): string => ROLE_LABELS[code] ?? code
-const EVENT_LABELS: Record<string, string> = {
-  created: '创建任务',
-  updated: '更新任务',
-  status_changed: '更新状态',
-  completed: '任务完成',
-  accepted: '用户验收通过',
-  rejected: '用户驳回',
-  archived: '归档任务',
-  restored: '恢复任务',
-  cancelled: '取消任务',
-  memory_added: '写入任务记忆',
-  session_linked: '关联 AI 会话',
-  session_created: '创建 AI 会话',
-  plan_saved: '保存计划',
-  report_saved: '保存报告',
-  review_added: '新增复盘',
-  subtask_added: '新增子任务',
-  reminder_added: '添加提醒',
-  reminder_fired: '触发提醒',
-  knowledge_added: '新增知识',
-  idea_added: '新增点子',
-  idea_cluster_added: '新增点子王',
-}
-const eventLabel = (code: string): string => EVENT_LABELS[code] ?? code
-const EVENT_ICONS: Record<string, string> = {
-  created: '📝',
-  updated: '🔄',
-  status_changed: '🔀',
-  completed: '✅',
-  accepted: '✔️',
-  rejected: '❌',
-  archived: '📦',
-  restored: '♻️',
-  cancelled: '⛔',
-  memory_added: '💾',
-  session_linked: '🔗',
-  session_created: '🔗',
-  plan_saved: '📅',
-  report_saved: '📊',
-  review_added: '🧠',
-  subtask_added: '🌱',
-  reminder_added: '⏰',
-  reminder_fired: '🔔',
-  knowledge_added: '📚',
-  idea_added: '💡',
-  idea_cluster_added: '👑',
-}
-const eventIcon = (code: string): string => EVENT_ICONS[code] ?? '•'
-const shortId = (id: string): string => id.length > 12 ? `${id.slice(0, 8)}…` : id
-const sameDay = (a: Date, b: Date): boolean => a.toDateString() === b.toDateString()
-const startOfDay = (d: Date): Date => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x }
-const startOfWeek = (d: Date): Date => { const x = startOfDay(d); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return x }
-
-function Icon({ name, size = 16 }: { name: string; size?: number }): JSX.Element {
-  const common = { width: size, height: size, viewBox: '0 0 16 16', fill: 'none', stroke: 'currentColor', strokeWidth: 1.5, 'aria-hidden': true }
-  switch (name) {
-    case 'today': return <svg {...common}><circle cx="8" cy="8" r="5.5" /><path d="M8 5.5V8l1.8 1.8" /></svg>
-    case 'calendar': return <svg {...common}><rect x="2" y="3" width="12" height="11" rx="2" /><path d="M2 6.5h12M5.5 2v3M10.5 2v3" /></svg>
-    case 'list': return <svg {...common}><path d="M3 4h10M3 8h10M3 12h7" /></svg>
-    case 'sparkles': return <svg {...common}><path d="M8 2l1.4 2.8L12 6 9.8 7.4 8 10 6.2 7.4 4 6l2.6-1.2L8 2zM4 12l.8 1.6L6.5 14l-1.7.4L4 16l-.4-1.6L2 14l1.7-.4L4 12zM12 10l.8 1.6 1.7.4-1.7.4L12 14l-.4-1.6L9.9 12l1.7-.4L12 10z" /></svg>
-    case 'plus': return <svg {...common}><path d="M8 2v12M2 8h12" /></svg>
-    case 'settings': return <svg {...common}><circle cx="8" cy="8" r="2.5" /><path d="M8 2.5v2M8 11.5v2M2.5 8h2M11.5 8h2M4.2 4.2l1.4 1.4M10.4 10.4l1.4 1.4M11.8 4.2l-1.4 1.4M5.6 10.4l-1.4 1.4" /></svg>
-    case 'back': return <svg {...common}><path d="M10 2L4 8l6 6" /></svg>
-    case 'edit': return <svg {...common}><path d="M9.5 2.5L3 9l-.5 4.5L7 13l6.5-6.5-4-4z" /><path d="M8 7l2 2" /></svg>
-    case 'report': return <svg {...common}><path d="M3 13V3h8l2 2v8H3z" /><path d="M5 7h4M5 9.5h4" /></svg>
-    case 'bell': return <svg {...common}><path d="M8 2a4 4 0 0 0-4 4v3l-1.5 2.5h11L12 9V6a4 4 0 0 0-4-4z" /><path d="M6.5 14a1.8 1.8 0 0 0 3 0" /></svg>
-    case 'check': return <svg {...common}><circle cx="8" cy="8" r="6" /><path d="M5.5 8.5l1.8 1.8 3.4-4" /></svg>
-    case 'refresh': return <svg {...common}><path d="M13 8a5 5 0 1 1-1.5-3.5M13 3v2.5h-2.5" /></svg>
-    case 'trash': return <svg {...common}><path d="M3 4h10M6.5 4V2.5h3V4M5 4l.5 10h5L11 4" /></svg>
-    case 'ai': return <svg {...common}><path d="M8 2l1.4 2.8L12 6 9.8 7.4 8 10 6.2 7.4 4 6l2.6-1.2L8 2z" /></svg>
-    case 'breakdown': return <svg {...common}><path d="M3 4h4M3 8h4M3 12h4M9.5 4h3.5M9.5 8h3.5M9.5 12h3.5" /></svg>
-    case 'subtask': return <svg {...common}><path d="M8 2v12M2 8h12" /></svg>
-    case 'archive': return <svg {...common}><rect x="2.5" y="3" width="11" height="3.5" rx="1" /><path d="M4 6.5h8v6H4v-6zM6.5 9h3" /></svg>
-    case 'book': return <svg {...common}><path d="M3 2.5h6.5v11H3zM9.5 2.5H13v11H9.5z" /><path d="M3 2.5v11M13 2.5v11" /></svg>
-    case 'file': return <svg {...common}><path d="M4 1.5h5.5L13 5v9.5H4z" /><path d="M9.5 1.5V5H13" /></svg>
-    case 'folder': return <svg {...common}><path d="M2.5 4h4l1.5 2h5.5v7h-11z" /></svg>
-    case 'image': return <svg {...common}><rect x="2.5" y="3" width="11" height="10" rx="2" /><circle cx="6" cy="6.2" r="1" /><path d="M3.5 12l3.2-3.2 2 2 1.3-1.3 2.5 2.5" /></svg>
-    case 'idea': return <svg {...common}><path d="M8 2a4 4 0 0 0-1 7.8V12h2V9.8A4 4 0 0 0 8 2z" /><path d="M6.5 14h3" /></svg>
-    case 'chevron': return <svg {...common}><path d="M6 3l5 5-5 5" /></svg>
-    case 'model': return <svg {...common}><rect x="2.5" y="3" width="11" height="10" rx="2" /><path d="M5 6h6M5 8.5h4M5 11h2" /></svg>
-    case 'send': return <svg {...common}><path d="M8 13V3M4.5 6.5L8 3l3.5 3.5" /></svg>
-    default: return <svg {...common}><circle cx="8" cy="8" r="5" /></svg>
-  }
-}
-
-function Badge({ dict, code }: { dict: Dict[]; code: string }): JSX.Element {
-  const entry = dict.find((d) => d.code === code)
-  const color = String(entry?.config.color ?? '#8a9aa8')
-  return <span className="wb-chip" style={{ background: `color-mix(in srgb, ${color} 14%, transparent)`, color, border: `1px solid color-mix(in srgb, ${color} 45%, transparent)`, fontWeight: 600 }}>{entry?.name ?? code}</span>
-}
-
-function renderInline(text: string): (string | JSX.Element)[] {
-  const parts: (string | JSX.Element)[] = []
-  const regex = /(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\([^)]*\))/g
-  let last = 0
-  for (const match of text.matchAll(regex)) {
-    const idx = match.index
-    if (idx > last) parts.push(text.slice(last, idx))
-    const token = match[0]
-    if (token.startsWith('**')) parts.push(<strong key={idx}>{token.slice(2, -2)}</strong>)
-    else if (token.startsWith('`')) parts.push(<code key={idx} style={{ background: 'rgba(127,127,127,.14)', padding: '0 4px', borderRadius: 4 }}>{token.slice(1, -1)}</code>)
-    else {
-      const m = /^\[([^\]]+)\]\(([^)]*)\)$/.exec(token)
-      if (m !== null) parts.push(<a key={idx} href={m[2]} style={{ color: 'var(--dsw-alias-state-business-primary,#8fa8c8)' }}>{m[1]}</a>)
-      else parts.push(token)
-    }
-    last = idx + token.length
-  }
-  if (last < text.length) parts.push(text.slice(last))
-  return parts
-}
-
-function MarkdownText({ text }: { text: string }): JSX.Element {
-  const lines = text.split('\n')
-  const blocks: JSX.Element[] = []
-  let list: { ordered: boolean; items: string[] } | null = null
-  let code: string[] = []
-  let inCode = false
-  let table: string[] = []
-  let key = 0
-  const renderListItem = (item: string): JSX.Element => {
-    const checkbox = /^\[( |x|X)\]\s+(.*)$/.exec(item)
-    if (checkbox !== null) {
-      return <label style={{ display: 'flex', alignItems: 'flex-start', gap: 6, margin: '2px 0' }}><input type="checkbox" readOnly checked={checkbox[1].toLowerCase() === 'x'} style={{ marginTop: 4 }} />{renderInline(checkbox[2])}</label>
-    }
-    return <span style={{ margin: '2px 0' }}>{renderInline(item)}</span>
-  }
-  const flushList = () => {
-    if (list === null || list.items.length === 0) { list = null; return }
-    if (list.ordered) {
-      blocks.push(<ol key={key++} style={{ margin: '4px 0 4px 18px', padding: 0 }}>{list.items.map((item, i) => <li key={i}>{renderListItem(item)}</li>)}</ol>)
-    } else {
-      blocks.push(<ul key={key++} style={{ margin: '4px 0 4px 18px', padding: 0 }}>{list.items.map((item, i) => <li key={i} style={{ listStyleType: /^\[( |x|X)\]\s/.test(item) ? 'none' : undefined }}>{renderListItem(item)}</li>)}</ul>)
-    }
-    list = null
-  }
-  const flushCode = () => {
-    if (code.length === 0) return
-    const codeText = code.join('\n')
-    blocks.push(
-      <div key={key++} className="wb-code-block">
-        <button type="button" className="wb-btn wb-code-copy" onClick={() => { if (navigator.clipboard) void navigator.clipboard.writeText(codeText).catch(() => undefined) }}>复制</button>
-        <pre>{codeText}</pre>
-      </div>,
-    )
-    code = []
-  }
-  const flushTable = () => {
-    if (table.length === 0) return
-    const rows = table
-      .map((line) => line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((cell) => cell.trim()))
-      .filter((cells) => cells.length > 0 && cells.some((cell) => cell !== ''))
-    const isSeparator = (cells: string[]): boolean => cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell))
-    if (rows.length >= 2 && isSeparator(rows[1])) {
-      const header = rows[0] ?? []
-      const body = rows.slice(2)
-      const border = '1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.22))'
-      blocks.push(
-        <table key={key++} style={{ borderCollapse: 'collapse', width: '100%', margin: '8px 0', fontSize: 13 }}>
-          <thead><tr>{header.map((cell, i) => <th key={i} style={{ border, padding: '4px 8px', textAlign: 'left', background: 'rgba(127,127,127,.10)' }}>{renderInline(cell)}</th>)}</tr></thead>
-          <tbody>{body.map((row, ri) => <tr key={ri}>{row.map((cell, ci) => <td key={ci} style={{ border, padding: '4px 8px' }}>{renderInline(cell)}</td>)}</tr>)}</tbody>
-        </table>,
-      )
-    } else {
-      blocks.push(<p key={key++} style={{ margin: '4px 0' }}>{renderInline(table.join('<br/>'))}</p>)
-    }
-    table = []
-  }
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index]
-    if (line.startsWith('```')) { flushList(); flushTable(); if (inCode) { flushCode(); inCode = false } else { code = []; inCode = true } continue }
-    if (inCode) { code.push(line); continue }
-    if (line.trim().startsWith('|')) { flushList(); table.push(line.trim()); continue }
-    if (/^###\s/.test(line)) { flushList(); flushTable(); blocks.push(<h5 key={key++} style={{ margin: '8px 0 4px' }}>{renderInline(line.replace(/^###\s*/, ''))}</h5>); continue }
-    if (/^##\s/.test(line)) { flushList(); flushTable(); blocks.push(<h4 key={key++} style={{ margin: '10px 0 4px' }}>{renderInline(line.replace(/^##\s*/, ''))}</h4>); continue }
-    if (/^#\s/.test(line)) { flushList(); flushTable(); blocks.push(<h3 key={key++} style={{ margin: '12px 0 4px' }}>{renderInline(line.replace(/^#\s*/, ''))}</h3>); continue }
-    if (/^>\s?/.test(line)) { flushList(); flushTable(); flushCode(); blocks.push(<blockquote key={key++} className="wb-blockquote">{renderInline(line.replace(/^>\s?/, ''))}</blockquote>); continue }
-    const orderedMatch = /^(\d+)[.)]\s+(.*)$/.exec(line)
-    const unorderedMatch = /^[-*]\s+(.*)$/.exec(line)
-    if (orderedMatch !== null || unorderedMatch !== null) {
-      flushTable(); flushCode()
-      const ordered = orderedMatch !== null
-      const item = ordered ? orderedMatch[2] : unorderedMatch![1]
-      if (list === null || list.ordered !== ordered) flushList()
-      if (list === null) list = { ordered, items: [] }
-      list.items.push(item)
-      continue
-    }
-    if (line.trim() === '') {
-      const next = lines.slice(index + 1).find((l) => l.trim() !== '')
-      if (table.length > 0 && next !== undefined && next.trim().startsWith('|')) continue
-      flushList(); flushTable(); flushCode(); continue
-    }
-    flushList(); flushTable(); flushCode()
-    blocks.push(<p key={key++} style={{ margin: '4px 0' }}>{renderInline(line)}</p>)
-  }
-  flushList(); flushTable(); flushCode()
-  return <div style={{ lineHeight: 1.7, fontSize: 13 }}>{blocks}</div>
-}
-
-function countTaskTree(roots: TaskTreeNode<Task>[]): number {
-  return roots.reduce((sum, node) => sum + 1 + countTaskTree(node.children), 0)
-}
-
-function TaskTreeRows({ roots, depth, expanded, toggle, dicts, onOpen, selectedId, contextIds }: {
-  roots: TaskTreeNode<Task>[]; depth: number; expanded: Set<string>; toggle: (id: string) => void
-  dicts: Dict[]; onOpen: (task: Task) => void; selectedId?: string; contextIds?: Set<string>
-}): JSX.Element {
-  return (
-    <>
-      {roots.map((node) => (
-        <div key={node.task.id}>
-          <div className={`wb-row ${selectedId === node.task.id ? 'selected' : ''} ${contextIds?.has(node.task.id) ? 'wb-row-context' : ''}`} style={{ paddingLeft: 8 + depth * 16 }} onClick={() => onOpen(node.task)}>
-            <button type="button" className="wb-btn" style={{ padding: '2px 6px', border: 'none', flex: 'none' }} onClick={(e) => { e.stopPropagation(); toggle(node.task.id) }}>
-              {node.children.length > 0 ? (expanded.has(node.task.id) ? '▼' : '▶') : '·'}
-            </button>
-            <TaskRow task={node.task} dicts={dicts} onOpen={onOpen} bare />
-          </div>
-          {node.children.length > 0 && expanded.has(node.task.id) && (
-            <TaskTreeRows roots={node.children} depth={depth + 1} expanded={expanded} toggle={toggle} dicts={dicts} onOpen={onOpen} selectedId={selectedId} contextIds={contextIds} />
-          )}
-        </div>
-      ))}
-    </>
-  )
-}
-
-function TaskRow({ task, dicts, onOpen, selected, bare = false }: { task: Task; dicts: Dict[]; onOpen: (task: Task) => void; selected?: boolean; bare?: boolean }): JSX.Element {
-  const due = task.effectiveDueAt === null ? null : new Date(task.effectiveDueAt)
-  const now = new Date()
-  const dueText = task.statusCode === 'done'
-    ? task.effectiveDueAt !== null
-      ? fmtTime(task.effectiveDueAt)
-      : task.completedAt !== null ? fmtTime(task.completedAt) : ''
-    : task.statusCode === 'cancelled'
-      ? '已取消'
-      : due === null
-        ? '无截止'
-        : Number.isNaN(due.getTime())
-          ? fmtTime(task.effectiveDueAt!)
-          : due.toDateString() === now.toDateString()
-            ? `今天 ${fmtTime(task.effectiveDueAt!)}`
-            : due.getTime() < now.getTime()
-              ? `逾期 ${fmtTime(task.effectiveDueAt!)}`
-              : fmtTime(task.effectiveDueAt!)
-  const content = (
-    <>
-      <div className="wb-row-title" style={{ fontWeight: 600 }}>{task.title}</div>
-      <div className="wb-row-meta">
-        <Badge dict={dicts.filter((d) => d.kind === 'type')} code={task.typeCode} />
-        <Badge dict={dicts.filter((d) => d.kind === 'priority')} code={task.priorityCode} />
-        <Badge dict={dicts.filter((d) => d.kind === 'status')} code={task.statusCode} />
-        <span className="wb-due">{dueText}</span>
-      </div>
-    </>
-  )
-  if (bare) return <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8 }}>{content}</div>
-  const closed = task.statusCode === 'done' || task.statusCode === 'cancelled'
-  return (
-    <div className={`wb-row ${selected === true ? 'selected' : ''} ${closed ? 'done' : ''}`} style={{ flex: 1, minWidth: 0 }} onClick={() => onOpen(task)}>
-      {content}
-    </div>
-  )
-}
-
-function MultiSelectDropdown({ label, options, selected, open, onToggle, onClose, onChange, alignRight = false }: {
-  label: string
-  options: Dict[]
-  selected: string[]
-  open: boolean
-  onToggle: () => void
-  onClose: () => void
-  onChange: (codes: string[]) => void
-  alignRight?: boolean
-}): JSX.Element {
-  const toggleCode = (code: string): void => {
-    onChange(selected.includes(code) ? selected.filter((c) => c !== code) : [...selected, code])
-  }
-  return (
-    <div style={{ position: 'relative' }}>
-      <button type="button" className="wb-btn" onClick={onToggle} style={{ position: 'relative', zIndex: 25, flex: '0 0 auto', minWidth: 118, maxWidth: 180, overflow: 'hidden' }}>
-        <span style={{ whiteSpace: 'nowrap' }}>{label}</span>
-        {selected.length === 0 ? (
-          <span style={{ color: 'var(--dsw-alias-label-secondary)', whiteSpace: 'nowrap' }}>全部</span>
-        ) : (
-          <span style={{ color: 'var(--dsw-alias-label-secondary)', whiteSpace: 'nowrap' }}>已选 {selected.length} 项</span>
-        )}
-        <span style={{ flex: 'none' }}>{open ? '▲' : '▼'}</span>
-      </button>
-      {open && (
-        <>
-          <div style={{ position: 'fixed', inset: 0, zIndex: 20 }} onClick={onClose} />
-          <div style={{ position: 'absolute', top: 'calc(100% + 4px)', left: alignRight ? undefined : 0, right: alignRight ? 0 : undefined, zIndex: 30, minWidth: 240, maxHeight: 320, overflowY: 'auto', background: 'var(--dsw-alias-bg-layer-2, #1c1c1f)', border: '1px solid var(--dsw-alias-border-l1, rgba(255,255,255,.22))', borderRadius: 10, padding: 6, boxShadow: '0 12px 32px rgba(0,0,0,.45)' }}>
-            {selected.length > 0 && (
-              <div style={{ padding: '6px 8px 8px', borderBottom: '1px solid var(--dsw-alias-border-l1, rgba(255,255,255,.12))', marginBottom: 6 }}>
-                <div style={{ fontSize: 11, color: 'var(--dsw-alias-label-secondary)', marginBottom: 4 }}>已选（{selected.length}）</div>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                  {selected.map((code) => <Badge key={code} dict={options} code={code} />)}
-                </div>
-              </div>
-            )}
-            {options.map((d) => {
-              const color = String(d.config.color ?? '#8a9aa8')
-              const checked = selected.includes(d.code)
-              return (
-                <label key={d.code} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px', borderRadius: 8, cursor: 'pointer', border: `1px solid ${checked ? color : 'transparent'}`, background: checked ? `color-mix(in srgb, ${color} 12%, transparent)` : 'transparent' }}>
-                  <input type="checkbox" checked={checked} onChange={() => toggleCode(d.code)} />
-                  <span style={{ color, fontWeight: 600, fontSize: 12.5 }}>{d.name}</span>
-                </label>
-              )
-            })}
-            {options.length === 0 && <div style={{ padding: '6px 8px', color: 'var(--dsw-alias-label-secondary)', fontSize: 12 }}>无选项</div>}
-          </div>
-        </>
-      )}
-    </div>
-  )
-}
-
-function QuickModelPicker({ runtime, value, onChange, disabled, onError, alignRight = false }: {
-  runtime: WorkbenchRuntime
-  value: QuickModelSelection | null
-  onChange: (selection: QuickModelSelection | null) => void
-  disabled?: boolean
-  onError: (message: string) => void
-  alignRight?: boolean
-}): JSX.Element {
-  const [open, setOpen] = useState(false)
-  const [loading, setLoading] = useState(false)
-  const sessions = runtime.sessions.list.getSnapshot()
-  const directorySessionId = sessions.current ?? sessions.ids[0] ?? ''
-  const directory = useMemo(() => {
-    if (runtime.modelDirectories === undefined || directorySessionId === '') return undefined
-    try { return runtime.modelDirectories.directoryFor(directorySessionId) } catch { return undefined }
-  }, [runtime.modelDirectories, directorySessionId])
-  const subscribeModelDirectory = useCallback((listener: () => void) => directory?.store.subscribe(listener) ?? (() => undefined), [directory])
-  const getModelDirectorySnapshot = useCallback(() => directory?.store.getSnapshot() ?? EMPTY_MODEL_DIRECTORY_STATE, [directory])
-  const state = useSyncExternalStore(
-    subscribeModelDirectory,
-    getModelDirectorySnapshot,
-    () => EMPTY_MODEL_DIRECTORY_STATE,
-  )
-  useEffect(() => {
-    if (directory === undefined) return
-    if (state.status !== 'idle') return
-    setLoading(true)
-    void directory.load()
-      .catch(() => undefined)
-      .finally(() => setLoading(false))
-  }, [directory, state.status])
-  const selectionLabel = useCallback((selection: ModelSelection): string => {
-    for (const group of state.groups) {
-      if (group.id !== selection.provider) continue
-      const model = group.models.find((item) => item.id === selection.model)
-      if (model !== undefined) {
-        const effort = model.reasoning?.efforts.find((item) => item.id === selection.reasoningEffort)
-        return effort === undefined ? model.name : `${model.name} · ${effort.name}`
-      }
-    }
-    return `${selection.provider}/${selection.model}`
-  }, [state.groups])
-  const selectedLabel = useMemo(() => {
-    if (value === null && state.current !== null) return selectionLabel(state.current)
-    if (value === null) return loading || state.status === 'loading' ? '读取模型…' : '选择模型'
-    const liveLabel = selectionLabel(value)
-    if (liveLabel !== `${value.provider}/${value.model}`) return liveLabel
-    return value.effortLabel === undefined ? value.label : `${value.label} · ${value.effortLabel}`
-  }, [loading, selectionLabel, state.current, state.status, value])
-  const selectedLabelParts = useMemo(() => {
-    const separator = ' · '
-    const index = selectedLabel.lastIndexOf(separator)
-    if (index < 0) return { model: selectedLabel, effort: '' }
-    return { model: selectedLabel.slice(0, index), effort: selectedLabel.slice(index + separator.length) }
-  }, [selectedLabel])
-  const openPicker = (): void => {
-    if (directory === undefined) {
-      onError('当前 DSH 未提供模型选择接口，无法读取模型列表')
-      return
-    }
-    setOpen((prev) => !prev)
-    setLoading(true)
-    void directory.load()
-      .catch((e: unknown) => onError(e instanceof Error ? e.message : String(e)))
-      .finally(() => setLoading(false))
-  }
-  const chooseModel = (group: ModelProviderGroup, model: ModelProviderGroup['models'][number]): void => {
-    const effortId = model.reasoning?.defaultEffort
-    const effort = model.reasoning?.efforts.find((item) => item.id === effortId)
-    onChange({
-      provider: group.id,
-      model: model.id,
-      label: model.name,
-      ...(effortId !== undefined && effortId !== '' ? { reasoningEffort: effortId } : {}),
-      ...(effort !== undefined ? { effortLabel: effort.name } : {}),
-    })
-    setOpen(false)
-  }
-  return (
-    <div style={{ position: 'relative' }}>
-      <button type="button" className="wb-btn wb-model-trigger" disabled={disabled === true} onClick={openPicker} title={selectedLabel}>
-        <span className="wb-model-trigger-label">{selectedLabelParts.model}</span><span style={{ flex: 'none' }}>{open ? '⌃' : '›'}</span>
-      </button>
-      {open && (
-        <>
-          <div style={{ position: 'fixed', inset: 0, zIndex: 20 }} onClick={() => setOpen(false)} />
-          <div style={{ position: 'absolute', left: alignRight ? undefined : 0, right: alignRight ? 0 : undefined, top: 'calc(100% + 4px)', zIndex: 30, width: 'max-content', minWidth: 260, maxWidth: 'none', maxHeight: 260, overflowY: 'auto', background: 'var(--dsw-alias-bg-layer-2, #1c1c1f)', border: '1px solid var(--dsw-alias-border-l1, rgba(255,255,255,.22))', borderRadius: 9, padding: 4, boxShadow: '0 10px 24px rgba(0,0,0,.38)' }}>
-            {loading || state.status === 'loading'
-              ? <div style={{ padding: '6px 8px', color: 'var(--dsw-alias-label-secondary)', fontSize: 11.5 }}>正在读取模型列表…</div>
-              : null}
-            {state.error !== null && <div style={{ padding: '6px 8px', color: '#E74C3C', fontSize: 11.5 }}>{state.error}</div>}
-            {state.groups.map((group) => (
-              <div key={group.id} style={{ borderTop: '1px solid var(--dsw-alias-border-l1, rgba(255,255,255,.12))', marginTop: 4, paddingTop: 4 }}>
-                <div style={{ padding: '3px 7px', color: 'var(--dsw-alias-label-secondary)', fontSize: 10.5, fontWeight: 700 }}>{group.name}</div>
-                {group.models.map((model) => {
-                  const selected = value === null
-                    ? state.current?.provider === group.id && state.current.model === model.id
-                    : value.provider === group.id && value.model === model.id
-                  const effort = model.reasoning?.efforts.find((item) => item.id === model.reasoning?.defaultEffort)
-                  return (
-                    <button key={model.id} type="button" className={`wb-model-option ${selected ? 'selected' : ''}`} onClick={() => chooseModel(group, model)}>
-                      <span style={{ minWidth: 0, flex: 1 }}>
-                        <span className="wb-model-option-name">{model.name}</span>
-                        {effort !== undefined && <span className="wb-model-option-effort">{effort.name}</span>}
-                      </span>
-                      {selected && <Icon name="check" size={14} />}
-                    </button>
-                  )
-                })}
-              </div>
-            ))}
-            {state.groups.length === 0 && !loading && state.status !== 'loading' && state.error === null && (
-              <div style={{ padding: '6px 8px', color: 'var(--dsw-alias-label-secondary)', fontSize: 11.5 }}>暂无可用模型</div>
-            )}
-            {state.failures.length > 0 && (
-              <div style={{ borderTop: '1px solid var(--dsw-alias-border-l1, rgba(255,255,255,.12))', marginTop: 4, padding: '5px 7px', color: 'var(--dsw-alias-label-secondary)', fontSize: 10.5 }}>
-                {state.failures.length} 个模型来源读取失败
-              </div>
-            )}
-          </div>
-        </>
-      )}
-    </div>
-  )
-}
-
-function PlanPanel({ plan, tasks, title, onComplete, onDefer, onRefresh, onClear, onSave, canEdit = true }: {
-  plan: DailyPlanView
-  tasks: Task[]
-  title?: string
-  onComplete: (taskId: string) => Promise<void>
-  onDefer: (taskId: string) => Promise<void>
-  onRefresh?: () => void
-  onClear?: () => void
-  onSave?: (items: Array<{ taskId: string; note: string }>) => Promise<void>
-  canEdit?: boolean
-}): JSX.Element {
-  const [expanded, setExpanded] = useState(false)
-  const [actingId, setActingId] = useState<string | null>(null)
-  const [overflowing, setOverflowing] = useState(false)
-  const [visibleCount, setVisibleCount] = useState(plan.items.length)
-  const [editing, setEditing] = useState(false)
-  const [editItems, setEditItems] = useState<Array<{ taskId: string; title: string; note: string }>>([])
-  const [saving, setSaving] = useState(false)
-  const scrollRef = useRef<HTMLDivElement>(null)
-  const total = plan.items.length
-  const taskById = (id: string): Task | undefined => tasks.find((t) => t.id === id)
-  const runAction = async (taskId: string, action: () => Promise<void>): Promise<void> => {
-    if (actingId !== null) return
-    setActingId(taskId)
-    try { await action() } finally { setActingId(null) }
-  }
-  const enterEdit = (): void => {
-    setEditItems(plan.items.map((item) => ({ taskId: item.taskId, title: item.title, note: item.note ?? '' })))
-    setEditing(true)
-  }
-  const moveItem = (index: number, delta: -1 | 1): void => {
-    setEditItems((prev) => {
-      const next = [...prev]
-      const target = index + delta
-      if (target < 0 || target >= next.length) return prev
-      ;[next[index], next[target]] = [next[target], next[index]]
-      return next
-    })
-  }
-  const updateNote = (index: number, note: string): void => {
-    setEditItems((prev) => prev.map((item, i) => (i === index ? { ...item, note } : item)))
-  }
-  const removeItem = (index: number): void => {
-    setEditItems((prev) => prev.filter((_, i) => i !== index))
-  }
-  const addTask = (taskId: string): void => {
-    const task = taskById(taskId)
-    if (task === undefined) return
-    setEditItems((prev) => (prev.some((item) => item.taskId === taskId) ? prev : [...prev, { taskId, title: task.title, note: '' }]))
-  }
-  const planDay = new Date(`${plan.planDate}T00:00:00`)
-  const isToday = plan.planDate === localDateString()
-  const candidateTasks = tasks.filter((t) =>
-    t.statusCode !== 'done' && t.statusCode !== 'cancelled' &&
-    !editItems.some((item) => item.taskId === t.id) &&
-    ((t.effectiveDueAt !== null && sameDay(new Date(t.effectiveDueAt), planDay)) || (isToday && t.effectiveDueAt === null))
-  )
-  const handleSave = async (): Promise<void> => {
-    if (onSave === undefined) return
-    if ((plan.sourceCode ?? '') !== 'manual' && !window.confirm('保存将覆盖当前 AI 生成计划并标记为手动编辑，确定继续？')) return
-    setSaving(true)
-    try {
-      await onSave(editItems.map((item, index) => ({ taskId: item.taskId, note: item.note.trim() })))
-      setEditing(false)
-    } catch {
-      // 父级 savePlan 已通过全局错误条展示原因；保持编辑模式让用户修正后重试。
-    } finally { setSaving(false) }
-  }
-  const handleRefresh = (): void => {
-    if ((plan.sourceCode ?? '') === 'manual' && !window.confirm('当前计划包含手动调整，重新生成会覆盖手动调整。确定继续？')) return
-    onRefresh?.()
-  }
-  const measureOverflow = useCallback(() => {
-    const el = scrollRef.current
-    if (el === null || expanded) return
-    const over = el.scrollHeight > el.clientHeight + 1
-    setOverflowing(over)
-    if (!over) {
-      setVisibleCount(total)
-      return
-    }
-    const containerRect = el.getBoundingClientRect()
-    let count = 0
-    for (const item of Array.from(el.querySelectorAll<HTMLElement>('.wb-plan-item'))) {
-      const rect = item.getBoundingClientRect()
-      if (rect.bottom <= containerRect.bottom + 1) count += 1
-      else break
-    }
-    setVisibleCount(Math.min(Math.max(count, 1), total))
-  }, [expanded, total])
-  useEffect(() => {
-    measureOverflow()
-    const el = scrollRef.current
-    if (el === null) return
-    const ro = new ResizeObserver(() => measureOverflow())
-    ro.observe(el)
-    return () => ro.disconnect()
-  }, [measureOverflow, plan.items, plan.summary])
-  return (
-    <div className={`wb-card wb-plan ${expanded ? 'wb-plan-expanded' : ''}`}>
-      <h4>
-        <Icon name="sparkles" />
-        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title ?? `${plan.planDate} 计划`}</span>
-        {editing && <span style={{ fontSize: 11, color: '#d9a03f', border: '1px solid rgba(217,160,63,.4)', borderRadius: 6, padding: '1px 6px' }}>编辑模式</span>}
-        <span style={{ flex: 1 }} />
-        {!editing && overflowing && (
-          <button className="wb-btn" onClick={() => setExpanded((v) => !v)}>
-            {expanded ? '收起' : `展开全部（${total}）`}
-          </button>
-        )}
-      </h4>
-      {plan.summary !== '' && !editing && <div style={{ fontSize: 14, lineHeight: 1.7, marginBottom: 6 }}>{plan.summary}</div>}
-      <div ref={scrollRef} className="wb-plan-scroll">
-        {editing ? (
-          editItems.length === 0 ? (
-            <div style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)', padding: '6px 2px' }}>暂无计划项，可从下方添加任务。</div>
-          ) : (
-            editItems.map((item, index) => {
-              const task = taskById(item.taskId)
-              const closed = task !== undefined && (task.statusCode === 'done' || task.statusCode === 'cancelled')
-              return (
-                <div key={item.taskId} className={`wb-plan-item ${closed ? 'closed' : ''}`}>
-                  <span className="wb-plan-num">{index + 1}</span>
-                  <span style={{ flex: '0 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 600 }}>{item.title}</span>
-                  <input className="wb-plan-edit-note" value={item.note} onChange={(e) => updateNote(index, e.target.value)} placeholder="备注（可选）" />
-                  <span className="wb-plan-edit-actions">
-                    <button className="wb-btn" disabled={index === 0} onClick={() => moveItem(index, -1)}>↑</button>
-                    <button className="wb-btn" disabled={index === editItems.length - 1} onClick={() => moveItem(index, 1)}>↓</button>
-                    <button className="wb-btn" onClick={() => removeItem(index)}>移除</button>
-                  </span>
-                </div>
-              )
-            })
-          )
-        ) : (
-          plan.items.map((item, index) => {
-            const task = taskById(item.taskId)
-            const closed = task !== undefined && (task.statusCode === 'done' || task.statusCode === 'cancelled')
-            return (
-              <div key={item.taskId} className={`wb-plan-item ${closed ? 'closed' : ''}`}>
-                <span className="wb-plan-num">{index + 1}</span>
-                <b>{item.title}</b>
-                {item.note !== '' && <span className="wb-plan-note">— {item.note}</span>}
-                {task !== undefined && !closed && (
-                  <span className="wb-plan-item-actions">
-                    <button type="button" className="wb-plan-act done" disabled={actingId !== null} onClick={() => void runAction(item.taskId, () => onComplete(item.taskId))}>完成</button>
-                    <button type="button" className="wb-plan-act defer" disabled={actingId !== null} onClick={() => void runAction(item.taskId, () => onDefer(item.taskId))}>明天</button>
-                  </span>
-                )}
-              </div>
-            )
-          })
-        )}
-      </div>
-      <div className="wb-plan-footer">
-        {editing ? (
-          <>
-            <select className="wb-plan-add" defaultValue="" onChange={(e) => { const v = e.target.value; if (v !== '') { addTask(v); e.target.value = '' } }}>
-              <option value="">+ 添加任务…</option>
-              {candidateTasks.map((t) => <option key={t.id} value={t.id}>{t.title}</option>)}
-            </select>
-            <span style={{ flex: 1 }} />
-            <button className="wb-btn" disabled={saving} onClick={() => setEditing(false)}>取消</button>
-            <button className="wb-btn primary" disabled={saving || editItems.length === 0} onClick={() => void handleSave()}>保存</button>
-          </>
-        ) : (
-          <>
-            <span>{overflowing ? `共 ${total} 项 · 默认展示前 ${visibleCount} 项，滚动/展开可查看全部` : `共 ${total} 项 · 已全部展示`}</span>
-            <span style={{ flex: 1 }} />
-            {canEdit && onSave !== undefined && <button className="wb-btn" onClick={enterEdit}><Icon name="edit" />编辑</button>}
-            {canEdit && onRefresh !== undefined && <button className="wb-btn" onClick={handleRefresh}><Icon name="refresh" />重新生成</button>}
-            {canEdit && onClear !== undefined && <button className="wb-btn" onClick={() => { if (window.confirm('确定要清除该日计划吗？清除后不可恢复。')) onClear() }}><Icon name="trash" />清除</button>}
-          </>
-        )}
-      </div>
-    </div>
-  )
-}
-
-function DraftBanner({ draft, onDone, runtime, closePanel, kindName }: { draft: DraftView; onDone: () => void; runtime: WorkbenchRuntime; closePanel: () => void; kindName: (kind: string, code: string) => string }): JSX.Element {
-  const subtasks = Array.isArray(draft.payload.subtasks) ? draft.payload.subtasks as Array<{ title?: string }> : []
-  const [busy, setBusy] = useState(false)
-  const act = async (path: string): Promise<void> => {
-    setBusy(true)
-    try { await api(path, { method: 'POST' }); onDone() } finally { setBusy(false) }
-  }
-  if (draft.kindCode === 'idea_cluster') {
-    const clusters = Array.isArray(draft.payload.clusters) ? draft.payload.clusters as Array<{ title?: string; summary?: string; idea_titles?: string[] }> : []
-    const sessionId = typeof draft.sessionId === 'string' && draft.sessionId !== '' ? draft.sessionId : ''
-    return (
-      <div className="wb-banner review">
-        <h4>🧠 点子王提案待确认（{clusters.length}）</h4>
-        {clusters.map((cluster, i) => (
-          <div key={i} style={{ marginBottom: 8 }}>
-            <b>{cluster.title ?? `点子王 ${i + 1}`}</b>
-            {cluster.summary !== undefined && cluster.summary !== '' && <div style={{ fontSize: 12, color: '#999' }}>{cluster.summary}</div>}
-            <div style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)' }}>{(cluster.idea_titles ?? []).map((title) => `• ${title}`).join('  ')}</div>
-          </div>
-        ))}
-        <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-          <button className="wb-btn primary" disabled={busy} onClick={() => void act(`/api/workbench/drafts/${draft.id}/confirm`)}>确认生成点子王</button>
-          <button className="wb-btn" disabled={busy} onClick={() => void act(`/api/workbench/drafts/${draft.id}/abandon`)}>放弃</button>
-          {sessionId !== '' && <button className="wb-btn" onClick={() => { closePanel(); runtime.sessions.open(sessionId) }}>回到关联会话</button>}
-        </div>
-      </div>
-    )
-  }
-  if (draft.kindCode === 'idea_tasks') {
-    const tasks = Array.isArray(draft.payload.tasks) ? draft.payload.tasks as Array<{ title?: string; description?: string }> : []
-    const summary = String(draft.payload.summary ?? '')
-    const sessionId = typeof draft.sessionId === 'string' && draft.sessionId !== '' ? draft.sessionId : ''
-    return (
-      <div className="wb-banner completion">
-        <h4>🚀 点子落地任务提案（{tasks.length}）</h4>
-        {summary !== '' && <div style={{ fontSize: 13, marginBottom: 6 }}>{summary}</div>}
-        <ol style={{ margin: '4px 0 8px 20px', padding: 0, fontSize: 14, lineHeight: 1.7 }}>
-          {tasks.map((task, i) => <li key={i} style={{ margin: '3px 0' }}><b>{task.title ?? '(未命名任务)'}</b>{task.description !== undefined && task.description !== '' ? <span style={{ color: '#999' }}> — {String(task.description).slice(0, 60)}</span> : null}</li>)}
-        </ol>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button className="wb-btn primary" disabled={busy} onClick={() => void act(`/api/workbench/drafts/${draft.id}/confirm`)}>确认转为任务</button>
-          <button className="wb-btn" disabled={busy} onClick={() => void act(`/api/workbench/drafts/${draft.id}/abandon`)}>放弃</button>
-          {sessionId !== '' && <button className="wb-btn" onClick={() => { closePanel(); runtime.sessions.open(sessionId) }}>回到头脑风暴会话</button>}
-        </div>
-      </div>
-    )
-  }
-  if (draft.kindCode === 'knowledge') {
-    const title = String(draft.payload.title ?? '')
-    const contentMd = String(draft.payload.contentMd ?? '')
-    const tags = Array.isArray(draft.payload.tags) ? draft.payload.tags as string[] : []
-    const sessionId = typeof draft.sessionId === 'string' && draft.sessionId !== '' ? draft.sessionId : ''
-    return (
-      <div className="wb-banner review">
-        <h4>💡 知识条目待确认（{kindName('knowledge_kind', String(draft.payload.kindCode ?? 'lesson'))}）</h4>
-        <div style={{ fontWeight: 600, marginBottom: 4 }}>{title}</div>
-        {tags.length > 0 && <div style={{ fontSize: 12, color: '#999', marginBottom: 6 }}>{tags.map((tag) => `#${tag}`).join(' ')}</div>}
-        {typeof draft.payload.fileLink === 'string' && draft.payload.fileLink !== '' && (
-          <div style={{ fontSize: 12, color: '#999', marginBottom: 6, wordBreak: 'break-all' }}>📎 {draft.payload.fileLink}</div>
-        )}
-        <div style={{ maxHeight: 240, overflow: 'auto' }}><MarkdownText text={contentMd} /></div>
-        <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-          <button className="wb-btn primary" disabled={busy} onClick={() => void act(`/api/workbench/drafts/${draft.id}/confirm`)}>确认入库</button>
-          <button className="wb-btn" disabled={busy} onClick={() => void act(`/api/workbench/drafts/${draft.id}/abandon`)}>放弃</button>
-          {sessionId !== '' && <button className="wb-btn" onClick={() => { closePanel(); runtime.sessions.open(sessionId) }}>回到会话</button>}
-        </div>
-      </div>
-    )
-  }
-  if (draft.kindCode === 'report') {
-    const summaryMd = String(draft.payload.summaryMd ?? '')
-    const title = String(draft.payload.title ?? '')
-    const sessionId = typeof draft.sessionId === 'string' && draft.sessionId !== '' ? draft.sessionId : typeof draft.payload.sessionId === 'string' ? draft.payload.sessionId : ''
-    return (
-      <div className="wb-banner review">
-        <h4><Icon name="report" />报告草稿待确认（{String(draft.payload.periodCode === 'week' ? '周报' : '日报')} {String(draft.payload.periodStart ?? '')}）</h4>
-        <div style={{ fontWeight: 600, marginBottom: 6 }}>{title}</div>
-        <div style={{ maxHeight: 260, overflow: 'auto' }}><MarkdownText text={summaryMd} /></div>
-        <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-          <button className="wb-btn primary" disabled={busy} onClick={() => void act(`/api/workbench/drafts/${draft.id}/confirm`)}>确认保存报告</button>
-          <button className="wb-btn" disabled={busy} onClick={() => void act(`/api/workbench/drafts/${draft.id}/abandon`)}>放弃</button>
-          {sessionId !== '' && <button className="wb-btn" onClick={() => { closePanel(); runtime.sessions.open(sessionId) }}>回到报告会话</button>}
-        </div>
-      </div>
-    )
-  }
-  if (draft.kindCode === 'daily_plan') {
-    const items = Array.isArray(draft.payload.items) ? draft.payload.items as Array<{ taskId?: string; order?: number; title?: string; note?: string }> : []
-    const summary = String(draft.payload.summary ?? '')
-    const sessionId = typeof draft.sessionId === 'string' && draft.sessionId !== '' ? draft.sessionId : typeof draft.payload.sessionId === 'string' ? draft.payload.sessionId : ''
-    return (
-      <div className="wb-banner draft">
-        <h4><Icon name="sparkles" />今日计划提案待确认（{String(draft.payload.planDate ?? '')}）</h4>
-        {summary !== '' && <div style={{ fontSize: 14, lineHeight: 1.7, marginBottom: 6 }}>{summary}</div>}
-        <ol style={{ margin: '4px 0 8px 20px', padding: 0, fontSize: 14, lineHeight: 1.7 }}>
-          {items.map((item, i) => <li key={i} style={{ margin: '3px 0' }}><b>{item.title ?? '(未命名任务)'}</b>{item.note !== undefined && item.note !== '' ? <span style={{ color: 'var(--dsw-alias-label-secondary)' }}> — {item.note}</span> : null}</li>)}
-        </ol>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button className="wb-btn primary" disabled={busy} onClick={() => void act(`/api/workbench/drafts/${draft.id}/confirm`)}>确认应用排序</button>
-          <button className="wb-btn" disabled={busy} onClick={() => void act(`/api/workbench/drafts/${draft.id}/abandon`)}>放弃</button>
-          {sessionId !== '' && <button className="wb-btn" onClick={() => { closePanel(); runtime.sessions.open(sessionId) }}>回到排序会话</button>}
-        </div>
-      </div>
-    )
-  }
-  if (draft.kindCode === 'review') {
-    const summary = String(draft.payload.summaryMd ?? '')
-    const sessionId = typeof draft.payload.sessionId === 'string' ? draft.payload.sessionId : ''
-    return (
-      <div className="wb-banner review">
-        <h4><Icon name="report" />复盘草稿待确认</h4>
-        <div style={{ maxHeight: 220, overflow: 'auto' }}><MarkdownText text={summary} /></div>
-        <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-          <button className="wb-btn primary" disabled={busy} onClick={() => void act(`/api/workbench/drafts/${draft.id}/confirm`)}>确认写回任务</button>
-          <button className="wb-btn" disabled={busy} onClick={() => void act(`/api/workbench/drafts/${draft.id}/abandon`)}>放弃</button>
-          {sessionId !== '' && <button className="wb-btn" onClick={() => { closePanel(); runtime.sessions.open(sessionId) }}>回到复盘会话</button>}
-        </div>
-      </div>
-    )
-  }
-  if (draft.kindCode === 'completion') {
-    const summary = String(draft.payload.summary ?? '')
-    const sessionId = typeof draft.payload.sessionId === 'string' ? draft.payload.sessionId : ''
-    return (
-      <div className="wb-banner completion">
-        <h4><Icon name="check" />执行完成，待你验收</h4>
-        <div style={{ fontSize: 13 }}><b>{String(draft.payload.taskId ?? '')}</b></div>
-        <div style={{ fontSize: 12, color: '#999', whiteSpace: 'pre-wrap' }}>{summary}</div>
-        <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-          <button className="wb-btn primary" disabled={busy} onClick={() => void act(`/api/workbench/drafts/${draft.id}/confirm`)}>验收通过（标记完成）</button>
-          <button className="wb-btn" disabled={busy} onClick={() => void act(`/api/workbench/drafts/${draft.id}/abandon`)}>驳回</button>
-          {sessionId !== '' && <button className="wb-btn" onClick={() => { closePanel(); runtime.sessions.open(sessionId) }}>回到执行会话</button>}
-        </div>
-        <div style={{ fontSize: 12, color: '#999', marginTop: 6 }}>驳回后请回到执行会话继续修改，AI 可再次提交验收申请。</div>
-      </div>
-    )
-  }
-  return (
-    <div className="wb-banner draft">
-      <h4>{draft.kindCode === 'subtask_plan' ? `待确认：子任务提案（${subtasks.length}）` : '待确认：任务草稿'}</h4>
-      {draft.kindCode === 'task'
-        ? <div style={{ fontSize: 13 }}><b>{String(draft.payload.title ?? '')}</b> · {String(draft.payload.typeCode ?? '')} · {String(draft.payload.priorityCode ?? '')}</div>
-        : <div style={{ fontSize: 12, color: '#999' }}>{subtasks.slice(0, 8).map((t, i) => <div key={i}>• {t.title ?? '(未命名)'}</div>)}</div>}
-      <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-        <button className="wb-btn primary" disabled={busy} onClick={() => void act(`/api/workbench/drafts/${draft.id}/confirm`)}>确认入册</button>
-        <button className="wb-btn" disabled={busy} onClick={() => void act(`/api/workbench/drafts/${draft.id}/abandon`)}>放弃</button>
-      </div>
-    </div>
-  )
-}
-
 function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; closePanel: () => void }): JSX.Element {
   const [view, setView] = useState<'today' | 'calendar' | 'list' | 'knowledge' | 'ideas'>('today')
   const [bootstrap, setBootstrap] = useState<Bootstrap | null>(null)
@@ -1371,17 +143,22 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   const [showQuick, setShowQuick] = useState(false)
   const [quickText, setQuickText] = useState('')
   const [quickAttachments, setQuickAttachments] = useState<QuickAttachmentDraft[]>([])
-  const [quickModelSelection, setQuickModelSelectionState] = useState<QuickModelSelection | null>(() => readQuickModelSelection())
   const quickAttachmentsRef = useRef<QuickAttachmentDraft[]>([])
   const [pendingDraft, setPendingDraft] = useState<DraftView | null>(null)
+  // 已暂存的待确认草稿（验收类）：不自动弹窗，只在「待处理」弹窗里等你唤回
+  const [deferredDrafts, setDeferredDrafts] = useState<DraftView[]>([])
   const [reminders, setReminders] = useState<Array<{ reminderId: string; taskId: string; title: string; dueAt: string; methodCode: string }>>([])
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+  const [reminderModalOpen, setReminderModalOpen] = useState(false)
   const [pendingOpen, setPendingOpen] = useState(false)
-  const [settings, setSettings] = useState<{ defaultWorkspace: string; autoCreateTypeFolders: boolean; desktopNotify: boolean }>({ defaultWorkspace: '', autoCreateTypeFolders: true, desktopNotify: true })
-  const [settingsLoaded, setSettingsLoaded] = useState(false)
+  const [settings, setSettings] = useState<WorkbenchSettings>({ defaultWorkspace: '', autoCreateTypeFolders: true, desktopNotify: true, dailyCapacityMinutes: 390 })
+  /** 今日容量里「可投入时长」的行内编辑态（null = 只读展示） */
+  const [capacityEdit, setCapacityEdit] = useState<string | null>(null)
   const [notifyPerm, setNotifyPerm] = useState<NotificationPermission | 'unsupported'>(() => typeof Notification === 'undefined' ? 'unsupported' : Notification.permission)
   const [showSettings, setShowSettings] = useState(false)
+  const [settingsSaving, setSettingsSaving] = useState(false)
+  const { toasts, pushToast, dismissToast } = useToasts()
   // 微信提醒：策略 + 通道状态（通道可用性由 dsh-im 决定，未安装时静默降级）
   const [reminderPolicy, setReminderPolicy] = useState<ReminderPolicyView | null>(null)
   const [reminderChannel, setReminderChannel] = useState<ReminderChannelView | null>(null)
@@ -1414,7 +191,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   const [taskKnowledge, setTaskKnowledge] = useState<KnowledgeEntry[]>([])
   const [ideas, setIdeas] = useState<Idea[]>([])
   const [ideaClusters, setIdeaClusters] = useState<IdeaClusterView[]>([])
-  const [ideaTab, setIdeaTab] = useState<'ideas' | 'clusters'>('ideas')
+  const [ideaTab, setIdeaTab] = useState<'ideas' | 'unfiled' | 'clusters'>('ideas')
   const [ideaQuery, setIdeaQuery] = useState('')
   const [ideaKind, setIdeaKind] = useState('')
   const [selectedIdeaIds, setSelectedIdeaIds] = useState<Set<string>>(new Set())
@@ -1422,12 +199,21 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   const [selectedCluster, setSelectedCluster] = useState<IdeaClusterView | null>(null)
   const [ideaForm, setIdeaForm] = useState<{ title: string; contentMd: string; kindCode: string; tags: string } | null>(null)
   const [ideaEditId, setIdeaEditId] = useState<string | null>(null)
+  // 文件夹（= 点子王）管理：新建/改名表单，以及「归入文件夹」菜单展开的卡片
+  const [folderForm, setFolderForm] = useState<{ mode: 'create' | 'rename'; id: string | null; title: string; summaryMd: string } | null>(null)
+  const [folderMenuIdeaId, setFolderMenuIdeaId] = useState<string | null>(null)
   const [ideaRefreshKey, setIdeaRefreshKey] = useState(0)
   const [reportRefreshKey, setReportRefreshKey] = useState(0)
   const [todayPlanSession, setTodayPlanSession] = useState<{ sessionId: string } | null>(null)
   const [busy, setBusy] = useState(false)
   const [promptModal, setPromptModal] = useState<{ title: string; value: string } | null>(null)
-  const promptResolveRef = useRef<((value: string | null) => void) | null>(null)
+  const promptResolveRef = useRef<((value: { text: string; skills: string[] } | null) => void) | null>(null)
+  // AI 会话前的 Skill 选择器：列表来自宿主 skills 注册表（未安装时 available=false，选择器隐藏）
+  const [skillCatalog, setSkillCatalog] = useState<SkillSummary[]>([])
+  const [skillsAvailable, setSkillsAvailable] = useState(false)
+  const [skillsLoading, setSkillsLoading] = useState(false)
+  const [skillQuery, setSkillQuery] = useState('')
+  const [selectedSkills, setSelectedSkills] = useState<string[]>([])
   const selectedRef = useRef<string | null>(null)
 
   const dicts = useMemo(() => bootstrap?.dictionaries ?? [], [bootstrap])
@@ -1487,6 +273,18 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
     }
   }, [])
 
+  /** 技能目录：打开提示词弹窗时按需拉取一次；失败时降级为空目录（选择器隐藏）。 */
+  const loadSkills = useCallback(async (): Promise<void> => {
+    setSkillsLoading(true)
+    try {
+      const res = await api<SkillsResponse>('/api/workbench/skills')
+      setSkillCatalog(res.skills)
+      setSkillsAvailable(res.available && res.skills.length > 0)
+    } catch {
+      setSkillCatalog([]); setSkillsAvailable(false)
+    } finally { setSkillsLoading(false) }
+  }, [])
+
   const loadKnowledge = useCallback(async () => {
     const params = new URLSearchParams()
     if (knowledgeQuery.trim() !== '') params.set('q', knowledgeQuery.trim())
@@ -1513,12 +311,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
     if (view === 'ideas') void loadIdeas().catch(() => undefined)
   }, [view, loadIdeas, ideaRefreshKey])
   useEffect(() => { void refresh().catch((e: unknown) => setError(e instanceof Error ? e.message : String(e))) }, [refresh])
-  useEffect(() => {
-    void api<{ settings: { defaultWorkspace: string; autoCreateTypeFolders: boolean; desktopNotify: boolean } }>('/api/workbench/settings')
-      .then((r) => setSettings(r.settings))
-      .catch(() => undefined)
-      .finally(() => setSettingsLoaded(true))
-  }, [])
+  useEffect(() => { void api<{ settings: WorkbenchSettings }>('/api/workbench/settings').then((r) => setSettings(r.settings)).catch(() => undefined) }, [])
 
   // 打开设置面板时加载微信提醒策略与通道状态（含自动发现的可选投递目标）
   useEffect(() => {
@@ -1533,29 +326,65 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
     }).catch(() => undefined)
   }, [showSettings])
 
-  const notifiedRef = useRef<Set<string>>(new Set())
+  /**
+   * 桌面通知去重集合：持久化到 localStorage。
+   * 原先是纯内存 Set，刷新页面就会对同一条提醒重发一次系统通知。现在跨会话记住，
+   * 并在条目数超过上限时淘汰最旧的一半（避免无限增长）。
+   */
+  const notifiedRef = useRef<Set<string>>((() => {
+    try {
+      const raw = window.localStorage.getItem('dsh-workbench:desktop-notified')
+      const parsed: unknown = raw === null ? [] : JSON.parse(raw)
+      return Array.isArray(parsed) ? new Set(parsed.filter((id): id is string => typeof id === 'string')) : new Set<string>()
+    } catch { return new Set<string>() }
+  })())
+  const persistNotified = (): void => {
+    try {
+      const ids = [...notifiedRef.current]
+      const trimmed = ids.length > 500 ? ids.slice(-250) : ids
+      notifiedRef.current = new Set(trimmed)
+      window.localStorage.setItem('dsh-workbench:desktop-notified', JSON.stringify(trimmed))
+    } catch { /* localStorage 不可用时退化为内存去重 */ }
+  }
+
+  // 提示 / 错误统一转成右上角 toast：不再作为文档流横幅把任务列表挤下去。
+  // 保留既有 setNotice/setError 调用点不变，在这里做一次桥接。
+  useEffect(() => {
+    if (notice !== null) { pushToast(notice, 'success'); setNotice(null) }
+  }, [notice, pushToast])
+  useEffect(() => {
+    if (error !== null) { pushToast(error, 'error'); setError(null) }
+  }, [error, pushToast])
+
+  // 有到期提醒时自动弹出提醒弹窗（关掉后本次不再自动弹；新提醒到达会再弹一次）。
+  useEffect(() => {
+    if (reminders.length > 0) setReminderModalOpen(true)
+  }, [reminders.length])
+
   useEffect(() => {
     let alive = true
     const tick = async () => {
       try {
-        const res = await api<{ draft: DraftView | null }>('/api/workbench/drafts')
-        if (alive) setPendingDraft(res.draft)
+        const res = await api<{ draft: DraftView | null; deferredDrafts?: DraftView[] }>('/api/workbench/drafts')
+        if (alive) { setPendingDraft(res.draft); setDeferredDrafts(res.deferredDrafts ?? []) }
         const r = await api<{ reminders: Array<{ reminderId: string; taskId: string; title: string; dueAt: string; methodCode: string }> }>('/api/workbench/reminders/due')
         if (!alive) return
         setReminders(r.reminders)
         // 系统级桌面提醒：启用且浏览器已授权时，对每个到期提醒发一次系统通知。
         if (settings.desktopNotify && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+          let notifiedAny = false
           for (const reminder of r.reminders) {
             if (notifiedRef.current.has(reminder.reminderId)) continue
             notifiedRef.current.add(reminder.reminderId)
+            notifiedAny = true
             try {
               new Notification(`任务提醒：${reminder.title}`, {
                 body: `截止时间：${fmtTime(reminder.dueAt)}`,
                 tag: `dsh-workbench:${reminder.reminderId}`,
               })
-              void fireReminder(reminder.reminderId).catch(() => undefined)
             } catch { /* 部分浏览器限制通知构造，忽略降级为页内横幅 */ }
           }
+          if (notifiedAny) persistNotified()
         }
       } catch { /* 轮询失败下轮重试 */ }
     }
@@ -1616,9 +445,26 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
     await patchTask(taskId, { dueAt: next.toISOString() })
     setNotice(`已推迟到 ${next.getMonth() + 1}/${next.getDate()}`)
   }
-  const fireReminder = async (reminderId: string): Promise<void> => {
-    await api(`/api/workbench/reminders/${reminderId}/fire`, { method: 'POST' })
+  /** 用户点「知道了」：写 acknowledged_at（终态），并把这条从待处理列表移除。 */
+  const ackReminder = async (reminderId: string): Promise<void> => {
+    try {
+      await api(`/api/workbench/reminders/${reminderId}/ack`, { method: 'POST' })
+    } catch {
+      // 老版本宿主没有 ack 端点时优雅退回 fire（写 fired_at）
+      await api(`/api/workbench/reminders/${reminderId}/fire`, { method: 'POST' }).catch(() => undefined)
+    }
     setReminders((list) => list.filter((r) => r.reminderId !== reminderId))
+    if (selectedRef.current !== null) await refresh()
+  }
+  /** 重新武装：清掉 fired/skipped/acknowledged，提醒回到「未处理」。 */
+  const resetReminderState = async (reminderId: string): Promise<void> => {
+    try {
+      await api(`/api/workbench/reminders/${reminderId}/reset`, { method: 'POST' })
+      setNotice('提醒已重新武装，到点会再次提醒')
+      await refresh()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
   }
   const addTaskReminder = async (offsetMinutes: number): Promise<void> => {
     const taskId = selectedRef.current
@@ -1649,37 +495,29 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
     }
   }
 
-  const askUserPrompt = (title: string): Promise<string | null> => new Promise((resolve) => {
+  const askUserPrompt = (title: string): Promise<{ text: string; skills: string[] } | null> => new Promise((resolve) => {
     promptResolveRef.current = resolve
     setPromptModal({ title, value: '' })
+    setSkillQuery('')
+    setSelectedSkills([])
+    void loadSkills()
   })
-  const setQuickModelSelection = (selection: QuickModelSelection | null): void => {
-    setQuickModelSelectionState(selection)
-    writeQuickModelSelection(selection)
-  }
-  const applyQuickModelSelection = async (sessionId: string): Promise<void> => {
-    if (quickModelSelection === null) return
-    const directory = runtime.modelDirectories?.directoryFor(sessionId)
-    if (directory === undefined) throw new Error('当前 DSH 未提供模型选择接口，无法为快速录入切换模型')
-    await directory.load()
-    await directory.select({
-      provider: quickModelSelection.provider,
-      model: quickModelSelection.model,
-      ...(quickModelSelection.reasoningEffort !== undefined ? { reasoningEffort: quickModelSelection.reasoningEffort } : {}),
-    })
-  }
   const confirmPrompt = (): void => {
     const resolve = promptResolveRef.current
     promptResolveRef.current = null
     const value = promptModal?.value ?? ''
+    const skills = [...selectedSkills]
     setPromptModal(null)
-    resolve?.(value)
+    resolve?.({ text: value, skills })
   }
   const cancelPrompt = (): void => {
     const resolve = promptResolveRef.current
     promptResolveRef.current = null
     setPromptModal(null)
     resolve?.(null)
+  }
+  const toggleSkill = (name: string): void => {
+    setSelectedSkills((prev) => prev.includes(name) ? prev.filter((item) => item !== name) : [...prev, name])
   }
   const AI_PROMPT_LABELS: Record<string, string> = {
     plan: 'AI 智能排序 / 今日计划',
@@ -1694,21 +532,12 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   }
   const startAISession = async (mode: 'clarify' | 'consult' | 'breakdown' | 'execute' | 'review' | 'plan' | 'report' | 'idea_association' | 'idea_brainstorm' | 'knowledge_doc', task: Task | null, text: string, previousSessions: Array<Record<string, unknown>> = [], docContext?: { fileLink: string; content: string; name?: string; truncated?: boolean }, attachments: readonly QuickAttachmentDraft[] = []): Promise<void> => {
     if (mode === 'clarify' && text.trim() === '' && attachments.length === 0) return
-    const quickInput = { taskText: text }
-    if (mode === 'clarify' && text.trim() === '' && attachments.length === 0) return
-    const customPrompt = mode === 'clarify' ? '' : await askUserPrompt(AI_PROMPT_LABELS[mode] ?? 'AI 会话')
-    if (customPrompt === null) return
+    // 澄清会话由自然语言快速录入直接触发，不弹提示词弹窗，也不参与技能选择（保持原流程）。
+    const promptInput = mode === 'clarify' ? { text: '', skills: [] as string[] } : await askUserPrompt(AI_PROMPT_LABELS[mode] ?? 'AI 会话')
+    if (promptInput === null) return
+    const customPrompt = promptInput.text
+    const skillNames = promptInput.skills
     const planAnchor = mode === 'plan' ? (/^\d{4}-\d{2}-\d{2}$/.test(text) ? text : localDateString()) : ''
-    let activeSettings = settings
-    try {
-      const res = await api<{ settings: { defaultWorkspace: string; autoCreateTypeFolders: boolean; desktopNotify: boolean } }>('/api/workbench/settings')
-      activeSettings = res.settings
-      setSettings(res.settings)
-      setSettingsLoaded(true)
-    } catch { /* 设置刷新失败时保留当前内存值 */ }
-    const reservedTaskId = mode === 'clarify' ? createClientId() : task?.id ?? ''
-    let taskFolderPath = ''
-    let taskFolderRelative = ''
     setBusy(true); setError(null)
     try {
       // 复用型会话：计划/报告/点子关联/点子头脑风暴，每个 scope+anchor 只有一个会话。
@@ -1752,31 +581,36 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
         ? isWslStylePath(hostHome)
         : ws.items.some((item) => typeof item.path === 'string' && isWslStylePath(item.path))
       const pathSep = isWsl ? '/' : '\\'
-      const rootDesired = activeSettings.defaultWorkspace.trim()
-      const normalizedRoot = rootDesired === '' ? '' : isWsl ? normalizeWindowsPathToWsl(rootDesired) : rootDesired
-      const hasCustomTaskFolder = task?.workspacePath !== null && task?.workspacePath !== undefined && task.workspacePath.trim() !== '' && !isAutoTaskWorkspacePath(task.workspacePath, task.id)
-      if (hasCustomTaskFolder && task !== null) {
-        taskFolderPath = task.workspacePath ?? ''
-      } else if (normalizedRoot !== '' && reservedTaskId !== '') {
-        taskFolderRelative = taskWorkspaceFolderName(reservedTaskId)
-        taskFolderPath = joinPath(normalizedRoot, taskFolderRelative, pathSep)
+      let desired = ''
+      if (task !== null) {
+        // 有效工作区 = 自身 workspacePath，未设置时继承最近祖先的设置（与 effectiveDueAt 同构）。
+        // 继承到值就直接用，不再按任务标题建子文件夹——否则子任务会各自散到新目录里。
+        desired = task.effectiveWorkspacePath ?? ''
+        if (desired === '' && settings.defaultWorkspace !== '' && settings.autoCreateTypeFolders) {
+          desired = joinPath(settings.defaultWorkspace, folderForText(task.title), pathSep)
+        }
+      } else if (mode === 'clarify' && settings.defaultWorkspace !== '' && settings.autoCreateTypeFolders) {
+        desired = joinPath(settings.defaultWorkspace, folderForText(text || '需求澄清'), pathSep)
+      }
+      // WSL 下把 Windows 盘符路径（D:\Code）统一归一化为真实路径（/mnt/d/Code）。
+      // 相对路径和已是 /mnt/... 的路径不会被转换；原生 Windows 上不做转换。
+      const normalizedDesired = desired === '' ? '' : isWsl ? normalizeWindowsPathToWsl(desired) : desired
+      if (normalizedDesired !== '') {
         try {
-          await api('/api/workbench/workspaces/ensure', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ path: taskFolderPath }) })
-          if (task !== null && (task.workspacePath === null || isAutoTaskWorkspacePath(task.workspacePath, task.id))) {
-            void api(`/api/workbench/tasks/${task.id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ workspacePath: taskFolderPath }) }).catch(() => undefined)
+          await api('/api/workbench/workspaces/ensure', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ path: normalizedDesired }) })
+          const created = await runtime.workspaces.create?.({ path: normalizedDesired })
+          if (typeof created?.workspaceId === 'string' && created.workspaceId !== '') workspaceId = created.workspaceId
+          // 任务自身和祖先都没有工作区时，把解析出的任务文件夹回写，保证后续会话都进同一文件夹
+          if (task !== null && task.workspacePath === null && task.effectiveWorkspacePath === null && normalizedDesired !== '') {
+            void api(`/api/workbench/tasks/${task.id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ workspacePath: normalizedDesired }) }).catch(() => undefined)
           }
-        } catch { /* 任务资料夹创建失败不阻断会话 */ }
+        } catch { /* 目录创建/注册失败则回退当前工作区 */ }
       }
       if (workspaceId === undefined) throw new Error('没有可用工作区，请先在 DSH 中打开一个工作区')
-      const id = await runtime.uiWorkspace.connectWorkspace(workspaceId)
+      const id = await connectWorkspace(workspaceId)
       const binding = runtime.sessions.binding(id)
       if (binding === undefined) throw new Error('会话绑定未就绪，请稍后重试')
-      if (mode === 'clarify') await applyQuickModelSelection(id)
-      const workspaceRootLabel = ws.items.find((item) => item.workspaceId === workspaceId)?.path ?? '当前连接工作区'
-      const taskFolderPrompt = taskFolderPath === ''
-        ? ''
-        : `\n\n工作区根目录：${workspaceRootLabel}\n任务资料夹：${taskFolderPath}${taskFolderRelative !== '' ? `\n任务资料夹相对路径：./${taskFolderRelative}/` : ''}\n如需创建或修改本任务相关文件，请放在${taskFolderRelative !== '' ? `工作区内的 ./${taskFolderRelative}/` : '上述任务资料夹'}，不要在工作区根目录散放文件。`
-      await binding.session.rename(mode === 'idea_association' ? '点子关联' : mode === 'idea_brainstorm' ? '点子头脑风暴' : mode === 'knowledge_doc' ? `知识总结：${docContext?.name ?? '本地文档'}` : mode === 'report' ? `${text.startsWith('week:') ? '周报' : '日报'}：${text.split(':')[1] ?? ''}` : mode === 'plan' ? `AI 计划：${planAnchor.slice(5)}` : mode === 'clarify' ? `澄清：${quickInput.taskText.trim() === '' ? '附件任务' : quickInput.taskText.slice(0, 24)}` : mode === 'consult' ? `协助：${task?.title.slice(0, 24)}` : mode === 'breakdown' ? `拆解：${task?.title.slice(0, 24)}` : mode === 'review' ? `复盘：${task?.title.slice(0, 24)}` : `执行：${task?.title.slice(0, 24)}`).catch(() => undefined)
+      await binding.session.rename(mode === 'idea_association' ? '点子关联' : mode === 'idea_brainstorm' ? '点子头脑风暴' : mode === 'knowledge_doc' ? `知识总结：${docContext?.name ?? '本地文档'}` : mode === 'report' ? `${text.startsWith('week:') ? '周报' : '日报'}：${text.split(':')[1] ?? ''}` : mode === 'plan' ? `AI 计划：${planAnchor.slice(5)}` : mode === 'clarify' ? `澄清：${text.slice(0, 24)}` : mode === 'consult' ? `协助：${task?.title.slice(0, 24)}` : mode === 'breakdown' ? `拆解：${task?.title.slice(0, 24)}` : mode === 'review' ? `复盘：${task?.title.slice(0, 24)}` : `执行：${task?.title.slice(0, 24)}`).catch(() => undefined)
       let reportContextText = ''
       if (mode === 'report') {
         const [periodCode, periodStart] = text.split(':')
@@ -1837,41 +671,33 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
         : mode === 'plan'
         ? planPrompt
         : mode === 'clarify'
-        ? buildQuickIntakePrompt({ taskText: quickInput.taskText, attachments, nowIso: new Date().toISOString(), workspaceRootLabel, reservedTaskId, taskFolderPath, taskFolderRelative })
+        ? `你是“个人工作台”的任务澄清助手。请按 workbench-intake 规范执行。\n\n用户想创建的任务是：\n「${text}」\n\n当前时间：${new Date().toISOString()}\n默认 AI 工作区：${settings.defaultWorkspace || '未设置'}\n\n请先澄清必要信息（一次一个主题，最多5轮）。如果用户对该任务的 AI 会话有指定工作区，请询问具体路径，并在调用 workbench_submit_task 时传入 workspace_path；否则留空使用默认工作区。信息足够后调用 workbench_submit_task 提交结构化任务草稿。不要执行任务本身。`
         : mode === 'consult'
-          ? `你是“个人工作台”的任务协助助手。请针对下面这个任务提供咨询、拆解或复盘建议（咨询模式不执行）。\n\n任务 id：${task?.id}\n任务标题：${task?.title}\n任务描述：${task?.description || '（无）'}\n类型：${task?.typeCode} 优先级：${task?.priorityCode} 状态：${task?.statusCode}\n截止：${task?.effectiveDueAt ?? task?.dueAt ?? '无'}${taskFolderPrompt}\n${memoryContext !== '' ? `\n任务共享记忆（同一任务/子树）：\n${memoryContext}` : ''}\n\n请先理解任务，再给出建议；如果信息不足，可以一次问一个问题。\n\n重要：如果用户要求把结论/补充信息保存回任务，请调用 workbench_update_task(task_id="${task?.id ?? ''}", description="...") 更新原任务；绝对不要调用 workbench_submit_task 新建任务。`
+          ? `你是“个人工作台”的任务协助助手。请针对下面这个任务提供咨询、拆解或复盘建议（咨询模式不执行）。\n\n任务 id：${task?.id}\n任务标题：${task?.title}\n任务描述：${task?.description || '（无）'}\n类型：${task?.typeCode} 优先级：${task?.priorityCode} 状态：${task?.statusCode}\n截止：${task?.effectiveDueAt ?? task?.dueAt ?? '无'}\n${memoryContext !== '' ? `\n任务共享记忆（同一任务/子树）：\n${memoryContext}` : ''}\n\n请先理解任务，再给出建议；如果信息不足，可以一次问一个问题。\n\n重要：如果用户要求把结论/补充信息保存回任务，请调用 workbench_update_task(task_id="${task?.id ?? ''}", description="...") 更新原任务；绝对不要调用 workbench_submit_task 新建任务。`
           : mode === 'breakdown'
-            ? `你是“个人工作台”的任务拆解助手。请分析下面这个任务，并调用 workbench_propose_subtasks 提交子任务提案。\n\n父任务 id：${task?.id}\n任务标题：${task?.title}\n任务描述：${task?.description || '（无）'}\n类型：${task?.typeCode} 优先级：${task?.priorityCode} 截止：${task?.effectiveDueAt ?? task?.dueAt ?? '无'}${taskFolderPrompt}\n${memoryContext !== '' ? `\n任务共享记忆（同一任务/子树）：\n${memoryContext}` : ''}\n\n粒度规则：每层 2-6 个、最大深度 3 层、叶子 15-240 分钟且有可验证完成标准；子任务的 type_code/priority_code 默认继承父任务；若任务太小，设置 no_breakdown_needed=true。只提交提案，不要执行。如果用户对提案提出修改意见，请带上上一次工具返回的 draft_id 再次调用 workbench_propose_subtasks 更新同一份提案。`
+            ? `你是“个人工作台”的任务拆解助手。请分析下面这个任务，并调用 workbench_propose_subtasks 提交子任务提案。\n\n父任务 id：${task?.id}\n任务标题：${task?.title}\n任务描述：${task?.description || '（无）'}\n类型：${task?.typeCode} 优先级：${task?.priorityCode} 截止：${task?.effectiveDueAt ?? task?.dueAt ?? '无'}\n${memoryContext !== '' ? `\n任务共享记忆（同一任务/子树）：\n${memoryContext}` : ''}\n\n粒度规则：每层 2-6 个、最大深度 3 层、叶子 15-240 分钟且有可验证完成标准；子任务的 type_code/priority_code 默认继承父任务；若任务太小，设置 no_breakdown_needed=true。只提交提案，不要执行。如果用户对提案提出修改意见，请带上上一次工具返回的 draft_id 再次调用 workbench_propose_subtasks 更新同一份提案。`
             : mode === 'review'
-              ? `你是“个人工作台”的任务复盘助手。请对下面这个已完成任务做复盘：\n\n任务 id：${task?.id}\n任务标题：${task?.title}\n任务描述：${task?.description || '（无）'}\n类型：${task?.typeCode} 优先级：${task?.priorityCode}${taskFolderPrompt}\n${memoryContext !== '' ? `\n任务共享记忆（同一任务/子树）：\n${memoryContext}` : ''}\n\n请从“做得好 / 做得不好 / 下次改进”三个角度输出 Markdown，并调用 workbench_submit_review(task_id="${task?.id ?? ''}", summary_md="...", lessons=[{"title":"...","content":"..."}])。`
-              : `你是“个人工作台”的任务执行助手。请直接完成下面这个任务，不要反复确认已知信息。\n\n任务 id：${task?.id}\n任务标题：${task?.title}\n任务描述：${task?.description || '（无）'}\n类型：${task?.typeCode} 优先级：${task?.priorityCode}\n截止：${task?.effectiveDueAt ?? task?.dueAt ?? '无'}${taskFolderPrompt}\n${memoryContext !== '' ? `\n任务共享记忆（同一任务/子树，父任务会话会看到整棵子树上下文）：\n${memoryContext}` : ''}\n${previousSessions.length > 0 ? `\n该任务此前已有执行会话：${previousSessions.map((s) => String(s.session_id ?? '')).filter((x) => x !== '').join('、')}\n若这些会话有未完成上下文，请先向用户索取上一会话的总结/未完成事项再继续，不要重复已完成工作。` : ''}\n\n执行过程中请遵守：\n- 如果有关键上下文、阶段性结论、决策或未完成事项，请调用 workbench_save_task_memory(task_id="${task?.id ?? ''}", content="...", kind="note|decision|summary") 写入任务共享记忆，便于后续会话续作。\n- 若当前任务是父任务，且你直接完成父任务，验收通过后系统会级联完成所有未完成子任务。\n- 完成后调用 workbench_request_completion(task_id="${task?.id ?? ''}", summary="2-4句完成总结")，等待用户在个人工作台验收；在用户验收通过前，任务不算完成，不要声称已经完成。若任务无法完成，如实说明原因，不要提交验收。`
+              ? `你是“个人工作台”的任务复盘助手。请对下面这个已完成任务做复盘：\n\n任务 id：${task?.id}\n任务标题：${task?.title}\n任务描述：${task?.description || '（无）'}\n类型：${task?.typeCode} 优先级：${task?.priorityCode}\n${memoryContext !== '' ? `\n任务共享记忆（同一任务/子树）：\n${memoryContext}` : ''}\n\n请从“做得好 / 做得不好 / 下次改进”三个角度输出 Markdown，并调用 workbench_submit_review(task_id="${task?.id ?? ''}", summary_md="...", lessons=[{"title":"...","content":"..."}])。`
+              : `你是“个人工作台”的任务执行助手。请直接完成下面这个任务，不要反复确认已知信息。\n\n任务 id：${task?.id}\n任务标题：${task?.title}\n任务描述：${task?.description || '（无）'}\n类型：${task?.typeCode} 优先级：${task?.priorityCode}\n截止：${task?.effectiveDueAt ?? task?.dueAt ?? '无'}\n${memoryContext !== '' ? `\n任务共享记忆（同一任务/子树，父任务会话会看到整棵子树上下文）：\n${memoryContext}` : ''}\n${previousSessions.length > 0 ? `\n该任务此前已有执行会话：${previousSessions.map((s) => String(s.session_id ?? '')).filter((x) => x !== '').join('、')}\n若这些会话有未完成上下文，请先向用户索取上一会话的总结/未完成事项再继续，不要重复已完成工作。` : ''}\n\n执行过程中请遵守：\n- 如果有关键上下文、阶段性结论、决策或未完成事项，请调用 workbench_save_task_memory(task_id="${task?.id ?? ''}", content="...", kind="note|decision|summary") 写入任务共享记忆，便于后续会话续作。\n- 若当前任务是父任务，且你直接完成父任务，验收通过后系统会级联完成所有未完成子任务。\n- 完成后调用 workbench_request_completion(task_id="${task?.id ?? ''}", summary="2-4句完成总结")，等待用户在个人工作台验收；在用户验收通过前，任务不算完成，不要声称已经完成。若任务无法完成，如实说明原因，不要提交验收。`
       if (mode === 'execute') {
         if (task === null) throw new Error('执行模式需要选择一个任务')
         if (task.statusCode === 'done' || task.statusCode === 'cancelled') throw new Error('该任务已完成或已取消，不能再次执行')
         if (task.aiPolicyCode !== 'execute') throw new Error('该任务未开启“可执行”，请先在任务详情中把 AI 策略改为“可执行”')
       }
-      if (mode === 'clarify') setShowQuick(false)
-      const documentContext = mode === 'clarify'
-        ? (await Promise.all(attachments.filter((item): item is QuickDocumentDraft => !isQuickImageDraft(item)).map(quickDocumentToContext))).join('\n\n')
-        : ''
-      const basePrompt = documentContext === '' ? prompt : `${prompt}\n\n快速录入文档内容：\n${documentContext}`
-      const finalPrompt = customPrompt.trim() === '' ? basePrompt : `${basePrompt}\n\n用户补充要求：\n${customPrompt.trim()}`
-      const imageParts = mode === 'clarify' && attachments.length > 0 ? await Promise.all(attachments.filter(isQuickImageDraft).map(quickImageToPromptPart)) : []
-      let result: { ok?: boolean; error?: unknown }
-      try {
-        result = await binding.session.prompt([...imageParts, { type: 'text', text: finalPrompt }], 'queue')
-      } catch (promptError) {
-        const message = promptError instanceof Error ? promptError.message : String(promptError)
-        if (message.includes('without inject')) {
-          throw new Error('会话发送接口未注入，请重载或重新安装 dsh-workbench 插件后再试')
-        }
-        throw promptError
+      let promptContent: PromptContentPart[] | null = null
+      if (mode === 'clarify' && attachments.length > 0) {
+        const imageParts = await Promise.all(attachments.filter(isQuickImageDraft).map(quickImageToPromptPart))
+        const documentContexts = await Promise.all(attachments.filter((item): item is QuickDocumentDraft => !isQuickImageDraft(item)).map(quickDocumentToContext))
+        const attachmentInstruction = quickAttachmentSummary(attachments)
+        const clarifyPrompt = `你是“个人工作台”的任务澄清助手。请按 workbench-intake 规范执行。\n\n用户想创建的任务是：\n「${quickTaskPlaceholder(text, attachments)}」${attachmentInstruction === '' ? '' : `\n\n${attachmentInstruction}`}${documentContexts.length === 0 ? '' : `\n\n文档附件内容：\n${documentContexts.join('\n\n')}`}\n\n当前时间：${new Date().toISOString()}\n默认 AI 工作区：${settings.defaultWorkspace || '未设置'}\n\n请先澄清必要信息（一次一个主题，最多5轮）。如果用户对该任务的 AI 会话有指定工作区，请询问具体路径，并在调用 workbench_submit_task 时传入 workspace_path；否则留空使用默认工作区。信息足够后调用 workbench_submit_task 提交结构化任务草稿。不要执行任务本身。`
+        promptContent = [{ type: 'text', text: withSkillPromptBlock(customPrompt.trim() === '' ? clarifyPrompt : `${clarifyPrompt}\n\n用户补充要求：\n${customPrompt.trim()}`, skillNames) }, ...imageParts]
       }
+      if (mode === 'clarify') { setShowQuick(false); clearQuickAttachments() }
+      const basePrompt = customPrompt.trim() === '' ? prompt : `${prompt}\n\n用户补充要求：\n${customPrompt.trim()}`
+      // 选中的技能以"加载指令"形式前置（不内联技能正文）；未选技能时逐字等于原提示词。
+      const finalPrompt = withSkillPromptBlock(basePrompt, skillNames)
+      const result = await binding.session.prompt(promptContent ?? [{ type: 'text', text: finalPrompt }], 'queue')
       if (result.ok === false) throw new Error(result.error !== undefined ? String(result.error) : '发送失败')
-      if (mode === 'clarify') {
-        setQuickText('')
-        clearQuickAttachments()
-      }
       if (mode === 'plan') {
         await api('/api/workbench/ai-sessions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ scopeCode: 'daily_plan', anchor: planAnchor, sessionId: id, workspace: workspaceId }) })
       }
@@ -2010,6 +836,109 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
     }
   }
 
+  // ---- 设置弹窗：保存与微信提醒操作（把结果收敛到 toast，不再挤压任务列表）----
+
+  const saveSettings = async (): Promise<void> => {
+    setSettingsSaving(true)
+    try {
+      await api('/api/workbench/settings', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(settings) })
+      setShowSettings(false)
+      pushToast('设置已保存', 'success')
+    } catch (e) {
+      pushToast(`保存失败：${e instanceof Error ? e.message : String(e)}`, 'error')
+    } finally {
+      setSettingsSaving(false)
+    }
+  }
+
+  const loadReminderChannel = async (): Promise<void> => {
+    setReminderBusy(true)
+    try {
+      const result = await api<{ status: ReminderChannelView; options: ReminderOptionsView }>('/api/workbench/reminders/channel')
+      setReminderChannel(result.status)
+      setReminderOptions(result.options)
+      pushToast('已刷新通道状态', 'info')
+    } catch (e) {
+      pushToast(`刷新失败：${e instanceof Error ? e.message : String(e)}`, 'error')
+    } finally {
+      setReminderBusy(false)
+    }
+  }
+
+  const saveReminderTarget = async (): Promise<void> => {
+    if (reminderChannel === null) return
+    setReminderBusy(true)
+    try {
+      const result = await api<{ status: ReminderChannelView }>('/api/workbench/reminders/channel', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ botId: reminderChannel.botId, targetId: reminderChannel.targetId }),
+      })
+      setReminderChannel(result.status)
+      pushToast('投递目标已保存', 'success')
+    } catch (e) {
+      pushToast(`保存失败：${e instanceof Error ? e.message : String(e)}`, 'error')
+    } finally {
+      setReminderBusy(false)
+    }
+  }
+
+  const saveReminderPolicy = async (): Promise<void> => {
+    if (reminderPolicy === null) return
+    setReminderBusy(true)
+    try {
+      const result = await api<{ policy: ReminderPolicyView }>('/api/workbench/reminders/policy', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(reminderPolicy),
+      })
+      setReminderPolicy(result.policy)
+      pushToast('微信提醒策略已保存', 'success')
+    } catch (e) {
+      pushToast(`保存失败：${e instanceof Error ? e.message : String(e)}`, 'error')
+    } finally {
+      setReminderBusy(false)
+    }
+  }
+
+  const sendReminderTest = async (): Promise<void> => {
+    setReminderBusy(true)
+    try {
+      const result = await api<{ ok: boolean; reason?: string }>('/api/workbench/reminders/test', { method: 'POST' })
+      if (result.ok) pushToast('测试消息已发送，请查看手机微信', 'success')
+      else pushToast(`发送失败：${result.reason ?? 'unknown'}`, 'error')
+    } catch (e) {
+      pushToast(`发送失败：${e instanceof Error ? e.message : String(e)}`, 'error')
+    } finally {
+      setReminderBusy(false)
+    }
+  }
+
+  /** 保存任务编辑（详情页编辑弹窗）。 */
+  const saveEditDraft = async (): Promise<void> => {
+    if (editDraft === null || selected === null) return
+    if (editDraft.title.trim() === '') return
+    const payload: Record<string, unknown> = {
+      title: editDraft.title.trim(),
+      description: editDraft.description,
+      typeCode: editDraft.typeCode,
+      priorityCode: editDraft.priorityCode,
+      statusCode: editDraft.statusCode,
+      aiPolicyCode: editDraft.aiPolicyCode,
+      dueAt: editDraft.dueLocal === '' ? null : new Date(editDraft.dueLocal).toISOString(),
+      workspacePath: editDraft.workspacePath.trim() === '' ? null : editDraft.workspacePath.trim(),
+    }
+    // 自动生成的实例不允许改重复规则，编辑保存时也不提交该字段，从源头避免 400。
+    if (selected.task.recurrenceMasterId === null) payload.recurrenceCode = editDraft.recurrenceCode
+    try {
+      await patchTask(selected.task.id, payload)
+      setEditDraft(null)
+      pushToast('任务已更新', 'success')
+    } catch (e) {
+      pushToast(`保存失败：${e instanceof Error ? e.message : String(e)}`, 'error')
+    }
+  }
+
   const createTask = async (event: React.FormEvent<HTMLFormElement>): Promise<void> => {
     event.preventDefault()
     const form = new FormData(event.currentTarget)
@@ -2034,10 +963,10 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   const [taskSortDir, setTaskSortDir] = useState<TaskSortDir>('asc')
   const [openFilter, setOpenFilter] = useState<'status' | 'priority' | 'type' | null>(null)
   const [expanded, setExpanded] = useState<Set<string>>(() => {
-    try { return new Set(JSON.parse(localStorage.getItem('dsh.dsh-workbench.treeExpanded') ?? localStorage.getItem('dsh.dsh-workbench.treeExpanded') ?? '[]') as string[]) } catch { return new Set() }
+    try { return new Set(JSON.parse(localStorage.getItem('dsh.workbench.treeExpanded') ?? '[]') as string[]) } catch { return new Set() }
   })
   useEffect(() => {
-    try { localStorage.setItem('dsh.dsh-workbench.treeExpanded', JSON.stringify([...expanded])) } catch { /* ignore */ }
+    try { localStorage.setItem('dsh.workbench.treeExpanded', JSON.stringify([...expanded])) } catch { /* ignore */ }
   }, [expanded])
   const toggleExpanded = (id: string): void => setExpanded((prev) => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next })
   const toggleTodayExpanded = (id: string): void => setTodayExpanded((prev) => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next })
@@ -2045,6 +974,15 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   const collapseAll = (): void => { setExpanded(new Set()); setTodayExpanded(new Set()); setCalendarExpanded(new Set()) }
 
   const priorityWeights = useMemo(() => new Map(dictOf('priority').map((d) => [d.code, Number(d.config.weight ?? 99)])), [dicts])
+  // 技能选择器：按名称/描述/适用场景过滤（大小写不敏感）
+  const visibleSkills = useMemo(() => {
+    const query = skillQuery.trim().toLowerCase()
+    if (query === '') return skillCatalog
+    return skillCatalog.filter((skill) =>
+      skill.name.toLowerCase().includes(query) ||
+      skill.description.toLowerCase().includes(query) ||
+      (skill.whenToUse ?? '').toLowerCase().includes(query))
+  }, [skillCatalog, skillQuery])
   const taskSorter = useMemo(() => createTaskSorter(taskSortKey, taskSortDir, priorityWeights), [taskSortKey, taskSortDir, priorityWeights])
   const visibleTaskTree = useMemo(() => {
     const source = archivedMode ? archivedTasks : tasks
@@ -2066,6 +1004,147 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
     await api(`/api/workbench/plans/${localDateString()}`, { method: 'DELETE' })
     await refresh()
   }
+
+  /**
+   * 点子页的文件夹派生数据：
+   * - unfiledIdeas：没有被任何文件夹引用的点子（「未归类」区）
+   * - ideasOfFolder：按文件夹聚合的成员（同一数据在卡片里只显示前 2 条缩略）
+   * 数据层无需变更：idea_clusters = 文件夹，idea_links 已支持多对多。
+   */
+  const unfiledIdeas = useMemo(() => {
+    const filed = new Set(ideaClusters.flatMap((cluster) => cluster.ideas.map((idea) => idea.id)))
+    return ideas.filter((idea) => !filed.has(idea.id))
+  }, [ideas, ideaClusters])
+
+  const refreshIdeas = async (): Promise<void> => {
+    setIdeaRefreshKey((value) => value + 1)
+    setFolderMenuIdeaId(null)
+  }
+
+  /** 新建空文件夹 / 文件夹改名。 */
+  const saveFolder = async (): Promise<void> => {
+    if (folderForm === null) return
+    const title = folderForm.title.trim()
+    if (title === '') { setError('文件夹名称不能为空'); return }
+    try {
+      if (folderForm.mode === 'create') {
+        const res = await api<{ cluster: IdeaClusterView }>('/api/workbench/idea-clusters', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ title, summaryMd: folderForm.summaryMd }),
+        })
+        setNotice('文件夹已创建')
+        setSelectedCluster(res.cluster)
+      } else if (folderForm.id !== null) {
+        const res = await api<{ cluster: IdeaClusterView }>(`/api/workbench/idea-clusters/${folderForm.id}`, {
+          method: 'PATCH',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ title, summaryMd: folderForm.summaryMd }),
+        })
+        setNotice('文件夹已更新')
+        setSelectedCluster(res.cluster)
+      }
+      setFolderForm(null)
+      await refreshIdeas()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  /** 删除文件夹（点子本身保留，回到「未归类」）。 */
+  const deleteFolder = async (id: string): Promise<void> => {
+    try {
+      await api(`/api/workbench/idea-clusters/${id}`, { method: 'DELETE' })
+      if (selectedCluster?.id === id) setSelectedCluster(null)
+      setNotice('文件夹已删除，点子回到「未归类」')
+      await refreshIdeas()
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)) }
+  }
+
+  /** 把点子归入文件夹（可多对多；已在其中则忽略）。 */
+  const fileIdeaInto = async (ideaId: string, clusterId: string): Promise<void> => {
+    try {
+      await api(`/api/workbench/idea-clusters/${clusterId}/ideas`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ ideaId }),
+      })
+      setNotice('已归入文件夹')
+      await refreshIdeas()
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)) }
+  }
+
+  /** 把点子移出文件夹。 */
+  const unfileIdeaFrom = async (ideaId: string, clusterId: string): Promise<void> => {
+    try {
+      await api(`/api/workbench/idea-clusters/${clusterId}/ideas/${ideaId}`, { method: 'DELETE' })
+      await refreshIdeas()
+      const res = await api<{ cluster: IdeaClusterView }>(`/api/workbench/idea-clusters/${clusterId}`)
+      setSelectedCluster(res.cluster)
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)) }
+  }
+
+  /** 合并文件夹：把当前文件夹并入目标文件夹（成员挂过去，源文件夹删除）。 */
+  const mergeFolderInto = async (sourceId: string, targetId: string): Promise<void> => {
+    if (sourceId === targetId) return
+    try {
+      const res = await api<{ cluster: IdeaClusterView }>(`/api/workbench/idea-clusters/${sourceId}/merge`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ into: targetId }),
+      })
+      setNotice('文件夹已合并')
+      setSelectedCluster(res.cluster)
+      await refreshIdeas()
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)) }
+  }
+
+  /** 今日容量：当天要做的事（今天到期 + 无截止的进行中）按 estimatedMinutes 摊开。
+   * 没有估算的任务按每件 30 分钟兜底，避免"没填估算就当零成本"导致容量条失真。
+   */
+  const capacityTodayTasks = openTasks.filter((t) =>
+    t.effectiveDueAt === null
+      ? (t.statusCode === 'doing' || t.statusCode === 'blocked')
+      : isTaskDueOnDay(t, now))
+  const capacityTaskIds = new Set(capacityTodayTasks.map((t) => t.id))
+  const capacityFromPlan = (todayPlan?.items ?? []).filter((item) => capacityTaskIds.has(item.taskId)).length
+  const capacityPlanned = capacityTodayTasks.reduce((sum, t) => sum + (t.estimatedMinutes ?? 30), 0)
+  const capacityByPriority = {
+    p0: capacityTodayTasks.filter((t) => t.priorityCode === 'p0').reduce((sum, t) => sum + (t.estimatedMinutes ?? 30), 0),
+    p1: capacityTodayTasks.filter((t) => t.priorityCode === 'p1').reduce((sum, t) => sum + (t.estimatedMinutes ?? 30), 0),
+    p2: capacityTodayTasks.filter((t) => t.priorityCode === 'p2').reduce((sum, t) => sum + (t.estimatedMinutes ?? 30), 0),
+    p3: capacityTodayTasks.filter((t) => t.priorityCode !== 'p0' && t.priorityCode !== 'p1' && t.priorityCode !== 'p2').reduce((sum, t) => sum + (t.estimatedMinutes ?? 30), 0),
+  }
+  const capacityTotal = Math.max(settings.dailyCapacityMinutes, capacityPlanned, 1)
+  const capacity = {
+    planned: capacityPlanned,
+    free: Math.max(0, settings.dailyCapacityMinutes - capacityPlanned),
+    over: capacityPlanned > settings.dailyCapacityMinutes,
+    byPriority: capacityByPriority,
+    total: capacityTotal,
+    count: capacityTodayTasks.length,
+    planCovered: capacityFromPlan,
+  }
+
+  /** 保存「每天可投入时长」（分钟）；<30 视为无效，恢复默认 390。 */
+  const saveDailyCapacity = async (): Promise<void> => {    const raw = capacityEdit === null ? '' : capacityEdit.trim()
+    setCapacityEdit(null)
+    const parsed = Number(raw)
+    const next = Number.isFinite(parsed) && parsed >= 30 ? Math.min(1440, Math.round(parsed)) : 390
+    if (next === settings.dailyCapacityMinutes) return
+    try {
+      await api<{ settings: { dailyCapacityMinutes: number } }>('/api/workbench/settings', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ dailyCapacityMinutes: next }),
+      })
+      setSettings((prev) => ({ ...prev, dailyCapacityMinutes: next }))
+      setNotice(`每天可投入时长已设为 ${next} 分钟`)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
   const savePlan = async (date: string, items: Array<{ taskId: string; note: string }>): Promise<void> => {
     try {
       await api(`/api/workbench/plans/${date}`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ items: items.map((item, index) => ({ taskId: item.taskId, order: index + 1, note: item.note })) }) })
@@ -2148,8 +1227,18 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   })()
 
   const sessionListSnapshot = runtime.sessions.list.getSnapshot()
-  /** 待你处理的事项数：待确认草稿 1 条 + 到期提醒 N 条。 */
-  const pendingCount = (pendingDraft === null ? 0 : 1) + reminders.length
+  /** 待你处理的事项数：待确认草稿 + 已暂存草稿 + 到期提醒。 */
+  const pendingCount = (pendingDraft === null ? 0 : 1) + deferredDrafts.length + reminders.length
+  /** 唤回一份暂存草稿：清掉暂存标记，它会立刻重新弹出待确认弹窗。 */
+  const resumeDeferredDraft = async (draftId: string): Promise<void> => {
+    try {
+      await api(`/api/workbench/drafts/${draftId}/resume`, { method: 'POST' })
+      setPendingOpen(false)
+      const res = await api<{ draft: DraftView | null; deferredDrafts?: DraftView[] }>('/api/workbench/drafts')
+      setPendingDraft(res.draft); setDeferredDrafts(res.deferredDrafts ?? [])
+      setNotice('已唤回，待你验收')
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)) }
+  }
   const linkedSessionIds = new Set((selected?.sessions ?? []).map((s) => typeof s.session_id === 'string' ? s.session_id : '').filter((id) => id !== ''))
   const sessionQuery = sessionPickerQuery.trim().toLowerCase()
   const sessionCandidates = sessionListSnapshot.ids
@@ -2169,26 +1258,99 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
           <button className={`wb-seg ${view === 'ideas' ? 'on' : ''}`} onClick={() => setView('ideas')}><Icon name="idea" />点子</button>
         </div>
         <div style={{ flex: 1 }} />
-        <button className={`wb-btn ${showQuick ? 'primary' : ''}`} onClick={() => setShowQuick((v) => !v)} disabled={busy}><Icon name="sparkles" /><span className="wb-label">快速录入</span></button>
         {pendingCount > 0 && (
           <button className="wb-pending-pill" onClick={() => setPendingOpen(true)} title="待你处理的草稿与提醒">
             <Icon name="bell" size={13} />待处理 <span className="count">{pendingCount}</span>
           </button>
         )}
+        <button className="wb-btn primary" onClick={() => setShowQuick((v) => !v)} disabled={busy}><Icon name="sparkles" /><span className="wb-label">快速录入</span></button>
         <button className="wb-btn" onClick={() => setShowForm((v) => !v)}><Icon name="plus" /><span className="wb-label">新建</span></button>
         <button className="wb-btn" onClick={() => setShowSettings((v) => !v)}><Icon name="settings" /><span className="wb-label">设置</span></button>
         <button className="wb-btn" onClick={collapseAll}><Icon name="list" /><span className="wb-label">收起全部</span></button>
         <button className="wb-btn" onClick={() => closePanel()}><Icon name="back" /><span className="wb-label">返回对话</span></button>
       </div>
 
-      {error !== null && <div className="wb-banner error"><h4><Icon name="bell" />出错了</h4>{error} <button className="wb-btn" onClick={() => setError(null)}>关闭</button></div>}
-      {notice !== null && <div className="wb-banner notice"><h4><Icon name="bell" />提示</h4>{notice} <button className="wb-btn" onClick={() => setNotice(null)}>关闭</button></div>}
+      {folderForm !== null && (
+        <div className="wb-modal-mask" onClick={() => setFolderForm(null)}>
+          <div className="wb-modal" style={{ width: 'min(460px, 94vw)' }} onClick={(e) => e.stopPropagation()}>
+            <h4><Icon name="folder" />{folderForm.mode === 'create' ? '新建文件夹' : '重命名文件夹'}</h4>
+            <p>点子可以同时属于多个文件夹；删除文件夹不会删除点子，它们会回到「未归类」。</p>
+            <label style={{ display: 'block', marginBottom: 10 }}>
+              <span style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)' }}>文件夹名称</span>
+              <input
+                autoFocus
+                value={folderForm.title}
+                onChange={(e) => setFolderForm((prev) => prev === null ? prev : { ...prev, title: e.target.value })}
+                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void saveFolder() } }}
+                placeholder="例如：工作台 · 微信提醒方向"
+                style={{ width: '100%', marginTop: 4, boxSizing: 'border-box', background: 'var(--dsw-alias-bg-base,#17171a)', border: '1px solid var(--wb-line, rgba(127,127,127,.26))', color: 'inherit', borderRadius: 8, padding: '8px 10px', font: 'inherit' }}
+              />
+            </label>
+            <label style={{ display: 'block' }}>
+              <span style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)' }}>一句话说明（可选）</span>
+              <textarea
+                value={folderForm.summaryMd}
+                onChange={(e) => setFolderForm((prev) => prev === null ? prev : { ...prev, summaryMd: e.target.value })}
+                placeholder="这个文件夹收的是哪一类点子"
+                style={{ minHeight: 72 }}
+              />
+            </label>
+            <div className="wb-modal-actions">
+              <button className="wb-btn" onClick={() => setFolderForm(null)}>取消</button>
+              <button className="wb-btn primary" onClick={() => void saveFolder()}>{folderForm.mode === 'create' ? '创建' : '保存'}</button>
+            </div>
+          </div>
+        </div>
+      )}
       {promptModal !== null && (
         <div className="wb-modal-mask" onClick={cancelPrompt}>
-          <div className="wb-modal" onClick={(e) => e.stopPropagation()}>
+          <div className="wb-modal" style={skillsAvailable ? { width: 'min(620px, 94vw)' } : undefined} onClick={(e) => e.stopPropagation()}>
             <h4>补充 AI 提示词</h4>
             <p>{promptModal.title}：可留空，留空则继续使用原有默认提示词；填写后会在默认提示词末尾追加你的补充要求。</p>
             <textarea autoFocus value={promptModal.value} onChange={(e) => setPromptModal((prev) => prev === null ? prev : { ...prev, value: e.target.value })} placeholder="输入你想追加给 AI 的补充要求…" />
+            {skillsAvailable && (
+              <div className="wb-skill-picker">
+                <div className="wb-skill-picker-head">
+                  <span><Icon name="skill" size={13} /> 加载 Skill</span>
+                  <span className="wb-skill-count">{selectedSkills.length > 0 ? `已选 ${selectedSkills.length}` : '可选'}</span>
+                </div>
+                <input
+                  className="wb-skill-search"
+                  value={skillQuery}
+                  onChange={(e) => setSkillQuery(e.target.value)}
+                  placeholder={`搜索技能名或描述（共 ${skillCatalog.length} 个）`}
+                />
+                {selectedSkills.length > 0 && (
+                  <div className="wb-skill-selected">
+                    {selectedSkills.map((name) => (
+                      <button key={name} type="button" className="wb-skill-tag" onClick={() => toggleSkill(name)} title="点击移除">
+                        {name}<span aria-hidden="true">×</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <div className="wb-skill-list">
+                  {skillsLoading && <div className="wb-skill-hint">加载技能目录…</div>}
+                  {!skillsLoading && visibleSkills.length === 0 && (
+                    <div className="wb-skill-hint">{skillCatalog.length === 0 ? '本机暂无可选技能' : '没有匹配的技能'}</div>
+                  )}
+                  {!skillsLoading && visibleSkills.map((skill) => {
+                    const checked = selectedSkills.includes(skill.name)
+                    return (
+                      <label key={skill.name} className={`wb-skill-item${checked ? ' on' : ''}`} title={skill.whenToUse ?? skill.description}>
+                        <input type="checkbox" checked={checked} onChange={() => toggleSkill(skill.name)} />
+                        <span className="wb-skill-body">
+                          <span className="wb-skill-name">{skill.name}</span>
+                          <span className="wb-skill-desc">{skill.description || '（无描述）'}</span>
+                        </span>
+                        <span className="wb-skill-provider">{skill.provider}</span>
+                      </label>
+                    )
+                  })}
+                </div>
+                <div className="wb-skill-foot">选中后会在提示词开头注入“请加载这些技能”的指令，技能正文由 AI 按需加载。</div>
+              </div>
+            )}
             <div className="wb-modal-actions">
               <button className="wb-btn" onClick={cancelPrompt}>取消</button>
               <button className="wb-btn primary" onClick={confirmPrompt}>开始</button>
@@ -2235,270 +1397,73 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
           </div>
         </div>
       )}
+      {reminders.length > 0 && reminderModalOpen && (
+        <Modal
+          title={<><Icon name="bell" />到期提醒（{reminders.length}）</>}
+          size="sm"
+          onClose={() => setReminderModalOpen(false)}
+          footer={(
+            <>
+              <span className="wb-foot-note">点「知道了」后不再提示；host 侧已推送的不会重复出现</span>
+              <button className="wb-btn" onClick={() => setReminderModalOpen(false)}>稍后处理</button>
+            </>
+          )}
+        >
+          <div className="wb-scroll-area">
+            {reminders.map((r) => (
+              <div key={r.reminderId} className="wb-row" style={{ cursor: 'default' }}>
+                <span style={{ flex: 1 }}>{r.title} · {fmtTime(r.dueAt)}</span>
+                <button className="wb-btn" onClick={() => void ackReminder(r.reminderId)}>知道了</button>
+              </div>
+            ))}
+          </div>
+        </Modal>
+      )}
       {pendingDraft !== null && <DraftBanner draft={pendingDraft} runtime={runtime} closePanel={closePanel} kindName={(kind, code) => dicts.find((d) => d.kind === kind && d.code === code)?.name ?? code} onDone={() => { setPendingDraft(null); setPlanRefreshKey((v) => v + 1); setReportRefreshKey((v) => v + 1); setKnowledgeRefreshKey((v) => v + 1); setIdeaRefreshKey((v) => v + 1); void refresh() }} />}
 
       <div className="wb-body">
         <div className="wb-nav">
-          {showSettings && (
-            <div className="wb-form-panel">
-              <h4><Icon name="settings" />工作台设置</h4>
-              <label className="full">AI 工作区根目录
-                <input value={settings.defaultWorkspace} onChange={(e) => setSettings((prev) => ({ ...prev, defaultWorkspace: e.target.value }))} placeholder={DEFAULT_AI_WORKSPACE_HINT} />
-              </label>
-              <label className="full" style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                <input type="checkbox" checked={settings.autoCreateTypeFolders} onChange={(e) => setSettings((prev) => ({ ...prev, autoCreateTypeFolders: e.target.checked }))} />
-                自动为每个任务创建资料夹（位于根目录下，用任务 ID 命名）
-              </label>
-              <label className="full" style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                <input type="checkbox" checked={settings.desktopNotify} onChange={(e) => setSettings((prev) => ({ ...prev, desktopNotify: e.target.checked }))} />
-                启用桌面通知（任务到期时弹系统通知）
-              </label>
-              <div className="full" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                {notifyPerm === 'unsupported'
-                  ? <span style={{ fontSize: 12, color: '#999' }}>当前浏览器不支持系统通知，将使用页内横幅提醒</span>
-                  : notifyPerm === 'granted'
-                    ? <span style={{ fontSize: 12, color: '#2E9B7B' }}>浏览器通知已授权</span>
-                    : <button className="wb-btn" onClick={() => {
-                        void Notification.requestPermission().then((perm) => {
-                          setNotifyPerm(perm)
-                          if (perm === 'granted') setNotice('桌面通知已开启')
-                        })
-                      }}>授权浏览器通知</button>}
-                {notifyPerm === 'granted' && <button className="wb-btn" onClick={() => {
-                  try { new Notification('dsh-workbench 通知测试', { body: '如果你看到这条系统通知，说明桌面提醒已正常工作。' }) } catch { /* ignore */ }
-                }}>发送测试通知</button>}
-                <span style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)' }}>DSH 页面保持打开（可最小化）即可收到</span>
-              </div>
-              <div className="full" style={{ marginTop: 14, borderTop: '1px solid var(--wb-border-soft)', paddingTop: 12 }}>
-                <div style={{ fontWeight: 700, marginBottom: 8 }}><Icon name="bell" /> 微信提醒</div>
-                {reminderChannel === null || reminderPolicy === null ? (
-                  <div style={{ fontSize: 12, color: '#999' }}>正在读取通道状态…</div>
-                ) : (
-                  <>
-                    <label className="full" style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                      <input type="checkbox" checked={reminderPolicy.enabled} onChange={(e) => setReminderPolicy((prev) => prev === null ? prev : { ...prev, enabled: e.target.checked })} />
-                      启用微信提醒（关闭时行为与原来完全一致）
-                    </label>
-
-                    {!reminderChannel.installed && (
-                      <div className="full" style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)', background: 'var(--wb-bg-soft, #f6f6f6)', padding: '6px 8px', borderRadius: 6, marginTop: 6 }}>
-                        未检测到 dsh-im，微信推送不可用，提醒将回落到页面横幅与桌面通知。安装命令：<code>pnpm add -g @xmanrui/dsh-im</code>（或 dsh plugin add @xmanrui/dsh-im）
-                      </div>
-                    )}
-                    {reminderChannel.installed && !reminderChannel.configured && (
-                      <div className="full" style={{ fontSize: 12, color: '#B26A00', background: 'var(--wb-bg-soft, #fff8e6)', padding: '6px 8px', borderRadius: 6, marginTop: 6 }}>
-                        已检测到 dsh-im，但还没有可用的投递目标。请先在微信里给机器人发一条消息，再回到这里点「刷新目标」。
-                      </div>
-                    )}
-                    {reminderChannel.circuitOpen && (
-                      <div className="full" style={{ fontSize: 12, color: '#B23A3A', background: 'var(--wb-bg-soft, #fdecec)', padding: '6px 8px', borderRadius: 6, marginTop: 6 }}>
-                        微信通道当前被 iLink 限流（{reminderChannel.circuitUntil === null ? '' : fmtTime(reminderChannel.circuitUntil)} 前不发送）。
-                        让手机微信给机器人发一条消息即可立即恢复。
-                      </div>
-                    )}
-
-                    {reminderChannel.installed && (
-                      <div className="full" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 8 }}>
-                        <select
-                          value={reminderChannel.botId ?? ''}
-                          onChange={(e) => {
-                            const botId = e.target.value
-                            const bot = reminderOptions?.bots.find((candidate) => candidate.botId === botId)
-                            setReminderChannel((prev) => prev === null ? prev : { ...prev, botId, targetId: bot?.targets[0]?.targetId ?? null })
-                          }}
-                          style={{ minWidth: 140 }}
-                        >
-                          <option value="">选择机器人…</option>
-                          {(reminderOptions?.bots ?? []).map((bot) => <option key={bot.botId} value={bot.botId}>{bot.label}</option>)}
-                        </select>
-                        <select
-                          value={reminderChannel.targetId ?? ''}
-                          onChange={(e) => setReminderChannel((prev) => prev === null ? prev : { ...prev, targetId: e.target.value })}
-                          style={{ minWidth: 160 }}
-                        >
-                          <option value="">选择投递目标…</option>
-                          {(reminderOptions?.bots.find((bot) => bot.botId === reminderChannel.botId)?.targets ?? []).map((target) => (
-                            <option key={target.targetId} value={target.targetId}>{target.label}</option>
-                          ))}
-                        </select>
-                        <button className="wb-btn" disabled={reminderBusy} onClick={() => {
-                          setReminderBusy(true)
-                          void api<{ status: ReminderChannelView }>('/api/workbench/reminders/channel', {
-                            method: 'POST', headers: { 'content-type': 'application/json' },
-                            body: JSON.stringify({ botId: reminderChannel.botId, targetId: reminderChannel.targetId }),
-                          }).then((r) => { setReminderChannel(r.status); setNotice('投递目标已保存') })
-                            .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
-                            .finally(() => setReminderBusy(false))
-                        }}><Icon name="check" />保存目标</button>
-                        <button className="wb-btn" disabled={reminderBusy} onClick={() => {
-                          setReminderBusy(true)
-                          void api<{ status: ReminderChannelView; options: ReminderOptionsView }>('/api/workbench/reminders/channel')
-                            .then((r) => { setReminderChannel(r.status); setReminderOptions(r.options); setNotice('已刷新通道状态') })
-                            .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
-                            .finally(() => setReminderBusy(false))
-                        }}><Icon name="refresh" />刷新目标</button>
-                        <button className="wb-btn" disabled={reminderBusy || !reminderChannel.configured} onClick={() => {
-                          setReminderBusy(true)
-                          void api<{ ok: boolean; reason?: string }>('/api/workbench/reminders/test', { method: 'POST' })
-                            .then((r) => setNotice(r.ok ? '测试消息已发送，请查看手机微信' : `发送失败：${r.reason ?? 'unknown'}`))
-                            .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
-                            .finally(() => setReminderBusy(false))
-                        }}><Icon name="bell" />发送测试消息</button>
-                        {reminderChannel.queued > 0 && <span style={{ fontSize: 12, color: '#999' }}>队列中 {reminderChannel.queued} 条待发</span>}
-                      </div>
-                    )}
-
-                    <div className="full" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 8, marginTop: 10 }}>
-                      <label>即时推送分级
-                        <input value={reminderPolicy.immediatePriorities.join(',')} onChange={(e) => setReminderPolicy((prev) => prev === null ? prev : { ...prev, immediatePriorities: e.target.value.split(',').map((v) => v.trim().toLowerCase()).filter(Boolean) })} placeholder="p0,p1" />
-                      </label>
-                      <label>汇总分级
-                        <input value={reminderPolicy.digestPriorities.join(',')} onChange={(e) => setReminderPolicy((prev) => prev === null ? prev : { ...prev, digestPriorities: e.target.value.split(',').map((v) => v.trim().toLowerCase()).filter(Boolean) })} placeholder="p2,p3" />
-                      </label>
-                      <label>每日汇总时间
-                        <input value={reminderPolicy.digestAt} onChange={(e) => setReminderPolicy((prev) => prev === null ? prev : { ...prev, digestAt: e.target.value })} placeholder="09:00" />
-                      </label>
-                      <label>静默时段开始
-                        <input value={reminderPolicy.quietHours?.start ?? ''} onChange={(e) => setReminderPolicy((prev) => prev === null ? prev : { ...prev, quietHours: e.target.value === '' ? null : { start: e.target.value, end: prev.quietHours?.end ?? '08:00' } })} placeholder="22:00（留空=不静默）" />
-                      </label>
-                      <label>静默时段结束
-                        <input value={reminderPolicy.quietHours?.end ?? ''} onChange={(e) => setReminderPolicy((prev) => prev === null ? prev : { ...prev, quietHours: e.target.value === '' ? null : { start: prev.quietHours?.start ?? '22:00', end: e.target.value } })} placeholder="08:00" />
-                      </label>
-                      <label>穿透静默的优先级
-                        <input value={reminderPolicy.quietHoursBypassPriorities.join(',')} onChange={(e) => setReminderPolicy((prev) => prev === null ? prev : { ...prev, quietHoursBypassPriorities: e.target.value.split(',').map((v) => v.trim().toLowerCase()).filter(Boolean) })} placeholder="p0" />
-                      </label>
-                      <label>每小时上限
-                        <input type="number" min={1} max={60} value={reminderPolicy.hourlyLimit} onChange={(e) => setReminderPolicy((prev) => prev === null ? prev : { ...prev, hourlyLimit: Number(e.target.value) })} />
-                      </label>
-                      <label>每日上限
-                        <input type="number" min={1} max={500} value={reminderPolicy.dailyLimit} onChange={(e) => setReminderPolicy((prev) => prev === null ? prev : { ...prev, dailyLimit: Number(e.target.value) })} />
-                      </label>
-                      <label>补发回溯（小时）
-                        <input type="number" min={1} max={168} value={reminderPolicy.catchupWindowHours} onChange={(e) => setReminderPolicy((prev) => prev === null ? prev : { ...prev, catchupWindowHours: Number(e.target.value) })} />
-                      </label>
-                    </div>
-                    <div className="full" style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-                      <button className="wb-btn primary" disabled={reminderBusy} onClick={() => {
-                        setReminderBusy(true)
-                        void api<{ policy: ReminderPolicyView }>('/api/workbench/reminders/policy', {
-                          method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(reminderPolicy),
-                        }).then((r) => { setReminderPolicy(r.policy); setNotice('微信提醒策略已保存') })
-                          .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
-                          .finally(() => setReminderBusy(false))
-                      }}><Icon name="check" />保存提醒策略</button>
-                      <span style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)', alignSelf: 'center' }}>关掉浏览器后仍会推送；未安装 dsh-im 时自动回落</span>
-                    </div>
-                  </>
-                )}
-              </div>
-              <div className="full" style={{ marginTop: 14, borderTop: '1px solid var(--wb-border-soft)', paddingTop: 12 }}>
-                <div style={{ fontWeight: 700, marginBottom: 8 }}><Icon name="settings" /> 字典管理</div>
-                <div className="wb-segmented wb-sub-segmented" style={{ marginBottom: 10 }}>
-                  {(['type', 'status', 'priority', 'idea_kind'] as const).map((k) => (
-                    <button key={k} className={`wb-seg ${dictKind === k ? 'on' : ''}`} onClick={() => { setDictKind(k); setDictForm(null); setDictEditCode(null); setDictError(null) }}>
-                      {k === 'type' ? '任务类型' : k === 'status' ? '状态' : k === 'priority' ? '优先级' : '点子类型'}
-                    </button>
-                  ))}
-                </div>
-                <div className="full" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, gap: 8, flexWrap: 'wrap' }}>
-                  <span style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)' }}>默认项受保护，不可删除；可编辑名称/颜色/排序/停用</span>
-                  <button className="wb-btn primary" onClick={() => { setDictEditCode(null); setDictForm({ name: '', code: '', color: '#4F86F7', sortOrder: 50 }); setDictError(null) }}><Icon name="plus" />新增</button>
-                </div>
-                {dictForm !== null && (
-                  <form className="wb-form" style={{ borderColor: 'color-mix(in srgb, var(--dsw-alias-state-business-primary,#4f8ef7) 40%, transparent)', marginBottom: 10 }} onSubmit={(e) => void saveDictionaryEntry(e)}>
-                    <label>名称<input value={dictForm.name} onChange={(e) => setDictForm((prev) => prev === null ? prev : { ...prev, name: e.target.value })} placeholder="例如：客户沟通" /></label>
-                    <label>code{dictEditCode !== null ? <span style={{ fontWeight: 400, fontSize: 11 }}>（不可修改）</span> : null}<input value={dictEditCode ?? dictForm.code} disabled={dictEditCode !== null} onChange={(e) => setDictForm((prev) => prev === null ? prev : { ...prev, code: e.target.value })} placeholder="client_comm（小写英文/下划线/数字）" /></label>
-                    <label>颜色<input type="color" value={dictForm.color} onChange={(e) => setDictForm((prev) => prev === null ? prev : { ...prev, color: e.target.value })} /></label>
-                    <label>排序<input type="number" value={dictForm.sortOrder} onChange={(e) => setDictForm((prev) => prev === null ? prev : { ...prev, sortOrder: Number(e.target.value) })} /></label>
-                    <div className="full" style={{ display: 'flex', gap: 8 }}>
-                      <button className="wb-btn primary" type="submit">保存</button>
-                      <button className="wb-btn" type="button" onClick={() => { setDictForm(null); setDictEditCode(null); setDictError(null) }}>取消</button>
-                    </div>
-                  </form>
-                )}
-                {dictError !== null && <div className="full" style={{ color: '#E74C3C', fontSize: 12, margin: '6px 0' }}>{dictError}</div>}
-                <div className="wb-list">
-                  {dictOf(dictKind).map((d) => (
-                    <div key={d.code} className="wb-row" style={{ cursor: 'default', opacity: d.active === 0 ? 0.55 : undefined, flexWrap: 'wrap' }}>
-                      <span className="wb-chip" style={{ background: `color-mix(in srgb, ${String(d.config.color ?? '#8a9aa8')} 14%, transparent)`, color: String(d.config.color ?? '#8a9aa8'), border: `1px solid color-mix(in srgb, ${String(d.config.color ?? '#8a9aa8')} 45%, transparent)`, fontWeight: 600 }}>{d.name}</span>
-                      <code style={{ fontSize: 11, color: 'var(--dsw-alias-label-secondary)' }}>{d.code}</code>
-                      {d.builtin === 1 && <span className="wb-chip" style={{ background: 'color-mix(in srgb, #888 12%, transparent)', color: 'var(--dsw-alias-label-secondary)', border: '1px solid var(--wb-border-soft)' }}>内置</span>}
-                      <span style={{ flex: 1 }} />
-                      <button className="wb-btn" onClick={() => { setDictEditCode(d.code); setDictForm({ name: d.name, code: d.code, color: String(d.config.color ?? '#4F86F7'), sortOrder: d.sortOrder ?? 50 }); setDictError(null) }}>编辑</button>
-                      <button className="wb-btn" onClick={() => void toggleDictionaryEntry(d)}>{d.active === 1 ? '停用' : '启用'}</button>
-                      {d.builtin !== 1 && <button className="wb-btn" style={{ color: '#E74C3C', borderColor: 'color-mix(in srgb, #E74C3C 45%, transparent)' }} onClick={() => void deleteDictionaryEntry(d)}>删除</button>}
-                    </div>
-                  ))}
-                </div>
-              </div>
-              <div className="full" style={{ display: 'flex', gap: 8 }}>
-                <button className="wb-btn primary lg" onClick={() => void api<{ settings: { defaultWorkspace: string; autoCreateTypeFolders: boolean; desktopNotify: boolean } }>('/api/workbench/settings', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(settings) }).then((r) => { setSettings(r.settings); setSettingsLoaded(true); setNotice('设置已保存'); setShowSettings(false) }).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))}><Icon name="check" />保存设置</button>
-                <button className="wb-btn" onClick={() => setShowSettings(false)}>取消</button>
-              </div>
-            </div>
-          )}
-
-          {showQuick && (
-            <div className="wb-form-panel">
-              <h4><Icon name="sparkles" />快速录入</h4>
-              <div
-                className={`wb-quick-composer ${quickAttachments.length > 0 ? 'has-attachments' : ''}`}
-                onDragOver={(e) => {
-                  if (Array.from(e.dataTransfer.types).includes('Files')) e.preventDefault()
-                }}
-                onDrop={(e) => {
-                  const files = Array.from(e.dataTransfer.files).filter(isQuickAttachmentFile)
-                  if (files.length === 0) return
-                  e.preventDefault()
-                  addQuickAttachments(files)
-                }}
-              >
-                <textarea
-                  rows={4}
-                  className="wb-quick-textarea"
-                  value={quickText}
-                  onChange={(e) => setQuickText(e.target.value)}
-                  onPaste={(e) => {
-                    const files = Array.from(e.clipboardData.files).filter(isQuickAttachmentFile)
-                    if (files.length > 0) addQuickAttachments(files)
-                  }}
-                  placeholder="输入任务文字，也可以粘贴或拖入图片、PDF 或 DOCX"
-                />
-                {quickAttachments.length > 0 && (
-                  <div className="wb-quick-image-rail" aria-label="快速录入附件">
-                    {quickAttachments.map((attachment) => (
-                      <div className="wb-quick-image-item" key={attachment.id} title={attachment.file.name || '附件'}>
-                        {isQuickImageDraft(attachment)
-                          ? <img src={attachment.previewUrl} alt={attachment.file.name || '图片'} />
-                          : <span className="wb-quick-doc-label">{attachment.file.name.toLowerCase().endsWith('.pdf') || attachment.file.type === 'application/pdf' ? 'PDF' : 'DOCX'}</span>}
-                        <button type="button" className="wb-quick-image-remove" onClick={() => removeQuickAttachment(attachment.id)} aria-label="移除附件">×</button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-                <div className="wb-quick-actions">
-                  <QuickModelPicker runtime={runtime} value={quickModelSelection} onChange={setQuickModelSelection} disabled={busy} onError={setError} alignRight />
-                  <button className="wb-send-button" disabled={busy || (quickText.trim() === '' && quickAttachments.length === 0)} onClick={() => void startAISession('clarify', null, quickText, [], undefined, quickAttachments)} title="创建澄清会话" aria-label="创建澄清会话"><Icon name="send" size={18} /></button>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {showForm && (
-            <form className="wb-form wb-form-panel" onSubmit={(e) => void createTask(e)}>
-              <h4 className="full" style={{ margin: 0 }}><Icon name="plus" />新建任务</h4>
-              <label className="full">标题<input name="title" required placeholder="要做什么？" /></label>
-              <label>类型<select name="type" defaultValue="client_meeting">{dictOf('type').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
-              <label>优先级<select name="priority" defaultValue="p2">{dictOf('priority').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
-              <label>状态<select name="status" defaultValue="todo">{dictOf('status').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
-              <label>截止时间<input name="due" type="datetime-local" /></label>
-              <label>重复<select name="recurrence" defaultValue="none">{dictOf('recurrence').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
-              <label>任务资料夹（可选，留空自动按任务 ID 生成）<input name="workspacePath" placeholder={settings.defaultWorkspace ? `${settings.defaultWorkspace}\\任务ID` : '默认工作区未设置'} /></label>
-              <label className="full">描述<textarea name="description" rows={2} placeholder="背景 / 目标 / 验收标准（Markdown）" /></label>
-              <div className="full" style={{ display: 'flex', gap: 8 }}><button className="wb-btn primary lg" type="submit"><Icon name="check" />保存任务</button><button className="wb-btn" type="button" onClick={() => setShowForm(false)}>取消</button></div>
-            </form>
-          )}
-
+      {showSettings && (
+        <SettingsModal
+          settings={settings}
+          onSettingsChange={setSettings}
+          onSaveSettings={saveSettings}
+          saving={settingsSaving}
+          notifyPermission={notifyPerm}
+          onRequestNotifyPermission={() => {
+            void Notification.requestPermission().then((perm) => {
+              setNotifyPerm(perm)
+              if (perm === 'granted') pushToast('桌面通知已开启', 'success')
+            })
+          }}
+          onSendTestNotification={() => {
+            try { new Notification('dsh-workbench 通知测试', { body: '如果你看到这条系统通知，说明桌面提醒已正常工作。' }) } catch { /* ignore */ }
+          }}
+          reminderPolicy={reminderPolicy}
+          onReminderPolicyChange={setReminderPolicy}
+          onSaveReminderPolicy={saveReminderPolicy}
+          reminderChannel={reminderChannel}
+          reminderOptions={reminderOptions}
+          reminderBusy={reminderBusy}
+          onSelectTarget={(botId, targetId) => setReminderChannel((prev) => prev === null ? prev : { ...prev, botId, targetId })}
+          onSaveTarget={saveReminderTarget}
+          onRefreshChannel={loadReminderChannel}
+          onSendTestMessage={sendReminderTest}
+          dicts={dicts}
+          dictKind={dictKind}
+          onDictKindChange={setDictKind}
+          dictForm={dictForm}
+          onDictFormChange={setDictForm}
+          dictEditCode={dictEditCode}
+          onDictEditCodeChange={setDictEditCode}
+          dictError={dictError}
+          onDictErrorChange={setDictError}
+          onSaveDictionary={saveDictionaryEntry}
+          onToggleDictionary={toggleDictionaryEntry}
+          onDeleteDictionary={deleteDictionaryEntry}
+          onClose={() => setShowSettings(false)}
+        />
+      )}
           {view === 'today' && (
             <>
               <div className="wb-stats wb-stats-sticky">
@@ -2506,6 +1471,50 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                 <div className="wb-stat"><b>{bootstrap?.stats.todayDue ?? 0}</b><span>今天到期</span></div>
                 <div className="wb-stat"><b>{bootstrap?.stats.doing ?? 0}</b><span>进行中</span></div>
                 <div className="wb-stat"><b>{bootstrap?.stats.total ?? 0}</b><span>总数</span></div>
+              </div>
+
+              {/* 今日容量：把"今天投得进多少时间"显式化（estimatedMinutes 按优先级摊成一条时间轴） */}
+              <div className="wb-cap">
+                <div className="wb-cap-head">
+                  <h3>今日容量</h3>
+                  <div className="wb-cap-meta">
+                    <span>已排 <b>{capacity.planned}</b> min</span>
+                    <span>
+                      可投入{' '}
+                      <b>
+                        {capacityEdit === null
+                          ? <span className="wb-cap-edit" title="点击修改每天可投入时长" onClick={() => setCapacityEdit(String(settings.dailyCapacityMinutes))}>{settings.dailyCapacityMinutes}</span>
+                          : <input
+                              autoFocus
+                              type="number"
+                              min={30}
+                              max={1440}
+                              step={30}
+                              value={capacityEdit}
+                              style={{ width: 64, font: 'inherit', fontVariantNumeric: 'tabular-nums' }}
+                              onChange={(e) => setCapacityEdit(e.target.value)}
+                              onBlur={() => void saveDailyCapacity()}
+                              onKeyDown={(e) => { if (e.key === 'Enter') void saveDailyCapacity(); if (e.key === 'Escape') setCapacityEdit(null) }}
+                            />}
+                      </b>{' '}
+                      min
+                    </span>
+                    <span>余 <b>{capacity.free}</b> min</span>
+                  </div>
+                </div>
+                <div className="wb-cap-bar" role="img" aria-label={`今日任务时间占比：紧急 ${capacity.byPriority.p0} 分钟、高 ${capacity.byPriority.p1} 分钟、普通 ${capacity.byPriority.p2} 分钟、低 ${capacity.byPriority.p3} 分钟、空闲 ${capacity.free} 分钟`}>
+                  {(['p0', 'p1', 'p2', 'p3'] as const).map((code) => capacity.byPriority[code] > 0
+                    ? <i key={code} className={code} style={{ width: `${(capacity.byPriority[code] / capacity.total) * 100}%` }} title={`${code} · ${capacity.byPriority[code]} min`} />
+                    : null)}
+                  {capacity.free > 0 && <i className="free" style={{ width: `${(capacity.free / capacity.total) * 100}%` }} title={`空闲 · ${capacity.free} min`} />}
+                </div>
+                <div className="wb-cap-legend">
+                  <span><i style={{ background: 'var(--wb-p0)' }} />紧急 <b>{capacity.byPriority.p0}</b></span>
+                  <span><i style={{ background: 'var(--wb-p1)' }} />高 <b>{capacity.byPriority.p1}</b></span>
+                  <span><i style={{ background: 'var(--wb-p2)' }} />普通 <b>{capacity.byPriority.p2}</b></span>
+                  <span><i style={{ background: 'var(--wb-p3)' }} />低 <b>{capacity.byPriority.p3}</b></span>
+                  <span><i style={{ background: 'color-mix(in srgb, var(--wb-ok) 36%, transparent)' }} />空闲 <b>{capacity.free}</b></span>
+                </div>
               </div>
               <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
                 <button className="wb-btn primary" disabled={busy || openTasks.length === 0} onClick={() => void startAISession('plan', null, localDateString())}><Icon name="sparkles" />{todayPlan !== null || (pendingDraft?.kindCode === 'daily_plan' && String(pendingDraft.payload.planDate ?? '') === todayAnchor) ? '继续编辑今日计划' : 'AI 智能排序'}</button>
@@ -2531,7 +1540,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                     <div style={{ fontWeight: 600, marginBottom: 4 }}>今天没有需要关注的任务</div>
                     <div style={{ fontSize: 12, opacity: .8, marginBottom: 12 }}>可以快速录入一个新任务，或新建一个待办</div>
                     <div style={{ display: 'flex', gap: 8, justifyContent: 'center', flexWrap: 'wrap' }}>
-                      <button className={`wb-btn ${showQuick ? 'primary' : ''}`} onClick={() => setShowQuick((v) => !v)}>快速录入</button>
+                      <button className="wb-btn primary" onClick={() => setShowQuick((v) => !v)}>快速录入</button>
                       <button className="wb-btn" onClick={() => setShowForm((v) => !v)}>新建任务</button>
                     </div>
                   </div>
@@ -2711,75 +1720,106 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
 
           {view === 'ideas' && (
             <>
-              <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
-                <button className={`wb-seg ${ideaTab === 'ideas' ? 'on' : ''}`} onClick={() => { setIdeaTab('ideas'); setSelectedCluster(null) }}>点子（{ideas.length}）</button>
-                <button className={`wb-seg ${ideaTab === 'clusters' ? 'on' : ''}`} onClick={() => { setIdeaTab('clusters'); setSelectedIdea(null) }}>点子王（{ideaClusters.length}）</button>
-                {ideaTab === 'ideas' && <button className="wb-btn primary" onClick={() => { setIdeaEditId(null); setIdeaForm({ title: '', contentMd: '', kindCode: 'spark', tags: '' }); setSelectedIdea(null) }}><Icon name="plus" />记个点子</button>}
+              <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+                <div className="wb-segmented wb-sub-segmented">
+                  <button className={`wb-seg ${ideaTab === 'ideas' ? 'on' : ''}`} onClick={() => { setIdeaTab('ideas'); setSelectedCluster(null) }}>全部（{ideas.length}）</button>
+                  <button className={`wb-seg ${ideaTab === 'unfiled' ? 'on' : ''}`} onClick={() => { setIdeaTab('unfiled'); setSelectedCluster(null) }}>未归类（{unfiledIdeas.length}）</button>
+                  <button className={`wb-seg ${ideaTab === 'clusters' ? 'on' : ''}`} onClick={() => { setIdeaTab('clusters'); setSelectedIdea(null) }}>文件夹（{ideaClusters.length}）</button>
+                </div>
+                <input style={{ flex: 1, minWidth: 120, background: 'var(--dsw-alias-bg-base,#17171a)', border: '1px solid var(--wb-line, rgba(127,127,127,.26))', color: 'inherit', borderRadius: 8, padding: '7px 10px' }} placeholder="搜索点子或文件夹" value={ideaQuery} onChange={(e) => setIdeaQuery(e.target.value)} />
+                {ideas.length >= 2 && <button className="wb-btn primary" disabled={busy} onClick={() => { const ids = selectedIdeaIds.size >= 2 ? [...selectedIdeaIds] : ideas.map((idea) => idea.id); void startAISession('idea_association', null, ids.sort().join(',')) }}><Icon name="sparkles" />{selectedIdeaIds.size >= 2 ? `AI 关联（已选 ${selectedIdeaIds.size}）` : 'AI 自动关联'}</button>}
+                <button className="wb-btn" onClick={() => setFolderForm({ mode: 'create', id: null, title: '', summaryMd: '' })}><Icon name="folder" />新建文件夹</button>
+                <button className="wb-btn" onClick={() => { setIdeaEditId(null); setIdeaForm({ title: '', contentMd: '', kindCode: 'spark', tags: '' }); setSelectedIdea(null) }}><Icon name="plus" />记个点子</button>
               </div>
-              {ideaTab === 'ideas' ? (
+              {ideaTab === 'ideas' || ideaTab === 'clusters' ? (
                 <>
-                  <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
-                    <input style={{ flex: 1, minWidth: 120, background: 'var(--dsw-alias-bg-base,#17171a)', border: '1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.15))', color: 'inherit', borderRadius: 8, padding: '7px 10px' }} placeholder="搜索点子" value={ideaQuery} onChange={(e) => setIdeaQuery(e.target.value)} />
-                    <select style={{ background: 'var(--dsw-alias-bg-base,#17171a)', border: '1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.15))', color: 'inherit', borderRadius: 8, padding: '7px 10px' }} value={ideaKind} onChange={(e) => setIdeaKind(e.target.value)}>
-                      <option value="">全部类型</option>
-                      {dictOf('idea_kind').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}
-                    </select>
+                  {ideaClusters.length > 0 && (
+                    <>
+                      <div className="wb-idea-crumb">
+                        <b>文件夹</b> · {ideaClusters.length} 个
+                        <span style={{ flex: 1 }} />
+                        <span style={{ fontSize: 11.5, color: 'var(--dsw-alias-label-secondary)' }}>点开看成员；hover 可改名 / 删除</span>
+                      </div>
+                      <div className="wb-folder-grid">
+                        {ideaClusters.map((cluster) => (
+                          <div key={cluster.id} className={`wb-folder ${selectedCluster?.id === cluster.id ? 'selected' : ''}`} onClick={() => { setSelectedIdea(null); setSelectedCluster(cluster) }}>
+                            <div className="wb-folder-acts" onClick={(e) => e.stopPropagation()}>
+                              <button className="wb-icon-btn" title="重命名" onClick={() => setFolderForm({ mode: 'rename', id: cluster.id, title: cluster.title, summaryMd: cluster.summaryMd })}><Icon name="edit" size={13} /></button>
+                              <button className="wb-icon-btn" title="删除文件夹（点子保留）" onClick={() => void deleteFolder(cluster.id)}><Icon name="trash" size={13} /></button>
+                            </div>
+                            <div className="wb-folder-head">
+                              <span className="wb-folder-ic"><Icon name="folder" size={13} /></span>
+                              <h4>{cluster.title}</h4>
+                              <span className="wb-folder-cnt">{cluster.ideas.length}</span>
+                            </div>
+                            <div className="wb-folder-mini">
+                              {cluster.ideas.slice(0, 2).map((idea) => <span key={idea.id}>{idea.title}</span>)}
+                              {cluster.ideas.length > 2 && <span className="more">还有 {cluster.ideas.length - 2} 个…</span>}
+                              {cluster.ideas.length === 0 && <span className="more">空文件夹 · 可从下方点子归入</span>}
+                            </div>
+                          </div>
+                        ))}
+                        <div className="wb-folder new" onClick={() => setFolderForm({ mode: 'create', id: null, title: '', summaryMd: '' })}>+ 新建空文件夹<br /><span style={{ fontSize: 11.5 }}>也可以让 AI 自动关联</span></div>
+                      </div>
+                    </>
+                  )}
+                  <div className="wb-idea-crumb">
+                    <b>未归类</b> · {unfiledIdeas.length} 个
+                    <span style={{ flex: 1 }} />
+                    {selectedIdeaIds.size > 0 && <span style={{ fontSize: 11.5, color: 'var(--dsw-alias-label-secondary)' }}>已选 {selectedIdeaIds.size} 个</span>}
                   </div>
-                  <div style={{ display: 'flex', gap: 8, marginBottom: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-                    {ideas.length >= 2 && <button className="wb-btn primary" disabled={busy} onClick={() => { const ids = selectedIdeaIds.size >= 2 ? [...selectedIdeaIds] : ideas.map((idea) => idea.id); void startAISession('idea_association', null, ids.sort().join(',')) }}>{selectedIdeaIds.size >= 2 ? `AI 找关联（已选 ${selectedIdeaIds.size}）` : `AI 自动找关联（全部 ${ideas.length}）`}</button>}
-                    {selectedIdeaIds.size >= 1 && <button className="wb-btn" disabled={busy} onClick={() => void startAISession('idea_brainstorm', null, `idea:${[...selectedIdeaIds].sort().join(',')}`)}>AI 头脑风暴（已选 {selectedIdeaIds.size}）</button>}
-                    <span style={{ fontSize: 12, color: '#999' }}>已选 {selectedIdeaIds.size} 个点子；未选够 2 个时“找关联”会分析全部点子</span>
-                  </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(170px, 1fr))', gap: 8 }}>
-                    {ideas.map((idea) => (
-                      <div key={idea.id} className={`wb-card wb-idea-card ${selectedIdea?.id === idea.id || selectedIdeaIds.has(idea.id) ? 'selected' : ''}`} onClick={() => { setSelectedCluster(null); setSelectedIdea(idea) }}>
+                </>
+              ) : (
+                <div className="wb-idea-crumb"><b>未归类</b> · {unfiledIdeas.length} 个<span style={{ flex: 1 }} /></div>
+              )}
+              {ideaTab !== 'clusters' && (
+                <>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))', gap: 9 }}>
+                    {unfiledIdeas.map((idea) => (
+                      <div key={idea.id} className={`wb-card wb-idea-card ${selectedIdea?.id === idea.id || selectedIdeaIds.has(idea.id) ? 'selected' : ''}`} style={{ marginBottom: 0 }} onClick={() => { setSelectedCluster(null); setSelectedIdea(idea) }}>
                         <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6 }}>
-                          <input type="checkbox" checked={selectedIdeaIds.has(idea.id)} onClick={(e) => e.stopPropagation()} onChange={(e) => setSelectedIdeaIds((prev) => { const next = new Set(prev); if (e.target.checked) next.add(idea.id); else next.delete(idea.id); return next })} style={{ width: 18, height: 18, flex: 'none', accentColor: 'var(--dsw-alias-state-business-primary, #4f8ef7)', cursor: 'pointer' }} />
+                          <input type="checkbox" checked={selectedIdeaIds.has(idea.id)} onClick={(e) => e.stopPropagation()} onChange={(e) => setSelectedIdeaIds((prev) => { const next = new Set(prev); if (e.target.checked) next.add(idea.id); else next.delete(idea.id); return next })} style={{ width: 16, height: 16, flex: 'none', cursor: 'pointer' }} />
                           <b style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{idea.title}</b>
                         </div>
                         <div className="wb-idea-summary">{idea.contentMd.replace(/[#*`>]/g, '').slice(0, 80) || '（无内容）'}</div>
                         <div className="wb-idea-foot">
                           <Badge dict={dictOf('idea_kind')} code={idea.kindCode} />
-                          {idea.tags.slice(0, 4).map((tag) => <span key={tag} style={{ fontSize: 11, color: 'var(--dsw-alias-label-secondary)' }}>#{tag}</span>)}
+                          {idea.tags.slice(0, 3).map((tag) => <span key={tag} style={{ fontSize: 11, color: 'var(--dsw-alias-label-secondary)' }}>#{tag}</span>)}
+                        </div>
+                        <div style={{ marginTop: 8, position: 'relative' }} onClick={(e) => e.stopPropagation()}>
+                          <button className="wb-btn" style={{ fontSize: 11.5, padding: '3px 8px' }} disabled={ideaClusters.length === 0} title={ideaClusters.length === 0 ? '先在右上角新建一个文件夹' : '归入文件夹（一个点子可属于多个）'} onClick={() => setFolderMenuIdeaId((prev) => prev === idea.id ? null : idea.id)}>归入文件夹 ▾</button>
+                          {folderMenuIdeaId === idea.id && (
+                            <div style={{ position: 'absolute', zIndex: 30, top: '100%', left: 0, marginTop: 4, minWidth: 200, background: 'var(--dsw-alias-bg-layer-2, #1c1c1f)', border: '1px solid var(--wb-line, rgba(127,127,127,.26))', borderRadius: 10, boxShadow: '0 10px 30px rgba(0,0,0,.25)', padding: 4 }}>
+                              {ideaClusters.map((cluster) => (
+                                <button key={cluster.id} className="wb-btn" style={{ width: '100%', justifyContent: 'flex-start', border: 'none', background: 'transparent' }} onClick={() => void fileIdeaInto(idea.id, cluster.id)}>
+                                  <Icon name="folder" size={13} />{cluster.title}
+                                </button>
+                              ))}
+                              <button className="wb-btn" style={{ width: '100%', justifyContent: 'flex-start', border: 'none', background: 'transparent' }} onClick={() => { setFolderMenuIdeaId(null); setFolderForm({ mode: 'create', id: null, title: '', summaryMd: '' }) }}>
+                                <Icon name="plus" size={13} />新建文件夹…
+                              </button>
+                            </div>
+                          )}
                         </div>
                       </div>
                     ))}
-                    {ideas.length === 0 && (
-                      <div className="wb-empty" style={{ gridColumn: '1 / -1', padding: '30px 18px' }}>
-                        <div style={{ marginBottom: 6, color: 'var(--dsw-alias-state-business-primary, #4f8ef7)' }}><Icon name="idea" size={30} /></div>
-                        <div style={{ fontWeight: 600, marginBottom: 4 }}>还没有点子</div>
-                        <div style={{ fontSize: 12, opacity: .8, marginBottom: 12 }}>把一闪而过的灵感先记下来，之后可以 AI 找关联、头脑风暴</div>
+                    {unfiledIdeas.length === 0 && (
+                      <div className="wb-empty" style={{ gridColumn: '1 / -1', padding: '26px 18px' }}>
+                        <div className="wb-empty-ic"><Icon name="idea" size={17} /></div>
+                        <div style={{ fontWeight: 600, marginBottom: 4 }}>{ideas.length === 0 ? '还没有点子' : '所有点子都已归类'}</div>
+                        <div style={{ fontSize: 12, opacity: .8, marginBottom: 12 }}>{ideas.length === 0 ? '把一闪而过的灵感先记下来，之后可以 AI 找关联、头脑风暴' : '新记的点子会先出现在这里'}</div>
                         <button className="wb-btn primary" onClick={() => { setIdeaEditId(null); setIdeaForm({ title: '', contentMd: '', kindCode: 'spark', tags: '' }); setSelectedIdea(null) }}>记个点子</button>
                       </div>
                     )}
                   </div>
                 </>
-              ) : (
-                <div className="wb-list">
-                  {ideaClusters.map((cluster) => (
-                    <div key={cluster.id} className={`wb-row ${selectedCluster?.id === cluster.id ? 'selected' : ''}`} onClick={() => { setSelectedIdea(null); setSelectedCluster(cluster) }}>
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontWeight: 600 }}>👑 {cluster.title} <span style={{ fontSize: 12, color: '#999' }}>（{cluster.ideas.length} 个点子）</span></div>
-                        <div className="wb-cluster-meta">
-                          {cluster.summaryMd || cluster.ideas.map((idea) => idea.title).join(' / ')}
-                          {(() => {
-                            const counts = new Map<string, number>()
-                            for (const idea of cluster.ideas) counts.set(idea.kindCode, (counts.get(idea.kindCode) ?? 0) + 1)
-                            const parts = [...counts.entries()].map(([code, n]) => `${dictOf('idea_kind').find((d) => d.code === code)?.name ?? code} ${n}`)
-                            return parts.length > 0 ? ` · ${parts.join(' · ')}` : ''
-                          })()}
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                  {ideaClusters.length === 0 && (
-                    <div className="wb-empty" style={{ padding: '28px 18px' }}>
-                      <div style={{ marginBottom: 6, color: 'var(--dsw-alias-state-business-primary, #4f8ef7)' }}><Icon name="idea" size={30} /></div>
-                      <div style={{ fontWeight: 600, marginBottom: 4 }}>还没有点子王</div>
-                      <div style={{ fontSize: 12, opacity: .8, marginBottom: 12 }}>选中至少 2 个点子后点“AI 找关联”，自动聚合同类灵感</div>
-                      <button className="wb-btn primary" onClick={() => { setIdeaTab('ideas'); setSelectedCluster(null); setSelectedIdea(null); setSelectedIdeaIds(new Set()) }}>去选点子</button>
-                    </div>
-                  )}
+              )}
+              {ideaTab === 'clusters' && ideaClusters.length === 0 && (
+                <div className="wb-empty" style={{ padding: '26px 18px' }}>
+                  <div className="wb-empty-ic"><Icon name="folder" size={17} /></div>
+                  <div style={{ fontWeight: 600, marginBottom: 4 }}>还没有文件夹</div>
+                  <div style={{ fontSize: 12, opacity: .8, marginBottom: 12 }}>先手动建一个，或者选中 2 个以上点子点「AI 关联」自动生成</div>
+                  <button className="wb-btn primary" onClick={() => setFolderForm({ mode: 'create', id: null, title: '', summaryMd: '' })}>新建文件夹</button>
                 </div>
               )}
             </>
@@ -2881,15 +1921,40 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
               : selectedCluster !== null
                 ? (
                   <div className="wb-card">
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <h4 style={{ flex: 1, margin: 0 }}>👑 {selectedCluster.title}</h4>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      <h4 style={{ flex: 1, margin: 0, minWidth: 120 }}><Icon name="folder" />{selectedCluster.title}</h4>
+                      <button className="wb-btn" onClick={() => setFolderForm({ mode: 'rename', id: selectedCluster.id, title: selectedCluster.title, summaryMd: selectedCluster.summaryMd })}><Icon name="edit" />重命名</button>
+                      {ideaClusters.length > 1 && (
+                        <select
+                          className="wb-plan-add"
+                          value=""
+                          title="合并到…（把本文件夹的成员挂到目标文件夹，然后删除本文件夹）"
+                          onChange={(e) => { const target = e.target.value; if (target !== '') void mergeFolderInto(selectedCluster.id, target) }}
+                        >
+                          <option value="">合并到…</option>
+                          {ideaClusters.filter((cluster) => cluster.id !== selectedCluster.id).map((cluster) => <option key={cluster.id} value={cluster.id}>{cluster.title}</option>)}
+                        </select>
+                      )}
                       <button className="wb-btn primary" disabled={busy} onClick={() => void startAISession('idea_brainstorm', null, `cluster:${selectedCluster.id}`)}>AI 头脑风暴</button>
-                      <button className="wb-btn" onClick={() => { if (window.confirm('删除这个点子王？（不会删除点子）')) { void api(`/api/workbench/idea-clusters/${selectedCluster.id}`, { method: 'DELETE' }).then(() => { setSelectedCluster(null); setIdeaRefreshKey((v) => v + 1); setNotice('点子王已删除') }).catch((err: unknown) => setError(err instanceof Error ? err.message : String(err))) } }}><Icon name="trash" />删除</button>
+                      <button className="wb-btn" onClick={() => void deleteFolder(selectedCluster.id)}><Icon name="trash" />删除</button>
                     </div>
-                    <MarkdownText text={selectedCluster.summaryMd || '（暂无总结）'} />
+                    <MarkdownText text={selectedCluster.summaryMd || '（暂无总结，可在重命名里补充）'} />
                     <div style={{ marginTop: 10 }}>
                       <b>包含点子（{selectedCluster.ideas.length}）</b>
-                      {selectedCluster.ideas.map((idea) => <div key={idea.id} className="wb-row" onClick={() => { setSelectedCluster(null); setSelectedIdea(idea) }} style={{ cursor: 'pointer', marginTop: 4 }}><span style={{ flex: 1 }}>{idea.title}</span><Badge dict={dictOf('idea_kind')} code={idea.kindCode} /></div>)}
+                      {selectedCluster.ideas.map((idea) => (
+                        <div key={idea.id} className="wb-member">
+                          <span className="t" onClick={() => { setSelectedCluster(null); setSelectedIdea(idea) }} style={{ cursor: 'pointer' }}>{idea.title}</span>
+                          <Badge dict={dictOf('idea_kind')} code={idea.kindCode} />
+                          <button className="wb-icon-btn" title="移出文件夹" onClick={() => void unfileIdeaFrom(idea.id, selectedCluster.id)}><Icon name="back" size={12} /></button>
+                        </div>
+                      ))}
+                      {selectedCluster.ideas.length === 0 && (
+                        <div style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)', padding: '8px 2px' }}>空文件夹。可以从下方「未归类」的点子上点「归入文件夹」。</div>
+                      )}
+                    </div>
+                    <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
+                      <button className="wb-btn" disabled={busy} onClick={() => void startAISession('idea_association', null, selectedCluster.ideas.map((idea) => idea.id).sort().join(','))}>AI 继续补充关联</button>
+                      <button className="wb-btn" disabled={busy} onClick={() => void startAISession('idea_brainstorm', null, `cluster:${selectedCluster.id}`)}>整体转成任务树</button>
                     </div>
                   </div>
                 )
@@ -2969,7 +2034,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
             : (
               <>
                 <div className="wb-card">
-                  {editDraft === null ? (
+                  {(
                     <>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                         <h4 style={{ flex: 1, margin: 0 }}>{selected.task.title}</h4>
@@ -3001,38 +2066,6 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                         {selected.task.recurrenceMasterId !== null ? '（自动生成的实例）' : selected.task.recurrenceCode !== null && selected.task.recurrenceCode !== 'none' ? `（模板，已生成到 ${selected.task.recurrenceLastGenerated ?? '—'}）` : ''}
                       </div>
                     </>
-                  ) : (
-                    <form className="wb-form" onSubmit={(e) => {
-                      e.preventDefault()
-                      if (editDraft.title.trim() === '') return
-                      const payload: Record<string, unknown> = {
-                        title: editDraft.title.trim(),
-                        description: editDraft.description,
-                        typeCode: editDraft.typeCode,
-                        priorityCode: editDraft.priorityCode,
-                        statusCode: editDraft.statusCode,
-                        aiPolicyCode: editDraft.aiPolicyCode,
-                        dueAt: editDraft.dueLocal === '' ? null : new Date(editDraft.dueLocal).toISOString(),
-                        workspacePath: editDraft.workspacePath.trim() === '' ? null : editDraft.workspacePath.trim(),
-                      }
-                      // 自动生成的实例不允许改重复规则，编辑保存时也不提交该字段，从源头避免 400。
-                      if (selected.task.recurrenceMasterId === null) payload.recurrenceCode = editDraft.recurrenceCode
-                      void patchTask(selected.task.id, payload).then(() => { setEditDraft(null); setNotice('任务已更新') }).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
-                    }}>
-                      <h4 className="full" style={{ margin: 0 }}><Icon name="edit" />编辑任务</h4>
-                      <label className="full">标题<input value={editDraft.title} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, title: e.target.value })} /></label>
-                      <label>类型<select value={editDraft.typeCode} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, typeCode: e.target.value })}>{dictOf('type').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
-                      <label>优先级<select value={editDraft.priorityCode} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, priorityCode: e.target.value })}>{dictOf('priority').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
-                      <label>状态<select value={editDraft.statusCode} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, statusCode: e.target.value })}>{dictOf('status').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
-                      <label>AI 策略<select value={editDraft.aiPolicyCode} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, aiPolicyCode: e.target.value })}>{dictOf('ai_policy').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
-                      {selected.task.recurrenceMasterId === null
-                        ? <label>重复<select value={editDraft.recurrenceCode} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, recurrenceCode: e.target.value })}>{dictOf('recurrence').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
-                        : <div style={{ fontSize: 12, color: '#999', alignSelf: 'center' }}>重复：由模板任务管理</div>}
-                      <label>截止时间<input type="datetime-local" value={editDraft.dueLocal} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, dueLocal: e.target.value })} /></label>
-                      <label className="full">任务资料夹（留空自动按任务 ID 生成）<input value={editDraft.workspacePath} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, workspacePath: e.target.value })} placeholder={settings.defaultWorkspace ? `${settings.defaultWorkspace}\\${selected.task.id}` : '默认工作区未设置'} /></label>
-                      <label className="full">描述（Markdown）<textarea rows={6} value={editDraft.description} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, description: e.target.value })} /></label>
-                      <div className="full" style={{ display: 'flex', gap: 8 }}><button className="wb-btn primary" type="submit"><Icon name="check" />保存</button><button className="wb-btn" type="button" onClick={() => setEditDraft(null)}>取消</button></div>
-                    </form>
                   )}
                 </div>
 
@@ -3169,7 +2202,26 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                       <>
                         <div className="wb-card">
                           <h4>提醒（{selected.reminders.length}）</h4>
-                          {selected.reminders.map((r) => <div key={r.id} style={{ fontSize: 12, color: '#999', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 5 }}><Icon name="bell" size={13} />{r.offsetMinutes === 0 ? '准时（截止时间）' : `提前 ${r.offsetMinutes} 分钟`} · {r.methodCode === 'os' ? '系统通知' : '页面/桌面通知'} · {r.firedAt === null ? '未触发' : `已触发 ${fmtTime(r.firedAt)}`}</div>)}
+                          {selected.reminders.map((r) => {
+                            // 三种终态分开显示：已送达 / 已跳过（太旧）/ 用户已确认 —— 原先把它们都塞在 fired_at 里
+                            const ackAt = r.acknowledgedAt ?? null
+                            const skipAt = r.skippedAt ?? null
+                            const state = ackAt !== null
+                              ? `已确认 ${fmtTime(ackAt)}`
+                              : skipAt !== null
+                                ? '已跳过（超出补发窗口）'
+                                : r.firedAt === null
+                                  ? '未触发'
+                                  : `已送达 ${fmtTime(r.firedAt)}`
+                            const settled = ackAt !== null || skipAt !== null || r.firedAt !== null
+                            return (
+                              <div key={r.id} style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
+                                <Icon name="bell" size={13} />
+                                {r.offsetMinutes === 0 ? '准时（截止时间）' : `提前 ${r.offsetMinutes} 分钟`} · {r.methodCode === 'os' ? '系统通知' : '页面/桌面通知'} · {state}
+                                {settled && <button className="wb-btn" style={{ padding: '1px 7px', fontSize: 11 }} title="清掉终态、回到未处理，到点会再提醒一次" onClick={() => void resetReminderState(r.id)}>重新武装</button>}
+                              </div>
+                            )
+                          })}
                           {selected.task.effectiveDueAt === null
                             ? <div style={{ fontSize: 12, color: '#999' }}>任务还没有截止时间，请先在详情里设置截止时间，再添加提醒。</div>
                             : selected.task.statusCode === 'done' || selected.task.statusCode === 'cancelled'
@@ -3181,7 +2233,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                                   ))}
                                 </div>
                               )}
-                          <div style={{ fontSize: 12, color: '#999', marginTop: 6 }}>到提醒时间后：页内横幅 + 桌面通知（设置中授权）；点“知道了”后标记已触发。</div>
+                          <div style={{ fontSize: 12, color: '#999', marginTop: 6 }}>到提醒时间后：页内横幅 + 桌面通知（设置中授权）。超出补发窗口（默认 24 小时）的提醒会自动标为「已跳过」；任何一条只要显示为已送达 / 已跳过 / 已确认，都可以点「重新武装」让它重新提醒。</div>
                         </div>
                         <div className="wb-card">
                           <h4>复盘记录（{selected.reviews?.length ?? 0}）</h4>
@@ -3248,34 +2300,161 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
             )}
         </div>
       </div>
-       {pendingOpen && (
-         <div className="wb-modal-mask" onClick={() => setPendingOpen(false)}>
-           <div className="wb-modal" onClick={(e) => e.stopPropagation()}>
-             <h4>待你处理（{pendingCount}）</h4>
-             <div style={{ maxHeight: 'min(56vh, 420px)', overflow: 'auto' }}>
-             {pendingDraft !== null && (
-               <div className="wb-row" style={{ cursor: 'default', alignItems: 'flex-start' }}>
-                 <span style={{ flex: 1 }}>
+      {showQuick && (
+        <Modal
+          title={<><Icon name="sparkles" />快速录入</>}
+          size="md"
+          onClose={() => setShowQuick(false)}
+          footer={(
+            <>
+              <span className="wb-foot-note">会跳转到官方会话区，由 AI 澄清后生成任务草稿</span>
+              <button className="wb-btn" onClick={() => setShowQuick(false)}>取消</button>
+              <button
+                className="wb-btn primary"
+                disabled={busy || (quickText.trim() === '' && quickAttachments.length === 0)}
+                onClick={() => void startAISession('clarify', null, quickText, [], undefined, quickAttachments)}
+              >
+                创建澄清会话
+              </button>
+            </>
+          )}
+        >
+          <label className="wb-field">
+            <span>一句话描述任务</span>
+            <textarea
+              autoFocus
+              rows={3}
+              value={quickText}
+              onChange={(e) => setQuickText(e.target.value)}
+              onPaste={(e) => {
+                const files = Array.from(e.clipboardData.files).filter(isQuickAttachmentFile)
+                if (files.length > 0) addQuickAttachments(files)
+              }}
+              onDragOver={(e) => {
+                if (Array.from(e.dataTransfer.types).includes('Files')) e.preventDefault()
+              }}
+              onDrop={(e) => {
+                const files = Array.from(e.dataTransfer.files).filter(isQuickAttachmentFile)
+                if (files.length === 0) return
+                e.preventDefault()
+                addQuickAttachments(files)
+              }}
+              placeholder="例如：周五 10:30 接待重要客户，也可以粘贴或拖入图片、PDF、DOCX"
+            />
+          </label>
+          {quickAttachments.length > 0 && (
+            <div className="wb-quick-image-rail" aria-label="快速录入附件">
+              {quickAttachments.map((attachment) => (
+                <div className="wb-quick-image-item" key={attachment.id} title={attachment.file.name || '附件'}>
+                  {isQuickImageDraft(attachment)
+                    ? <img src={attachment.previewUrl} alt={attachment.file.name || '图片'} />
+                    : <span className="wb-quick-doc-label">{attachment.file.name.toLowerCase().endsWith('.pdf') || attachment.file.type === 'application/pdf' ? 'PDF' : 'DOCX'}</span>}
+                  <button type="button" className="wb-quick-image-remove" onClick={() => removeQuickAttachment(attachment.id)} aria-label="移除附件">×</button>
+                </div>
+              ))}
+            </div>
+          )}
+          <p className="wb-hint">AI 会先澄清必要信息（一次一个主题，最多 5 轮），再提交任务草稿由你确认。</p>
+        </Modal>
+      )}
+
+      {showForm && (
+        <Modal
+          title={<><Icon name="plus" />新建任务</>}
+          size="md"
+          onClose={() => setShowForm(false)}
+        >
+          <form className="wb-form" id="wb-new-task-form" onSubmit={(e) => void createTask(e)}>
+            <label className="full">标题<input name="title" required placeholder="要做什么？" /></label>
+            <label>类型<select name="type" defaultValue="client_meeting">{dictOf('type').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
+            <label>优先级<select name="priority" defaultValue="p2">{dictOf('priority').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
+            <label>状态<select name="status" defaultValue="todo">{dictOf('status').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
+            <label>截止时间<input name="due" type="datetime-local" /></label>
+            <label>重复<select name="recurrence" defaultValue="none">{dictOf('recurrence').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
+            <label className="full">AI 会话工作区（可选，留空用默认）<input name="workspacePath" placeholder={settings.defaultWorkspace || '默认工作区未设置'} /></label>
+            <label className="full">描述<textarea name="description" rows={2} placeholder="背景 / 目标 / 验收标准（Markdown）" /></label>
+            <div className="full" style={{ display: 'flex', gap: 8 }}>
+              <button className="wb-btn primary lg" type="submit"><Icon name="check" />保存任务</button>
+              <button className="wb-btn" type="button" onClick={() => setShowForm(false)}>取消</button>
+            </div>
+          </form>
+        </Modal>
+      )}
+
+      {editDraft !== null && selected !== null && (
+        <Modal
+          title={<><Icon name="edit" />编辑任务</>}
+          size="md"
+          onClose={() => setEditDraft(null)}
+          footer={(
+            <>
+              <button className="wb-btn" onClick={() => setEditDraft(null)}>取消</button>
+              <button className="wb-btn primary" disabled={editDraft.title.trim() === ''} onClick={() => void saveEditDraft()}>
+                <Icon name="check" />保存
+              </button>
+            </>
+          )}
+        >
+          <div className="wb-form" style={{ border: 'none', padding: 0 }}>
+            <label className="full">标题<input value={editDraft.title} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, title: e.target.value })} /></label>
+            <label>类型<select value={editDraft.typeCode} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, typeCode: e.target.value })}>{dictOf('type').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
+            <label>优先级<select value={editDraft.priorityCode} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, priorityCode: e.target.value })}>{dictOf('priority').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
+            <label>状态<select value={editDraft.statusCode} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, statusCode: e.target.value })}>{dictOf('status').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
+            <label>AI 策略<select value={editDraft.aiPolicyCode} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, aiPolicyCode: e.target.value })}>{dictOf('ai_policy').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
+            {selected.task.recurrenceMasterId === null
+              ? <label>重复<select value={editDraft.recurrenceCode} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, recurrenceCode: e.target.value })}>{dictOf('recurrence').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
+              : <div style={{ fontSize: 12, color: '#999', alignSelf: 'center' }}>重复：由模板任务管理</div>}
+            <label>截止时间<input type="datetime-local" value={editDraft.dueLocal} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, dueLocal: e.target.value })} /></label>
+            <label className="full">AI 会话工作区（留空则继承父任务，父任务也没有才用默认）<input value={editDraft.workspacePath} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, workspacePath: e.target.value })} placeholder={settings.defaultWorkspace || '默认工作区未设置'} /></label>
+            <label className="full">描述（Markdown）<textarea rows={6} value={editDraft.description} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, description: e.target.value })} /></label>
+          </div>
+        </Modal>
+      )}
+      {pendingOpen && (
+        <Modal
+          title={<>待你处理（{pendingCount}）</>}
+          size="sm"
+          onClose={() => setPendingOpen(false)}
+          footer={<button className="wb-btn" onClick={() => setPendingOpen(false)}>关闭</button>}
+        >
+          <div className="wb-scroll-area">
+            {pendingDraft !== null && (
+              <div className="wb-row" style={{ cursor: 'default', alignItems: 'flex-start' }}>
+                <span style={{ flex: 1 }}>
                   <b>待确认的{draftKindLabel(pendingDraft.kindCode)}</b>
                   <span className="wb-switch-desc">AI 已提交，确认后才会写入工作台。</span>
                 </span>
                 <button className="wb-btn primary" onClick={() => setPendingOpen(false)}>知道了</button>
               </div>
             )}
+            {deferredDrafts.length > 0 && (
+              <div style={{ marginTop: pendingDraft === null ? 0 : 10 }}>
+                <div className="wb-hint" style={{ marginBottom: 4 }}>已暂存（{deferredDrafts.length}）· 验证完成后从这里唤回</div>
+                {deferredDrafts.map((draft) => (
+                  <div key={draft.id} className="wb-row" style={{ cursor: 'default', alignItems: 'flex-start' }}>
+                    <span style={{ flex: 1 }}>
+                      <b>{draftKindLabel(draft.kindCode)}</b>
+                      <span className="wb-switch-desc">
+                        暂存于 {fmtTime(draft.deferredAt ?? draft.updatedAt)}
+                        {draft.deferCount > 1 ? ` · 第 ${draft.deferCount} 次` : ''}
+                      </span>
+                    </span>
+                    <button className="wb-btn primary" onClick={() => void resumeDeferredDraft(draft.id)}>继续验收</button>
+                  </div>
+                ))}
+              </div>
+            )}
             {reminders.map((r) => (
               <div key={r.reminderId} className="wb-row" style={{ cursor: 'default' }}>
                 <span style={{ flex: 1 }}>{r.title} · {fmtTime(r.dueAt)}</span>
-                <button className="wb-btn" onClick={() => void fireReminder(r.reminderId)}>知道了</button>
+                <button className="wb-btn" onClick={() => void ackReminder(r.reminderId)}>知道了</button>
               </div>
-             ))}
-             {pendingCount === 0 && <p className="wb-hint">暂无待处理事项。</p>}
-             </div>
-             <div className="wb-modal-actions">
-               <button className="wb-btn" onClick={() => setPendingOpen(false)}>关闭</button>
-             </div>
-           </div>
-         </div>
-       )}
+            ))}
+            {pendingCount === 0 && <p className="wb-hint">暂无待处理事项。</p>}
+          </div>
+        </Modal>
+      )}
+      <ToastHost items={toasts} onDismiss={dismissToast} />
     </div>
   )
 }
@@ -3283,7 +2462,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
 function ensureStyle(): void {
   if (document.querySelector('style[data-dsh-workbench-style]') !== null) return
   const style = document.createElement('style')
-  style.dataset.dshPersonalWorkbenchStyle = ''
+  style.dataset.dshWorkbenchStyle = ''
   style.textContent = CSS
   document.head.appendChild(style)
 }
@@ -3300,93 +2479,116 @@ function newSessionButton(root: HTMLElement): HTMLButtonElement | undefined {
 function conversationColumn(): HTMLElement | undefined {
   return document.querySelector<HTMLElement>('[data-pane="conversation"], [class*="centerCol"]') ?? undefined
 }
-function composerTextarea(): HTMLTextAreaElement | null {
-  const column = document.querySelector<HTMLElement>('#root [data-slot="conversation"], [data-pane="conversation"], [class*="centerCol"]')
-  return column?.querySelector<HTMLTextAreaElement>('textarea[data-phase], textarea') ?? document.querySelector<HTMLTextAreaElement>('textarea[data-phase]')
-}
-function installWorkbenchSlashMenu(): () => void {
-  const menu = document.createElement('div')
-  menu.setAttribute('data-dsh-workbench-slash-menu', '')
-  menu.style.display = 'none'
-  menu.innerHTML = '<button type="button"><span class="wb-slash-icon">/</span><span><span class="wb-slash-title">workbench</span><span class="wb-slash-desc">快速录入新任务草稿</span></span></button>'
-  document.body.appendChild(menu)
-  const button = menu.querySelector('button')
-  let activeInput: HTMLTextAreaElement | null = null
-
-  const hide = (): void => { menu.style.display = 'none' }
-  const commandQuery = (value: string): string | null => {
-    const match = value.match(/^\/([A-Za-z]*)$/)
-    if (match === null) return null
-    const query = match[1]?.toLowerCase() ?? ''
-    return 'workbench'.startsWith(query) ? query : null
-  }
-  const showFor = (input: HTMLTextAreaElement): void => {
-    const query = commandQuery(input.value)
-    if (query === null) { hide(); return }
-    activeInput = input
-    const rect = input.getBoundingClientRect()
-    const width = Math.min(360, Math.max(260, rect.width))
-    menu.style.width = `${width}px`
-    menu.style.left = `${Math.max(12, Math.min(rect.left, window.innerWidth - width - 12))}px`
-    menu.style.top = `${Math.max(12, rect.top - 62)}px`
-    menu.style.display = ''
-  }
-  const sync = (): void => {
-    const input = composerTextarea()
-    if (input === null || document.activeElement !== input) { hide(); return }
-    showFor(input)
-  }
-  const commit = (): void => {
-    const input = activeInput ?? composerTextarea()
-    if (input === null) return
-    input.focus()
-    input.value = '/workbench '
-    input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: '/workbench ' }))
-    input.setSelectionRange(input.value.length, input.value.length)
-    hide()
-  }
-  button?.addEventListener('mousedown', (event) => { event.preventDefault(); commit() })
-  const onInput = (): void => { sync() }
-  const onKeydown = (event: KeyboardEvent): void => {
-    if (menu.style.display === 'none') return
-    if (event.key === 'Escape') { hide(); return }
-    if (event.key === 'Enter' || event.key === 'Tab') {
-      event.preventDefault()
-      commit()
-    }
-  }
-  const onFocusin = (): void => { sync() }
-  const onPointerdown = (event: PointerEvent): void => {
-    if (menu.style.display === 'none') return
-    if (event.target instanceof Node && menu.contains(event.target)) return
-    if (event.target === activeInput) return
-    hide()
-  }
-  const onResize = (): void => { sync() }
-  document.addEventListener('input', onInput, true)
-  document.addEventListener('keyup', onInput, true)
-  document.addEventListener('keydown', onKeydown, true)
-  document.addEventListener('focusin', onFocusin, true)
-  document.addEventListener('pointerdown', onPointerdown, true)
-  window.addEventListener('resize', onResize)
-  window.addEventListener('scroll', onResize, true)
-  return () => {
-    document.removeEventListener('input', onInput, true)
-    document.removeEventListener('keyup', onInput, true)
-    document.removeEventListener('keydown', onKeydown, true)
-    document.removeEventListener('focusin', onFocusin, true)
-    document.removeEventListener('pointerdown', onPointerdown, true)
-    window.removeEventListener('resize', onResize)
-    window.removeEventListener('scroll', onResize, true)
-    menu.remove()
-  }
-}
 
 export const name = 'dsh-workbench-client'
-export const inject = ['sessions', 'workspaces', 'connection', 'uiWorkspace', 'modelDirectories', 'remote', 'remote.session']
+/**
+ * 硬依赖只保留在旧版本 DSH 里也稳定存在的三个服务。
+ *
+ * `uiWorkspace` 是 DSH 0.1.5-rc.1 才引入的（0.1.1 的 dsh-client-ui-workspace 里
+ * 没有这个符号）。cordis 的 inject 是"缺一个就整个插件 pending"，所以把它放这里
+ * 会让老版本 DSH 直接报 "Failed to load plugins"；既然它只在启动 AI 会话时用一次，
+ * 就按插件既有原则做成软探测（见 connectWorkspace）。
+ */
+export const inject = ['sessions', 'workspaces', 'connection']
+
+/**
+ * 宿主上下文（由 apply() 记录），供需要软探测可选服务的模块级函数使用
+ * （例如 connectWorkspace 要试 uiWorkspace）。卸载时清空，避免持有已废弃的 fiber。
+ */
+let pluginCtx: unknown
+
+/** 软探测可选服务（cordis 代理访问未声明服务会抛错，必须用 ctx.get）。 */
+function optionalService<T>(ctx: unknown, name: string): T | undefined {
+  const getter = (ctx as { get?: (key: string) => unknown } | undefined)?.get
+  if (typeof getter !== 'function') return undefined
+  try {
+    return getter(name) as T | undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * 把一个 workspace 变成可用的会话（返回新会话 id）。
+ *
+ * 优先官方 uiWorkspace.connectWorkspace；老版本 DSH（如 0.1.1-rc.1）没有这个服务，
+ * 退到 workspaces.openPath；两者都不可用就抛出能指导用户的错误——**而不是**把
+ * uiWorkspace 放进 inject 让整个插件在旧版本上 pending。
+ *
+ * `ctx` 来自 apply() 记录的宿主上下文；没有它时退回 runtime 能力（workspaces.openPath）。
+ */
+async function connectWorkspace(workspaceId: string): Promise<string> {
+  const ctx = pluginCtx as { get?: (key: string) => unknown } | undefined
+  const uiWorkspace = optionalService<{ connectWorkspace?: (id: string) => Promise<string> }>(ctx, 'uiWorkspace')
+  if (typeof uiWorkspace?.connectWorkspace === 'function') return await uiWorkspace.connectWorkspace(workspaceId)
+  const runtime = pluginCtx as WorkbenchRuntime
+  const openPath = runtime?.workspaces?.openPath
+  if (typeof openPath === 'function') {
+    await openPath.call(runtime.workspaces, workspaceId)
+    const snapshot = runtime.sessions.list.getSnapshot()
+    const last = snapshot.ids[snapshot.ids.length - 1]
+    if (typeof snapshot.current === 'string' && snapshot.current !== '') return snapshot.current
+    if (typeof last === 'string' && last !== '') return last
+  }
+  throw new Error('当前 DSH 版本没有可用的工作区切换接口（需要 uiWorkspace 或 workspaces.openPath），请先手动切到任务工作区再发起 AI 会话')
+}
+
+/**
+ * 官方槽位入口：会话标题栏的「工作台」按钮。
+ *
+ * 为什么用它：原先只有"往 DSH 侧栏插 DOM"一条路（依赖宿主 class 名，升级就可能失效）。
+ * 这里改用 DSH 官方槽位 `conversation.session.header.actions`（作用域 = session，
+ * 所以每个会话的标题栏都会出现这个按钮），与 dsh-cost-meter / dsh-pocket 的接法一致。
+ *
+ * 契约：组件通过 `inject` 拿到 { workbench }，含 open / close / toggle / isOpen。
+ * 通过 rAF 轮询刷新激活态，避免把 store 接口扩展进 WorkbenchRuntime 类型。
+ */
+export interface SlotRegistration {
+  name: string
+  id: string
+  order: number
+  inject: () => Record<string, unknown>
+}
+export interface SlotsService {
+  register: (options: SlotRegistration, component: (props: { workbench: WorkbenchSlotApi }) => JSX.Element) => () => void
+  inject: (name: string, callback: () => (() => void) | void) => void
+}
+
+interface WorkbenchSlotApi {
+  open: () => void
+  close: () => void
+  toggle: () => void
+  isOpen: () => boolean
+}
+
+/** 槽位组件的 props 由 `register(..., { inject })` 注入，与 dsh-cost-meter 的写法一致。 */
+function WorkbenchHeaderEntry({ workbench }: { workbench: WorkbenchSlotApi }): JSX.Element {
+  const [, setTick] = useState(0)
+  useEffect(() => {
+    // 订阅激活属性：本按钮与侧栏入口、工作台内「返回对话」保持同步高亮。
+    const observer = new MutationObserver(() => setTick((value) => value + 1))
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: [ACTIVE_ATTR] })
+    return () => observer.disconnect()
+  }, [])
+  const active = workbench.isOpen()
+  return (
+    <button
+      type="button"
+      className="wb-header-entry"
+      title={active ? '收起工作台' : '打开工作台（任务 / 日历 / 知识库 / 点子）'}
+      aria-pressed={active}
+      {...(active ? { 'data-active': '' } : {})}
+      onClick={() => workbench.toggle()}
+    >
+      <Icon name="today" size={14} />
+      工作台
+    </button>
+  )
+}
 
 export function apply(ctx: unknown): () => void {
   const runtime = ctx as WorkbenchRuntime
+  pluginCtx = ctx
   let open = false
   ensureStyle()
   const setOpen = (value: boolean): void => {
@@ -3397,6 +2599,35 @@ export function apply(ctx: unknown): () => void {
       document.dispatchEvent(new CustomEvent(ACTIVATE_EVENT, { detail: PANEL_NAME }))
     } else document.documentElement.removeAttribute(ACTIVE_ATTR)
   }
+
+  // 供槽位组件使用的运行时句柄；类型上放在 runtime 的扩展位，避免污染 WorkbenchRuntime。
+  const slotApi: WorkbenchSlotApi = {
+    open: () => setOpen(true),
+    close: () => setOpen(false),
+    toggle: () => setOpen(!open),
+    isOpen: () => open,
+  }
+  const slots = (() => {
+    // cordis 代理对未声明 inject 的服务，属性访问会直接抛错（"cannot get property ... without inject"），
+    // 不能用 runtime.slots；必须走非严格的 ctx.get 软读取（与 dsh-cost-meter 的 ctx.get('slots') 一致）。
+    const withGet = runtime as unknown as { get?: (name: string) => unknown }
+    const candidate = withGet.get?.('slots')
+    if (candidate === undefined || candidate === null) return undefined
+    if (typeof (candidate as SlotsService).inject !== 'function') return undefined
+    return candidate as SlotsService
+  })()
+  if (slots !== undefined) {
+    // 与 dsh-cost-meter / dsh-pocket 同构：inject 保证宿主槽位存在时才注册。
+    try {
+      slots.inject('conversation.session.header.actions', () => slots.register(
+        { name: 'conversation.session.header.actions', id: 'dsh-workbench', order: -4, inject: () => ({ workbench: slotApi }) },
+        WorkbenchHeaderEntry,
+      ))
+    } catch (error) {
+      console.warn('[workbench] header slot registration failed, falling back to sidebar entry only:', String(error))
+    }
+  }
+
   const entry = document.createElement('button')
   entry.type = 'button'
   entry.setAttribute(ENTRY_ATTR, '')
@@ -3435,7 +2666,6 @@ export function apply(ctx: unknown): () => void {
   const watcher = new MutationObserver(() => { placeEntry(); placeView() })
   watcher.observe(document.body, { childList: true, subtree: true })
   placeEntry(); placeView()
-  const disposeSlashMenu = installWorkbenchSlashMenu()
 
   const onOtherActivate = (event: Event): void => { if ((event as CustomEvent).detail !== PANEL_NAME && open) setOpen(false) }
   const onClickSidebarRow = (event: MouseEvent): void => {
@@ -3449,10 +2679,10 @@ export function apply(ctx: unknown): () => void {
 
   return () => {
     watcher.disconnect(); entryObserver.disconnect()
-    disposeSlashMenu()
     document.removeEventListener(ACTIVATE_EVENT, onOtherActivate)
     document.removeEventListener('click', onClickSidebarRow, true)
     entry.remove(); root.unmount(); view.remove()
     document.documentElement.removeAttribute(ACTIVE_ATTR)
+    if (pluginCtx === ctx) pluginCtx = undefined
   }
 }

@@ -4,7 +4,7 @@
  */
 import type { DatabaseSync } from 'node:sqlite'
 
-export const SCHEMA_VERSION = 12
+export const SCHEMA_VERSION = 15
 
 export interface Migration {
   version: number
@@ -330,6 +330,53 @@ export const MIGRATIONS: Migration[] = [
         CREATE INDEX idx_reminder_queue_next ON reminder_queue(next_attempt_at, created_at);
         CREATE INDEX idx_reminder_queue_root ON reminder_queue(root_task_id, created_at DESC);
       `)
+    },
+  },
+  {
+    version: 13,
+    name: 'draft-defer-and-notify',
+    up(db) {
+      // 验收「暂存」：草稿仍是 pending（确认/驳回两条老路径不变），
+      // 只用一个标记让"自动弹窗"那条查询跳过它 —— 用户可以先去跑回归测试，再手动唤回。
+      db.exec('ALTER TABLE task_drafts ADD COLUMN deferred_at TEXT')
+      db.exec('ALTER TABLE task_drafts ADD COLUMN defer_count INTEGER NOT NULL DEFAULT 0')
+      // 草稿通知去重：非空表示该草稿已经进过通知队列，不再重复推送。
+      db.exec('ALTER TABLE task_drafts ADD COLUMN notified_at TEXT')
+    },
+  },
+  {
+    version: 14,
+    name: 'draft-notify-queue',
+    up(db) {
+      // 草稿通知的待发队列（静默时段/汇总/节流导致的延后投递）。
+      // 与 reminder_queue 分开：那边是"任务到期提醒"，字段与幂等键都不同。
+      db.exec(`
+        CREATE TABLE draft_notify_queue (
+          id              TEXT PRIMARY KEY,
+          draft_id        TEXT NOT NULL UNIQUE,
+          kind_code       TEXT NOT NULL,
+          title           TEXT NOT NULL,
+          body            TEXT NOT NULL,
+          priority_code   TEXT NOT NULL,
+          attempts        INTEGER NOT NULL DEFAULT 0,
+          next_attempt_at TEXT NOT NULL,
+          last_error      TEXT,
+          created_at      TEXT NOT NULL
+        ) STRICT;
+        CREATE INDEX idx_draft_notify_next ON draft_notify_queue(next_attempt_at, created_at);
+      `)
+    },
+  },
+  {
+    version: 15,
+    name: 'reminder-status-semantics',
+    up(db) {
+      // 拆开原先由 fired_at 一肩挑的三种语义（历史事故：一条提醒永久停在「待处理」）：
+      //   fired_at        —— 已送达/已入队（调度器与队列的幂等键，语义不变）
+      //   skipped_at      —— 已判定"太旧"而放弃：终态，不再参与 /reminders/due
+      //   acknowledged_at —— 用户点了「知道了」：终态，但可重置
+      db.exec('ALTER TABLE task_reminders ADD COLUMN skipped_at TEXT')
+      db.exec('ALTER TABLE task_reminders ADD COLUMN acknowledged_at TEXT')
     },
   },
 ]

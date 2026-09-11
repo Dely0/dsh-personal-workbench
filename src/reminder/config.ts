@@ -30,7 +30,12 @@ export interface ReminderPolicy {
   breakerCooldownMinutes: number
   /** 通道选择：auto = 装了 dsh-im 就走微信，否则前端 */
   channel: 'auto' | 'wechat' | 'browser'
+  /** 草稿通知：哪些草稿类型要推微信（空数组 = 不推） */
+  draftNotifyKinds: string[]
 }
+
+/** 可推送的草稿类型（与 task_drafts.kind_code 对齐）。 */
+export const NOTIFIABLE_DRAFT_KINDS = ['completion', 'review', 'report', 'knowledge', 'idea_cluster', 'idea_tasks', 'subtask_plan', 'task'] as const
 
 export const DEFAULT_REMINDER_POLICY: ReminderPolicy = {
   enabled: false,
@@ -45,6 +50,9 @@ export const DEFAULT_REMINDER_POLICY: ReminderPolicy = {
   catchupMaxItems: 10,
   breakerCooldownMinutes: 30,
   channel: 'auto',
+  // 默认只开"验收申请"与"复盘草稿"：这两类才需要用户立刻动手。
+  // 报告/知识/点子/任务草稿默认关，避免噪音（可在设置页打开）。
+  draftNotifyKinds: ['completion', 'review'],
 }
 
 const HHMM_RE = /^([01]\d|2[0-3]):([0-5]\d)$/
@@ -96,6 +104,10 @@ export function normalizeReminderPolicy(raw: unknown): ReminderPolicy {
     catchupMaxItems: intInRange(input.catchupMaxItems, DEFAULT_REMINDER_POLICY.catchupMaxItems, 1, 50),
     breakerCooldownMinutes: intInRange(input.breakerCooldownMinutes, DEFAULT_REMINDER_POLICY.breakerCooldownMinutes, 1, 240),
     channel,
+    // 显式传空数组 = 用户主动关掉所有草稿通知；缺省字段才回落到默认（验收/复盘）
+    draftNotifyKinds: Array.isArray(input.draftNotifyKinds)
+      ? input.draftNotifyKinds.filter((kind): kind is string => typeof kind === 'string' && (NOTIFIABLE_DRAFT_KINDS as readonly string[]).includes(kind))
+      : DEFAULT_REMINDER_POLICY.draftNotifyKinds,
   }
 }
 

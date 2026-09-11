@@ -10,8 +10,9 @@ import { createIdea, createTask, getTask, getTaskMemoryContext, getDraftBySessio
 
 test('agent tools write pending drafts and update tasks', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-workbench-tools-'))
+  let db
   try {
-    const db = openWorkbenchDb({ dbPath: join(dir, 'workbench.db') })
+    db = openWorkbenchDb({ dbPath: join(dir, 'workbench.db') })
     seedDictionaries(db)
     const submit = submitTaskTool(db)
     const out = await submit.execute(
@@ -50,6 +51,12 @@ test('agent tools write pending drafts and update tasks', async () => {
     // AI 不能直接关闭任务
     const deniedClose = await update.execute({ task_id: task.id, status_code: 'done' })
     assert.match(deniedClose, /不能直接/)
+
+    // 验收历史：首次提交返回"第 1 次"，被驳回后再提交带上反馈并回报历史
+    assert.match(done, /第 1 次验收提交/)
+    const rejected = await completion.execute({ task_id: task.id, summary: '完成总结 v3', feedback: '已按反馈补齐回归测试' }, { agent: { session: { id: 'sess-exec' } } })
+    assert.match(rejected, /已按反馈补齐回归测试|第 1 次|暂存/)
+    assert.equal(getPendingDraftForTask(db, 'completion', task.id).payload.feedback, '已按反馈补齐回归测试')
 
     // 任意节点（含父任务）均可申请完成；父任务不再被“叶子”限制拒绝
     const parent = createTask(db, { title: 'parent exec', typeCode: 'code_impl', priorityCode: 'p1', aiPolicyCode: 'execute' })
@@ -132,8 +139,8 @@ test('agent tools write pending drafts and update tasks', async () => {
     const tOut = await taskTool.execute({ source_idea_ids: [idea1.id], tasks: [{ title: '落地A', type_code: 'code_impl', priority_code: 'p1' }], summary: '结论' }, { agent: { session: { id: 'sess-idea-task' } } })
     assert.match(tOut, /点子落地任务提案已保存/)
     assert.ok(getPendingDraftForSession(db, 'sess-idea-task', 'idea_tasks'))
-    db.close()
   } finally {
+    db?.close()
     rmSync(dir, { recursive: true, force: true })
   }
 })

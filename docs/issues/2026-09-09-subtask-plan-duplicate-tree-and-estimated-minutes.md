@@ -81,6 +81,32 @@ estimatedMinutes: typeof estimate === 'number' ? estimate : null,
 
 ---
 
+## 3.1 加固实施结果（2026-09-09 当晚，commit `1c03414`）
+
+上述 5 项**全部落地**：
+
+| # | 实施 |
+|---|---|
+| 1 | `confirmSubtaskPlanDraft` 新增 `findSiblingByTitle()`：同父同名（trim 精确匹配，含已归档）复用既有节点，不新建；子节点挂到既有节点下。既有任务的 id / 状态 / 用户编辑均保留 |
+| 2 | `archiveTask(db, id, actor, { cascade })`：`cascade: true` 时同一事务归档整棵子树，每节点各写一条 `updated` 事件；默认仍为单节点。归档 API 接受 `{ cascade: true }` |
+| 3 | `listTasks` 正常视图排除「祖先已归档」节点（`collectArchivedDescendants()`，带防环）；归档视图经 `listArchivedTasks` 仍带出整棵子树 |
+| 4 | 新增 `toTaskInputFromDraftItem()`，`confirmTaskDraft` / `confirmSubtaskPlanDraft` / `confirmIdeaTaskDraft` 三条路径共用，统一收 camelCase + snake_case |
+| 5 | `test/db.test.mjs` 新增 4 组回归：拆解幂等 + 估时、idea 路径估时、归档/级联/孤儿过滤、工作区动态继承（32 测试全绿） |
+
+**额外修复（用户提出）**：`effectiveWorkspacePath` 动态继承最近祖先的工作区，语义与 `effectiveDueAt` 同构——父任务改工作区，未自设工作区的后代自动跟随，已自设的后代不受影响。客户端显示与 AI 会话启动改用它，且不再对子任务按标题自动建独立文件夹。
+
+### 语义变更提醒
+
+- 正常列表不再返回「父已归档」的子任务（此前会返回，导致前端平铺成"重复任务"）。归档视图不受影响。
+- 归档父任务后，子任务**自身** `archived` 仍为 0，可单独恢复；父任务恢复后重新出现在活跃列表。需要整棵子树一起归档时用 `cascade: true`。
+
+### 未做（供后续决策）
+
+- `confirmIdeaTaskDraft` 仍会重复建树（同父同名不幂等）——本次只给 `subtask_plan` 加了幂等，因为它是实际事故来源；`idea_tasks` 的重复确认问题早前已通过"草稿只确认一次"的流程约定规避。
+- 版本号未 bump（仍 1.10.1），发布时再决定。本地 live profile 已同步本次构建产物，升级插件包后需重新同步（见下）。
+
+---
+
 ## 4. 复现与验证脚本（本机留存）
 
 | 脚本 | 用途 |

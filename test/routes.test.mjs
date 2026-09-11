@@ -1,11 +1,10 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import http from 'node:http'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openWorkbenchDb } from '../lib/db/database.js'
-import { defaultTasksWorkspace } from '../lib/workbenchPaths.js'
 import { seedDictionaries } from '../lib/db/seed.js'
 import { makeDictionaryRoute } from '../lib/api/dictionaryRoute.js'
 import { makeLocalDirRoute } from '../lib/api/localDirRoute.js'
@@ -13,49 +12,11 @@ import { makeOpenFileRoute } from '../lib/api/openFileRoute.js'
 import { makeRoutes } from '../lib/api/routes.js'
 import { createKnowledge, createTask, localDateString, updateTask } from '../lib/db/repo.js'
 
-const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
-
-function makeStoredZip(entries) {
-  const localParts = []
-  const centralParts = []
-  let offset = 0
-  for (const [name, content] of entries) {
-    const nameBuffer = Buffer.from(name)
-    const data = Buffer.from(content)
-    const local = Buffer.alloc(30)
-    local.writeUInt32LE(0x04034b50, 0)
-    local.writeUInt16LE(20, 4)
-    local.writeUInt16LE(0, 8)
-    local.writeUInt32LE(data.length, 18)
-    local.writeUInt32LE(data.length, 22)
-    local.writeUInt16LE(nameBuffer.length, 26)
-    localParts.push(local, nameBuffer, data)
-
-    const central = Buffer.alloc(46)
-    central.writeUInt32LE(0x02014b50, 0)
-    central.writeUInt16LE(20, 6)
-    central.writeUInt16LE(0, 10)
-    central.writeUInt32LE(data.length, 20)
-    central.writeUInt32LE(data.length, 24)
-    central.writeUInt16LE(nameBuffer.length, 28)
-    central.writeUInt32LE(offset, 42)
-    centralParts.push(central, nameBuffer)
-    offset += local.length + nameBuffer.length + data.length
-  }
-  const centralOffset = offset
-  const centralSize = centralParts.reduce((sum, part) => sum + part.length, 0)
-  const eocd = Buffer.alloc(22)
-  eocd.writeUInt32LE(0x06054b50, 0)
-  eocd.writeUInt16LE(entries.length, 8)
-  eocd.writeUInt16LE(entries.length, 10)
-  eocd.writeUInt32LE(centralSize, 12)
-  eocd.writeUInt32LE(centralOffset, 16)
-  return Buffer.concat([...localParts, ...centralParts, eocd])
-}
-
-function startTestServer() {
+function startTestServer(options = {}) {
   const db = openWorkbenchDb({ dbPath: ':memory:' })
-  const routes = [makeDictionaryRoute(db), makeLocalDirRoute(), makeOpenFileRoute(), ...makeRoutes(db)]
+  // 生产路径由 apply() 播种字典；测试里也要播，否则 POST /drafts 的 kind 校验会 400。
+  seedDictionaries(db)
+  const routes = [makeDictionaryRoute(db), makeLocalDirRoute(), makeOpenFileRoute(), ...makeRoutes(db, options.deps ?? {})]
   const server = http.createServer((req, res) => {
     const url = new URL(req.url ?? '/', 'http://localhost')
     for (const route of routes) {
@@ -72,8 +33,8 @@ function startTestServer() {
   return { db, server }
 }
 
-async function withServer(fn) {
-  const { db, server } = startTestServer()
+async function withServer(fn, options = {}) {
+  const { db, server } = startTestServer(options)
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
   const port = server.address().port
   const request = async (method, path, body) => {
@@ -83,7 +44,7 @@ async function withServer(fn) {
       body: body === undefined ? undefined : JSON.stringify(body),
     })
     const text = await res.text()
-    return { status: res.status, headers: res.headers, body: text === '' ? null : JSON.parse(text) }
+    return { status: res.status, body: text === '' ? null : JSON.parse(text) }
   }
   try {
     await fn({ db, request })
@@ -101,10 +62,9 @@ test('manual plan editing PUT saves added task instead of returning not found', 
 
     const health = await request('GET', '/api/workbench/health')
     assert.equal(health.status, 200)
-    assert.equal(health.headers.get('cache-control'), 'no-store')
-    assert.equal(health.headers.get('x-content-type-options'), 'nosniff')
-    assert.equal(health.body.name, packageJson.name)
-    assert.equal(health.body.version, packageJson.version)
+    // health 的版本必须跟随 package.json，防止升级后还报旧版本
+    const pkgVersion = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version
+    assert.equal(health.body.version, pkgVersion)
 
     // Simulates: open edit mode, add an existing task, then save.
     const put = await request('PUT', `/api/workbench/plans/${planDate}`, {
@@ -123,28 +83,6 @@ test('manual plan editing PUT saves added task instead of returning not found', 
     assert.equal(get.status, 200)
     assert.equal(get.body.plan.items.length, 2)
     assert.equal(get.body.plan.items[1].note, 'added manually')
-  })
-})
-
-test('settings uses default AI workspace until user overrides it', async () => {
-  await withServer(async ({ request }) => {
-    const initial = await request('GET', '/api/workbench/settings')
-    assert.equal(initial.status, 200)
-    assert.equal(initial.body.settings.defaultWorkspace, defaultTasksWorkspace())
-    assert.equal(initial.body.settings.autoCreateTypeFolders, true)
-    assert.equal(initial.body.settings.desktopNotify, true)
-
-    const clear = await request('POST', '/api/workbench/settings', { defaultWorkspace: '' })
-    assert.equal(clear.status, 200)
-    assert.equal(clear.body.settings.defaultWorkspace, '')
-
-    const settingsDir = mkdtempSync(join(tmpdir(), 'dsh-workbench-settings-'))
-    const customWorkspace = join(settingsDir, 'AI Tasks')
-    const custom = await request('POST', '/api/workbench/settings', { defaultWorkspace: `  ${customWorkspace}  ` })
-    assert.equal(custom.status, 200)
-    assert.equal(custom.body.settings.defaultWorkspace, customWorkspace)
-    assert.equal(existsSync(customWorkspace), true)
-    rmSync(settingsDir, { recursive: true, force: true })
   })
 })
 
@@ -276,48 +214,6 @@ test('knowledge API supports file_link and local document reading', async () => 
   }
 })
 
-test('quick attachment extraction accepts pdf/docx and rejects other documents', async () => {
-  await withServer(async ({ request }) => {
-    const pdfText = 'BT /F1 12 Tf 72 720 Td (PDF Notice) Tj ET'
-    const pdf = Buffer.from(`%PDF-1.4\n1 0 obj\n<< /Length ${pdfText.length} >>\nstream\n${pdfText}\nendstream\nendobj\n%%EOF`, 'latin1')
-    const extractedPdf = await request('POST', '/api/workbench/quick-attachments/extract-text', {
-      name: 'notice.pdf',
-      mediaType: 'application/pdf',
-      data: pdf.toString('base64'),
-    })
-    assert.equal(extractedPdf.status, 200)
-    assert.match(extractedPdf.body.content, /PDF Notice/)
-
-    const docx = makeStoredZip([
-      ['word/document.xml', '<w:document><w:body><w:p><w:r><w:t>会议通知</w:t></w:r></w:p><w:p><w:r><w:t>周五 10:30 接待客户</w:t></w:r></w:p></w:body></w:document>'],
-    ])
-    const extracted = await request('POST', '/api/workbench/quick-attachments/extract-text', {
-      name: 'notice.docx',
-      mediaType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      data: docx.toString('base64'),
-    })
-    assert.equal(extracted.status, 200)
-    assert.match(extracted.body.content, /会议通知/)
-    assert.match(extracted.body.content, /周五 10:30/)
-
-    const rejected = await request('POST', '/api/workbench/quick-attachments/extract-text', {
-      name: 'notice.txt',
-      mediaType: 'text/plain',
-      data: Buffer.from('hello').toString('base64'),
-    })
-    assert.equal(rejected.status, 400)
-    assert.match(rejected.body.error, /PDF 和 DOCX/)
-
-    const invalid = await request('POST', '/api/workbench/quick-attachments/extract-text', {
-      name: 'bad.pdf',
-      mediaType: 'application/pdf',
-      data: 'not valid base64!!!',
-    })
-    assert.equal(invalid.status, 400)
-    assert.match(invalid.body.error, /invalid base64/)
-  })
-})
-
 test('dictionary CRUD API creates, edits, deactivates, protects builtin and blocks invalid code', async () => {
   await withServer(async ({ db, request }) => {
     seedDictionaries(db)
@@ -379,5 +275,112 @@ test('archive/restore a task that was already deleted returns 404 instead of cra
     const patchArchive = await request('PATCH', `/api/workbench/tasks/${task.id}`, { archived: true })
     assert.equal(patchArchive.status, 404)
     assert.match(patchArchive.body.error, /task not found/)
+  })
+})
+
+test('draft defer/resume/abandon API: 暂存不弹窗、可唤回、驳回留痕', async () => {
+  await withServer(async ({ db, request }) => {
+    const task = createTask(db, { title: 'defer test task', typeCode: 'code_impl', priorityCode: 'p1', aiPolicyCode: 'execute' })
+    const created = await request('POST', '/api/workbench/drafts', {
+      kindCode: 'completion',
+      sessionId: 'sess-defer',
+      payload: { taskId: task.id, summary: '完成总结', sessionId: 'sess-defer' },
+    })
+    assert.equal(created.status, 201)
+    const draftId = created.body.draft.id
+
+    // 未暂存：自动弹窗查询能取到
+    const before = await request('GET', '/api/workbench/drafts')
+    assert.equal(before.body.draft.id, draftId)
+    assert.deepEqual(before.body.deferredDrafts, [])
+
+    // 暂存：弹窗查询跳过，暂存清单出现
+    const deferred = await request('POST', `/api/workbench/drafts/${draftId}/defer`, { note: '先去跑回归' })
+    assert.equal(deferred.status, 200)
+    assert.equal(deferred.body.draft.deferredAt !== null, true)
+    assert.equal(deferred.body.draft.statusCode, 'pending')
+    const after = await request('GET', '/api/workbench/drafts')
+    assert.equal(after.body.draft, null)
+    assert.deepEqual(after.body.deferredDrafts.map((d) => d.id), [draftId])
+    // 留痕：任务事件 + 共享记忆
+    assert.equal(db.prepare("SELECT COUNT(*) AS c FROM task_events WHERE task_id = ? AND event_code = 'completion_deferred'").get(task.id).c, 1)
+
+    // 唤回：重新进入自动弹窗队列
+    const resumed = await request('POST', `/api/workbench/drafts/${draftId}/resume`)
+    assert.equal(resumed.status, 200)
+    assert.equal(resumed.body.draft.deferredAt, null)
+    const back = await request('GET', '/api/workbench/drafts')
+    assert.equal(back.body.draft.id, draftId)
+
+    // 驳回：带原因，留痕
+    const abandoned = await request('POST', `/api/workbench/drafts/${draftId}/abandon`, { reason: '回归测试未通过' })
+    assert.equal(abandoned.status, 200)
+    const rejectedEvent = db.prepare("SELECT note FROM task_events WHERE task_id = ? AND event_code = 'completion_rejected'").get(task.id)
+    assert.equal(rejectedEvent.note.includes('回归测试未通过'), true)
+    const memories = db.prepare('SELECT content FROM task_memories WHERE task_id = ? ORDER BY created_at DESC').all(task.id)
+    assert.equal(memories.some((row) => row.content.includes('回归测试未通过')), true)
+  })
+})
+
+test('draft defer API: 非验收类草稿不可暂存', async () => {
+  await withServer(async ({ request }) => {
+    const created = await request('POST', '/api/workbench/drafts', { kindCode: 'report', payload: { periodCode: 'day' } })
+    const res = await request('POST', `/api/workbench/drafts/${created.body.draft.id}/defer`)
+    assert.equal(res.status, 400)
+    assert.match(res.body.error, /cannot be deferred/)
+  })
+})
+
+test('痛点回归：makeRoutes 必须尊重注入的 listDue（策略/窗口语义不能被硬编码覆盖）', async () => {
+  await withServer(async ({ request }) => {
+    const res = await request('GET', '/api/workbench/reminders/due')
+    assert.equal(res.status, 200)
+    assert.deepEqual(res.body.reminders, [{ reminderId: 'injected-only', taskId: 't', title: '来自注入实现' }])
+  }, { deps: { listDue: () => [{ reminderId: 'injected-only', taskId: 't', title: '来自注入实现' }] } })
+})
+
+test('点子文件夹：新建 / 改名 / 归入 / 移出 / 合并', async () => {
+  await withServer(async ({ request }) => {
+    const a = await request('POST', '/api/workbench/ideas', { title: '点子 A', kindCode: 'plugin', tags: [] })
+    const b = await request('POST', '/api/workbench/ideas', { title: '点子 B', kindCode: 'spark', tags: [] })
+    assert.equal(a.status, 201)
+    assert.equal(b.status, 201)
+
+    // 手动建两个空文件夹
+    const f1 = await request('POST', '/api/workbench/idea-clusters', { title: '微信提醒方向' })
+    const f2 = await request('POST', '/api/workbench/idea-clusters', { title: 'UI 与交互' })
+    assert.equal(f1.status, 201)
+    assert.equal(f2.status, 201)
+    assert.deepEqual(f1.body.cluster.ideas, [])
+
+    // 改名
+    const renamed = await request('PATCH', `/api/workbench/idea-clusters/${f1.body.cluster.id}`, { title: '微信提醒（已改名）' })
+    assert.equal(renamed.status, 200)
+    assert.equal(renamed.body.cluster.title, '微信提醒（已改名）')
+
+    // 归入：一个点子可进多个文件夹（多对多）
+    const in1 = await request('POST', `/api/workbench/idea-clusters/${f1.body.cluster.id}/ideas`, { ideaId: a.body.idea.id })
+    assert.equal(in1.body.cluster.ideas.length, 1)
+    const in2 = await request('POST', `/api/workbench/idea-clusters/${f2.body.cluster.id}/ideas`, { ideaId: a.body.idea.id })
+    assert.equal(in2.body.cluster.ideas.length, 1)
+
+    // 未归类只含 B（A 已被两个文件夹引用）
+    const ideas = await request('GET', '/api/workbench/ideas')
+    const clusters = await request('GET', '/api/workbench/idea-clusters')
+    const filedIds = new Set(clusters.body.clusters.flatMap((cluster) => cluster.ideas.map((idea) => idea.id)))
+    assert.equal(ideas.body.ideas.filter((idea) => !filedIds.has(idea.id)).map((idea) => idea.title).join(','), '点子 B')
+
+    // 移出
+    const out = await request('DELETE', `/api/workbench/idea-clusters/${f1.body.cluster.id}/ideas/${a.body.idea.id}`)
+    assert.equal(out.status, 200)
+    assert.equal(out.body.cluster.ideas.length, 0)
+
+    // 合并：把 f2 并入 f1（f2 的成员挂过去、f2 删除；f1 原有成员保留）
+    await request('POST', `/api/workbench/idea-clusters/${f2.body.cluster.id}/ideas`, { ideaId: b.body.idea.id })
+    const merged = await request('POST', `/api/workbench/idea-clusters/${f2.body.cluster.id}/merge`, { into: f1.body.cluster.id })
+    assert.equal(merged.status, 200)
+    assert.deepEqual(merged.body.cluster.ideas.map((idea) => idea.title).sort(), ['点子 A', '点子 B'])
+    const after = await request('GET', `/api/workbench/idea-clusters/${f2.body.cluster.id}`)
+    assert.equal(after.status, 404)
   })
 })

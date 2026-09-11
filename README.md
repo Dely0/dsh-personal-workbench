@@ -2,90 +2,32 @@
 
 [![npm version](https://img.shields.io/npm/v/@guojing6/dsh-workbench)](https://www.npmjs.com/package/@guojing6/dsh-workbench)
 
-`dsh-workbench` is a local-first personal workbench plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) Web.
+A personal workbench plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH) Web.
+Turn your DSH into a **calendar + task list + AI assistant workbench**.
 
-It turns DSH into a task-centered AI workspace: calendar, task tree, quick intake, AI clarification, execution review, daily planning, reports, knowledge base, ideas, and local task folders.
-
-[中文](#中文) · [English](#english)
+[English](#english) · 简体中文
 
 ---
 
-## 中文
+# 中文
 
-### 项目简介
+## 这是什么
 
-`dsh-workbench` 是一个 DeepSeek Harness Web 插件，用来在 DSH 里管理个人任务、AI 会话和本地工作资料。
+`dsh-workbench` 是一个 **DSH 个人工作台插件**：
 
-它适合这样的工作流：
+- 📅 日历（周/月可切换）+ 任务列表（树状层级）
+- ✨ 自然语言快速录入，AI 澄清后自动生成任务
+- 🧠 每个任务可关联多个 AI 会话：澄清 / 咨询 / 拆解 / 执行 / 复盘
+- 🎯 AI 会话前可勾选本机已安装的 Skill，提示词自动注入“加载这些技能”的指令
+- ✅ 任务执行采用“AI 申请完成 → 用户验收”闭环
+- 🗂️ 每个任务一个 AI 会话工作区（默认工作区 + 任务名文件夹）
+- 📝 Markdown 任务描述、复盘记录、变更历史
+- ⏰ 到期提醒（页内横幅）
+- 🗄️ 归档区、任务恢复
 
-1. 在工作台快速录入一条任务。
-2. 让 AI 在官方会话区澄清需求并生成任务草稿。
-3. 在工作台确认后保存为正式任务。
-4. 后续围绕同一个任务继续做咨询、拆解、执行、复盘、知识沉淀。
+数据完全存储在本地 `~/.dsh/workbench`，不上传任何服务器。
 
-所有核心数据默认存储在本机 `Documents/dsh-workbench` 下。
-
-```text
-Documents/dsh-workbench/
-├─ workbench.db
-└─ tasks/
-   └─ <任务ID>/
-```
-
-`tasks` 是固定 AI 工作区根目录。每个任务会在 `tasks/<任务ID>` 下拥有独立资料夹，用于存放该任务相关文件；AI 会话连接到 `tasks` 根工作区，避免 DSH 侧边栏出现大量零散工作区。
-
-### 功能
-
-**任务管理**
-
-- 今日、日历、任务列表三种视图。
-- 周视图和月视图日历。
-- 支持父任务、子任务和多层任务树。
-- 支持标题、Markdown 描述、类型、状态、优先级、截止时间、预计耗时、AI 策略、任务资料夹。
-- 支持关键词、状态、优先级、类型组合筛选。
-- 支持按截止时间、优先级、创建时间、标题排序。
-- 支持任务归档、恢复和变更记录。
-- 子任务全部完成后，父任务可自动完成。
-
-**快速录入**
-
-- 支持文字快速录入。
-- 支持粘贴图片或拖入图片，适合通知截图、考试信息、错误截图、表格照片等。
-- 支持在快速录入右下角切换模型。
-- 自动预分配任务 ID，并准备 `tasks/<任务ID>` 资料夹。
-- 创建 AI 澄清会话后，由 AI 调用工具提交待确认任务草稿。
-
-**AI 协作**
-
-- AI 澄清：把自然语言输入整理成结构化任务草稿。
-- AI 咨询：围绕任务给建议，不直接执行。
-- AI 拆解：生成子任务提案树，用户确认后写入。
-- AI 执行：仅对 AI 策略为“可执行”的任务开放；AI 完成后提交验收申请。
-- AI 复盘：已完成任务可生成复盘草稿，确认后写回任务。
-- AI 智能排序：为今日或日历中的指定日期生成执行顺序提案。
-- AI 日报/周报：基于任务事件和完成记录生成报告草稿。
-- 任务共享记忆：同一任务及其子树下的 AI 会话可共享上下文、阶段结论和决策。
-
-**知识库与点子**
-
-- 知识库可保存经验教训、决策、笔记和可复用片段。
-- 支持读取本地文档，让 AI 总结为知识草稿。
-- 知识条目可保存本地文件链接，便于追溯来源。
-- 点子模块用于记录灵感。
-- 点子王用于把多个相关点子聚合成主题集合。
-- AI 可根据点子或点子王继续头脑风暴，并生成落地任务草稿。
-
-**提醒与设置**
-
-- 到期任务会显示工作台横幅提醒。
-- 浏览器授权后可弹出系统桌面通知。
-- 支持准时、提前 15 分钟、提前 30 分钟、提前 1 小时、提前 1 天提醒。
-- 设置页可修改默认 AI 工作区。
-- 设置页可启用或关闭自动创建任务资料夹。
-- 设置页可启用或关闭桌面通知。
-- 任务类型、状态、优先级、点子类型由字典驱动，可新增、编辑、停用；内置项受保护。
-
-### 截图
+## 截图
 
 | 主界面 | 日历 | 任务列表 |
 |---|---|---|
@@ -95,204 +37,200 @@ Documents/dsh-workbench/
 |---|---|---|
 | ![知识库](screenshot/%E7%9F%A5%E8%AF%86%E5%BA%93%E7%95%8C%E9%9D%A2.png) | ![点子](screenshot/%E7%82%B9%E5%AD%90%E7%95%8C%E9%9D%A2.png) | ![点子王](screenshot/%E7%82%B9%E5%AD%90%E7%8E%8B.png) |
 
-### 安装
+## 功能清单
 
-前置条件：
+### 任务
+- 任务字段：标题、Markdown 描述、类型、状态、优先级、截止时间、AI 策略、提醒、工作区
+- 无限层级子任务；今日 / 日历 / 列表三种视图
+- 任务页筛选/排序：关键词（标题/描述）+ 状态/优先级/类型下拉多选可组合筛选；支持截止时间/优先级/创建时间/标题升降序；筛选保留父子层级，归档列表共用
+- 任务类型、状态、优先级全部由字典表驱动，可自行扩展（设置页“字典管理”已支持新增/编辑/停用类型、状态、优先级、点子类型，默认项受保护）
+- 已完成 / 已取消任务不可再次执行
 
-- DeepSeek Harness Web `0.1.0-rc.6`
+### AI
+- **快速录入澄清**：一句话 → 官方会话区进行需求澄清 → 生成待确认草稿
+- **AI 咨询**：对任务提问、要建议（不执行）
+- **AI 拆解**：生成子任务提案树，确认后落库
+- **AI 执行**：任意节点（含父任务）且 AI 策略为“可执行”时均可执行；AI 完成后提交验收申请，用户验收后才算完成；父任务验收通过时未完成子任务会级联完成
+- **验收「暂存」**：验收弹窗除「验收通过 / 驳回」外新增「暂存（先验证）」——草稿仍是待确认状态，但不再自动弹窗打断你；你先去跑回归测试，之后从「待处理」弹窗的「已暂存」段点「继续验收」唤回。仅验收类草稿（完成验收申请 / 复盘草稿）支持暂存
+- **驳回有痕、AI 可见**：驳回或暂存都会写入任务事件与任务共享记忆；`workbench_request_completion` 支持 `feedback` 参数，返回里会告知「本次是第几次提交、上次被驳回/暂存于何时、原因」，AI 不必等你口头转述
+- **草稿通知推送微信**：AI 提交草稿（验收申请 / 复盘 / 日报周报 / 知识 / 点子提案）时可经微信推送，复用任务提醒同一条通道与策略（静默时段、小时/日上限、汇总、熔断、未装 dsh-im 静默降级）；默认只开「验收申请」与「复盘草稿」，可在设置页按类型开关
+- **Skill 选择器（AI 会话前加载技能）**：发起 AI 执行/协助/拆解/复盘/排序/报告等会话前，提示词弹窗内可直接勾选本机已安装的 DSH Skill（支持按名称/描述搜索、多选、点击标签移除）；选中项会以“请加载这些技能”的指令注入到提示词开头，技能正文由 AI 通过 `skill` 工具按需加载。技能目录来自宿主 `skills` 注册表（`GET /api/workbench/skills`），宿主未安装该服务时选择器自动隐藏、行为与旧版完全一致
+- **状态聚合**：所有子任务完成后父任务自动完成（递归到根）；直接完成父任务会级联完成后代
+- **任务共享记忆**：同一任务/子树下的多个 AI 会话共享上下文，父任务会话自动加载整棵子树记忆，避免跨会话失忆
+- **存量修复**：提供 `pnpm repair` / `POST /api/workbench/maintenance/repair-parents` 幂等补齐历史父任务完成状态
+- **AI 智能排序（任意日期）**：今日/日历任一日期一键生成执行顺序提案，确认后应用（不修改任务字段）
+- **AI 日报/周报**：基于任务事件与完成记录自动生成报告草稿，确认后保存并可回看、删除
+- **系统级桌面提醒**：任务到期时在浏览器已授权的情况下发送系统通知（页面可最小化）
+- **重复任务**：任务可设置每天/每周/每月重复，到期自动生成实例（模板归档即停止）
+- **个人知识库 / 错题集**：经验教训、决策、笔记、片段沉淀为可搜索知识条目，复盘一键沉淀，AI 可提交知识草稿
+- **点子文件夹**：点子按「文件夹」组织——AI 可自动关联成文件夹，也能手动新建空文件夹、改名、删除、合并（A 并入 B），并把点子归入/移出一个或多个文件夹（多对多）；「未归类」区收散点子，文件夹可整体转成任务树
+- **今日容量**：今日页顶部把当天要做的事按 `estimatedMinutes × 优先级` 摊成一条时间轴，并与你设置的「每天可投入时长」（默认 6.5 小时，点击数字即可改）对比，一眼看出今天塞不塞得下
+- **会话标题栏入口**：通过 DSH 官方槽位 `conversation.session.header.actions` 在每个会话标题栏注册「工作台」按钮（切换开关，再点收起）；DSH 侧栏入口同时保留
+- **知识库增强（AI 总结本地文档 + 文件链接）**：知识库页面支持弹窗浏览选择本地文件，也可直接填写本地文档路径或 `file://`；后端读取文档内容并让 AI 总结为知识草稿；知识条目可保存 `file_link` 并一键调用系统默认程序打开/追溯本地文件
+- **点子 / 点子王**：灵感卡片快速记录；AI 自动找关联生成“点子王”；AI 头脑风暴后可确认转为任务
+- **AI 复盘**：已完成任务一键复盘，结论确认后写回任务
+- 同一任务只保留一个复盘会话；重复复盘进入同一会话
+
+### 数据与安全
+- SQLite（`~/.dsh/workbench/workbench.db`）+ 每日 JSON 备份规划
+- 所有工作台 API 均挂载在 `/api/workbench/*` 且仅允许 loopback 访问
+- 不读取、不上传 DSH 之外的任何数据
+
+## 安装
+
+### 前置条件
+
+- [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) **0.1.5-rc.1** Web 版
 - Node.js `^22.19.0` 或 `>=24.0.0`
 - pnpm `>=11.7.0 <12`
+- 网络可访问 npm registry（或使用镜像）
 
-从 npm 安装：
+### 从 npm 安装（推荐）
 
 ```sh
 dsh plugin --profile web add @guojing6/dsh-workbench
 ```
 
-从 GitHub 安装：
+或使用 npm 直接安装到项目：
+
+```sh
+npm install @guojing6/dsh-workbench
+```
+
+### 从 GitHub 安装
 
 ```sh
 dsh plugin --profile web add git+https://github.com/Guojing6/dsh-workbench.git
 ```
 
-安装或更新后，重启 `dsh web`，并在浏览器中硬刷新页面。
+或安装 Release tarball：
 
-### 开发
+```sh
+dsh plugin --profile web add file:/path/to/dsh-workbench-<version>.tgz
+```
+
+安装后重启 `dsh web`，浏览器硬刷新（Ctrl+Shift+R）。
+
+### 从源码开发
 
 ```sh
 git clone https://github.com/Guojing6/dsh-workbench.git
 cd dsh-workbench
 pnpm install
-pnpm check
-pnpm test
+pnpm check      # 类型检查 + 构建
+pnpm test       # 最小回归测试（使用构建产物）
 ```
 
-本地开发挂载：
+以开发模式挂载：
 
 ```sh
 pnpm build
 dsh plugin --profile web add link:/path/to/dsh-workbench
 ```
 
-常用命令：
+> 开发模式修改代码后需要重新 `pnpm build` 并重启 `dsh web`。
 
-```sh
-pnpm typecheck
-pnpm build
-pnpm test
-pnpm repair
-```
+## 兼容性与已知限制
 
-### 数据存储
+- 当前版本针对 **DSH 0.1.5-rc.1 Web 版** 开发与测试（插件 v1.13.1）。
+- 入口分两条：**会话标题栏按钮**走 DSH 官方槽位 `conversation.session.header.actions`（稳定）；
+  DSH 侧栏入口仍沿用 DOM 契约（`data-pane`、`logoRow`、`centerCol` 等 class）。
+  **DSH 升级到新的大版本时，请重新验证侧栏入口这些选择器，必要时适配。**
+- 与 `dsh-web-ui`（task-board / ssh）共存时使用其 `data-dsh-*` 互斥协议；未安装时自动失效，**不依赖 dsh-web-ui**。
+- 微信提醒依赖 `@xmanrui/dsh-im`：**软探测**（`ctx.get('dshIm')`），未安装或未配置投递目标时静默降级为页内提醒 + 桌面通知，不影响其它功能。
+- 技能目录依赖宿主 `skills` 注册表：未安装时 Skill 选择器自动隐藏。
+- 仅支持单用户本地使用；无云同步、无多用户权限体系。
+- AI 能力依赖你在 DSH 中已配置的模型与凭证；执行/咨询等会真实消耗 token。
 
-默认数据全部放在本机：
+## 版本历史
 
-- SQLite 数据库：`Documents/dsh-workbench/workbench.db`
-- 任务资料夹：`Documents/dsh-workbench/tasks/<任务ID>`
-- 工作台 API：`/api/workbench/*`
+| 版本 | 要点 |
+|---|---|
+| 1.13.1 | 修复会话标题栏入口导致前端加载失败（cordis 服务读取必须用 `ctx.get`）；新增点子「文件夹」（手动建/改名/删除/合并、多对多归入与移出、整体转任务树）；新增「今日容量」条与每天可投入时长设置；UI 视觉层统一（边框/阴影/字号/间距，浅色下保持模块可辨识）；用户入口改用官方槽位 |
+| 1.12.1 | 微信草稿通知正文精简（任务标题 + 摘要首行 + 一行操作）；修复 reminder 测试在 Windows 下未关库导致临时目录删除失败 |
+| 1.12.0 | 验收「暂存」（草稿保持待确认但不再自动弹窗，可唤回）；驳回/暂存留痕并回传提交历史给 AI；草稿通知接入微信（默认只开验收与复盘） |
+| 1.11.0 | Skill 选择器：AI 会话前可勾选本机已安装 Skill，注入「加载这些技能」指令（不内联正文） |
+| 1.10.x | 微信任务提醒：通道适配、分级/静默/节流/熔断、补发队列、策略配置界面 |
+| 1.9.0 | 工作台 UI 优化 P0-P2（大屏分栏、详情摘要卡与吸顶操作条、变更历史时间线、空状态 CTA） |
 
-知识库、点子、点子王、计划、报告、提醒、任务事件都存储在 SQLite 中。本地文档总结只读取用户选择或填写的文件路径。
+## 路线图
 
-工作台 API 限制为 loopback 访问，定位为单用户本地插件，不提供云同步和多用户权限体系。
+- [x] V1：任务 / 日历 / 快速录入澄清 / 子任务 / 会话关联
+- [x] V1.5：AI 执行 + 用户验收 / 复盘 / 归档 / 变更历史 / 任务工作区
+- [x] V2 每日 AI 智能排序（0.6.0）
+- [x] V2：系统级桌面提醒（0.8.0）
+- [x] V2 日报/周报（0.7.0）
+- [x] V2：重复任务（0.12.0）
+- [x] V2：个人知识库 / 错题集（1.0.0）
+- [x] V2：知识库增强（AI 总结本地文档 + 文件链接）（1.2.0）
+- [x] V2：今日计划面板长列表优化（sticky 统计卡 / 固定高度内部滚动 / 展开收起 / 面板内完成·推迟）（1.4.0）
+- [x] V2：AI 会话前自定义提示词输入（除快速录入外，默认提示词 + 用户输入追加）（1.5.0）
+- [x] V2：今日/日历计划面板手动编辑（上下移、改备注、从今日任务增删计划项；保留 AI 生成 + 确认 + 完成/推迟）（1.5.0）
+- [x] V2：UI 美化（卡片/列表/表单/点子关联展示统一）
+- [x] V2：任务类型自定义 UI（设置页字典管理：类型/状态/优先级/点子类型）
+- [x] V2：任务到期提醒接入微信（1.10.x）
+- [x] V2：Skill 选择器（1.11.0）
+- [x] V2：验收暂存 / 驳回反馈闭环 / 草稿通知（1.12.0）
+- [x] V2：UI 视觉层重构 + 点子文件夹 + 官方槽位入口（1.13.x）
+- [x] V2：提醒状态语义修复（窗口/终态分离 + 重新武装）（1.13.2）
+- [ ] 待规划：客户端 `WorkbenchApp` 拆分（施工图见 `docs/design/2026-09-09-client-split-backlog.md`）
+- [ ] V2：定时自动化
+- [ ] 未来：多端同步、任务拖拽排序、数据导入导出
 
-### AI 工具
+## 免责声明
 
-插件会向 DSH 注册这些工具，供 AI 会话调用：
+本插件为社区项目，与 DeepSeek 官方无关，不提供任何担保。安装即表示你信任该代码会以你的 DSH 用户权限在本机运行。执行类 AI 操作可能修改工作区文件、消耗 API 额度，请先阅读代码并谨慎使用。
 
-- `workbench_submit_task`
-- `workbench_update_task`
-- `workbench_propose_subtasks`
-- `workbench_request_completion`
-- `workbench_submit_review`
-- `workbench_save_task_memory`
-- `workbench_propose_daily_plan`
-- `workbench_submit_report`
-- `workbench_submit_knowledge`
-- `workbench_propose_idea_clusters`
-- `workbench_submit_idea_tasks`
+## License
 
-多数工具只写入待确认草稿。用户在工作台确认前，AI 不会直接创建子任务、保存报告、写入知识库或完成任务。
+本项目代码使用 [MIT License](./LICENSE)。
 
-### 兼容性
-
-- 当前版本针对 DeepSeek Harness Web `0.1.0-rc.6` 开发和测试。
-- 客户端入口依赖 DSH Web 的 DOM 结构和客户端注入能力。
-- DSH Web 升级后，如侧边栏入口、中心区挂载、模型选择或会话发送异常，需要重新适配。
-- 本插件不依赖 `dsh-web-ui`，但保留与相关侧边栏入口的互斥处理。
-
-### 路线图
-
-- [x] 任务、日历、快速录入、AI 澄清
-- [x] 子任务拆解、任务会话关联
-- [x] AI 执行、用户验收、复盘、归档
-- [x] 任务共享记忆
-- [x] 今日和日历 AI 智能排序
-- [x] 日报、周报
-- [x] 重复任务
-- [x] 桌面通知
-- [x] 知识库和本地文档总结
-- [x] 点子、点子王、点子落地任务
-- [x] 快速录入图片输入和模型切换
-- [ ] 数据导入导出
-- [ ] 自动备份管理界面
-- [ ] 跨设备同步
-- [ ] 任务拖拽排序
-
-### 免责声明
-
-本项目是社区插件，与 DeepSeek 官方无关。安装插件表示你信任该代码会以你的 DSH 用户权限在本机运行。
-
-AI 执行、文档读取、文件写入和本地工作区操作可能消耗模型额度或修改本机文件。建议先阅读代码，在明确任务范围后再启用可执行策略。
-
-### License
-
-MIT. See [LICENSE](./LICENSE).
-
-部分客户端挂载和构建方式参考了开源项目，详见 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)。
+部分 DOM 挂载模式和客户端构建包装参考了以下开源项目，详见 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)：
+- `dsh-task-board`（dsh-web-ui，BSD-3-Clause）
+- `dsh-genui`（MIT）
 
 ---
 
-## English
+# English
 
-### What Is It
+## What is this
 
-`dsh-workbench` is a local-first personal workbench plugin for DeepSeek Harness Web.
+`dsh-workbench` is a personal workbench plugin for DeepSeek Harness Web:
+calendar + hierarchical task list, natural-language task intake with AI clarification,
+multiple AI sessions per task (clarify / consult / break down / execute / review),
+execution with user acceptance, AI prioritization for any date, daily/weekly reports,
+desktop notifications, per-task AI workspaces, reminders, archives, and Markdown reviews.
 
-It adds a task-centered AI workspace to DSH:
+All task data is stored locally under `~/.dsh/workbench`.
 
-- Calendar and hierarchical task list.
-- Quick intake from text, pasted images, or dragged images.
-- AI clarification, consultation, breakdown, execution, and review.
-- User acceptance before AI execution marks a task done.
-- AI planning, daily reports, weekly reports, knowledge base, ideas, and idea clusters.
-- Local task folders under `Documents/dsh-workbench/tasks`.
-
-Default layout:
-
-```text
-Documents/dsh-workbench/
-├─ workbench.db
-└─ tasks/
-   └─ <taskId>/
-```
-
-DSH sessions connect to the `tasks` root workspace. Files for each task are stored in `tasks/<taskId>`.
-
-### Install
-
-Requirements:
-
-- DeepSeek Harness Web `0.1.0-rc.6`
-- Node.js `^22.19.0` or `>=24.0.0`
-- pnpm `>=11.7.0 <12`
-
-Install from npm:
+## Install
 
 ```sh
+# From npm (recommended)
 dsh plugin --profile web add @guojing6/dsh-workbench
-```
 
-Install from GitHub:
-
-```sh
+# From source or release tarball
 dsh plugin --profile web add git+https://github.com/Guojing6/dsh-workbench.git
+dsh plugin --profile web add file:/path/to/dsh-workbench-<version>.tgz
 ```
 
-Restart `dsh web` and hard-refresh the browser after installation or update.
+Then restart `dsh web` and hard-refresh the browser.
 
-### Development
+## Compatibility
 
-```sh
-git clone https://github.com/Guojing6/dsh-workbench.git
-cd dsh-workbench
-pnpm install
-pnpm check
-pnpm test
-```
+- Built and tested against **DeepSeek Harness 0.1.5-rc.1 Web**.
+- Does **not** depend on `dsh-web-ui`; optional coexistence protocol only.
+- Node.js `^22.19.0 || >=24.0.0`, pnpm `>=11.7.0 <12`.
 
-Use a local linked plugin while developing:
+## Roadmap
 
-```sh
-pnpm build
-dsh plugin --profile web add link:/path/to/dsh-workbench
-```
+- [x] V2: AI prioritization for any date, OS-level notifications, daily/weekly reports
+- [x] V2: recurring tasks, personal knowledge base / lessons, ideas & idea clusters
+- [x] V2: Today plan panel long-list optimization (sticky stats / fixed-height inner scroll / expand-collapse / inline complete & defer) (1.4.0)
+- [x] V2: Custom prompt input before AI sessions (except quick intake; append user input after the default prompt) (1.5.0)
+- [x] V2: Manual editing for today/calendar plan panel (reorder, edit notes, add/remove plan items; keep AI generate + confirm + complete/defer) (1.5.0)
+- [ ] Future: scheduled automation, multi-device sync, drag-and-drop, import/export
 
-### Data And Privacy
-
-Core data is stored locally:
-
-- SQLite database: `Documents/dsh-workbench/workbench.db`
-- Task files: `Documents/dsh-workbench/tasks/<taskId>`
-- Workbench API: `/api/workbench/*`, loopback only
-
-The plugin does not provide cloud sync. AI sessions use the model providers configured in your DSH environment and may consume tokens.
-
-### Compatibility
-
-- Built for DeepSeek Harness Web `0.1.0-rc.6`.
-- Depends on DSH Web client injection for sessions, workspaces, model directories, and UI workspace connection.
-- DSH Web upgrades may require selector or runtime API adjustments.
-
-### License
+## License
 
 MIT. See [LICENSE](./LICENSE) and [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md).

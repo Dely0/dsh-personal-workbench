@@ -15,9 +15,11 @@ import { makeDictionaryRoute } from './api/dictionaryRoute.js'
 import { makeLocalDirRoute } from './api/localDirRoute.js'
 import { makeOpenFileRoute } from './api/openFileRoute.js'
 import { makeRoutes } from './api/routes.js'
+import { makeSkillRoutes } from './api/routes/skills.js'
+import { probeSkills } from './api/skills.js'
 import { openWorkbenchDb, type WorkbenchDbConfig } from './db/database.js'
 import { seedDictionaries } from './db/seed.js'
-import { countFiredRemindersSince, countQueue, enqueueReminder, listQueue, markQueueAttempt, readMeta, removeQueueEntry } from './db/repo.js'
+import { countFiredRemindersSince, countQueue, enqueueReminder, listDueRemindersInWindow, listQueue, markQueueAttempt, readMeta, removeQueueEntry, skipStaleReminders } from './db/repo.js'
 import { probeDshIm, WechatChannelAdapter } from './reminder/adapter.js'
 import { readReminderPolicy, writeReminderPolicy } from './reminder/config.js'
 import { ReminderScheduler } from './reminder/scheduler.js'
@@ -39,6 +41,7 @@ const WORKBENCH_GUIDANCE = [
   'V2 提醒：任务到期提醒由工作台自动弹出页面横幅与桌面通知；不要用其他方式重复提醒。',
   '知识库：值得沉淀的经验教训/决策/笔记请调用 workbench_submit_knowledge 提交知识草稿（kind_code/tags）；如来自本地文档，应同时传入 file_link（file:// 或绝对路径）用于追溯；用户确认后入库；复盘时优先考虑。',
   '点子/点子王：关联点子请调用 workbench_propose_idea_clusters；头脑风暴落地请调用 workbench_submit_idea_tasks。都只写草稿，用户确认后才生效。',
+  'AI 会话前用户可能通过工作台选择 DSH Skill；若提示词要求加载技能，请先调用 skill 工具逐个加载，加载失败要如实说明后继续。',
   '/workbench 是个人工作台“快速录入新任务”的专用命令：当用户消息以 /workbench 开头时，只把后续文字和用户提供的图片/PDF/DOCX理解为新任务线索，按 workbench-intake 规范澄清，并且只能调用 workbench_submit_task 写入 pending 任务草稿；不要执行、拆解、生成计划/报告/知识/点子/复盘，也不要处理微信提醒。',
   '用户提到「工作台 / 任务 / 日历 / 提醒 / 子任务 / 计划 / 日报周报」时即指本插件，请据此协作。',
 ].join('')
@@ -96,13 +99,19 @@ export function apply(ctx: Context, config: Config = {}): void {
       resolveTarget: () => adapter.resolveTarget(),
     },
     policy: { read: () => readReminderPolicy(db), write: (raw) => writeReminderPolicy(db, raw) },
+    listDue: () => {
+      const policy = readReminderPolicy(db)
+      if (!policy.enabled) return []
+      skipStaleReminders(db, policy.catchupWindowHours)
+      return listDueRemindersInWindow(db, policy.catchupWindowHours)
+    },
     test: async () => {
       const outcome = await adapter.send({ title: '工作台 · 微信提醒测试', body: `如果你在手机上看到这条消息，说明微信提醒已打通。\n时间：${new Date().toLocaleString('zh-CN', { hour12: false })}` })
       return outcome.ok ? { ok: true } : { ok: false, reason: outcome.reason }
     },
   })
-  // 独立路由文件：保证热重载时新增/修复的“选择文件”“打开文件”“字典管理”接口能随入口模块一起重新加载。
-  routes.unshift(makeDictionaryRoute(db), makeLocalDirRoute(), makeOpenFileRoute())
+  // 独立路由文件：保证热重载时新增/修复的“选择文件”“打开文件”“字典管理”“技能目录”接口能随入口模块一起重新加载。
+  routes.unshift(makeDictionaryRoute(db), makeLocalDirRoute(), makeOpenFileRoute(), ...makeSkillRoutes({ probe: () => probeSkills(ctx) }))
 
   ctx.effect(
     () => {
