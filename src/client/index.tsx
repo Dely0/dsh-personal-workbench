@@ -253,6 +253,7 @@ function QuickModelPicker({ runtime, value, onChange, disabled = false, onError,
           <span>{selectedLabelParts.model}</span>
           {selectedLabelParts.effort !== '' && <small>{selectedLabelParts.effort}</small>}
         </span>
+        <Icon name="chevron-down" size={14} />
       </button>
       {open && (
         <div className="wb-model-menu" style={{ [alignRight ? 'right' : 'left']: 0 }}>
@@ -2484,33 +2485,9 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
           size="md"
           panelClassName="wb-quick-dialog"
           onClose={() => setShowQuick(false)}
-          footer={(
-            <>
-              <div className="wb-quick-actions">
-                <QuickModelPicker
-                  runtime={runtime}
-                  value={quickModelSelectionState}
-                  onChange={setQuickModelSelection}
-                  disabled={busy}
-                  onError={setError}
-                  alignRight
-                />
-              </div>
-              <button
-                className="wb-btn primary wb-quick-submit"
-                disabled={busy || (quickText.trim() === '' && quickAttachments.length === 0)}
-                onClick={() => void startAISession('clarify', null, quickText, [], undefined, quickAttachments)}
-                aria-label="创建澄清会话"
-                title="创建澄清会话"
-              >
-                <Icon name="upload" />
-              </button>
-            </>
-          )}
         >
           <div className="wb-quick-modal">
-            <label className="wb-field wb-quick-input">
-              <span>一句话描述任务</span>
+            <div className="wb-quick-composer">
               <textarea
                 autoFocus
                 rows={3}
@@ -2529,9 +2506,30 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                   e.preventDefault()
                   addQuickAttachments(files)
                 }}
-                placeholder="例如：周五 10:30 接待重要客户，也可以粘贴或拖入图片、PDF、DOCX"
+                placeholder="描述你想要构建的内容，/ 调用指令，@ 文件或对话"
               />
-            </label>
+              <div className="wb-quick-composer-bar">
+                <div className="wb-quick-actions">
+                  <QuickModelPicker
+                    runtime={runtime}
+                    value={quickModelSelectionState}
+                    onChange={setQuickModelSelection}
+                    disabled={busy}
+                    onError={setError}
+                    alignRight
+                  />
+                </div>
+                <button
+                  className="wb-btn primary wb-quick-submit"
+                  disabled={busy || (quickText.trim() === '' && quickAttachments.length === 0)}
+                  onClick={() => void startAISession('clarify', null, quickText, [], undefined, quickAttachments)}
+                  aria-label="创建澄清会话"
+                  title="创建澄清会话"
+                >
+                  <Icon name="upload" />
+                </button>
+              </div>
+            </div>
             {quickAttachments.length > 0 && (
               <div className="wb-quick-image-rail" aria-label="快速录入附件">
                 {quickAttachments.map((attachment) => (
