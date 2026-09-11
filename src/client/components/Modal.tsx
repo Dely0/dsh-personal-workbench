@@ -14,6 +14,7 @@ export interface ModalProps {
   /** 标题栏右侧的自定义内容（如状态徽标） */
   titleExtra?: ReactNode
   size?: ModalSize
+  panelClassName?: string
   /** 底部操作区；不传则不渲染底栏 */
   footer?: ReactNode
   onClose: () => void
@@ -40,7 +41,7 @@ function useScrollLock(): void {
   }, [])
 }
 
-export function Modal({ title, titleExtra, size = 'md', footer, onClose, closeOnBackdrop = true, children }: ModalProps): ReactNode {
+export function Modal({ title, titleExtra, size = 'md', panelClassName = '', footer, onClose, closeOnBackdrop = true, children }: ModalProps): ReactNode {
   const panelRef = useRef<HTMLDivElement | null>(null)
   const restoreFocusRef = useRef<HTMLElement | null>(null)
   useScrollLock()
@@ -86,7 +87,7 @@ export function Modal({ title, titleExtra, size = 'md', footer, onClose, closeOn
       onMouseDown={(event) => { if (closeOnBackdrop && event.target === event.currentTarget) onClose() }}
     >
       <div
-        className={`wb-dialog wb-dialog-${size}`}
+        className={`wb-dialog wb-dialog-${size}${panelClassName === '' ? '' : ` ${panelClassName}`}`}
         role="dialog"
         aria-modal="true"
         tabIndex={-1}

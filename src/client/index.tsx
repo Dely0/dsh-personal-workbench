@@ -2482,9 +2482,20 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
         <Modal
           title={<><Icon name="sparkles" />快速录入</>}
           size="md"
+          panelClassName="wb-quick-dialog"
           onClose={() => setShowQuick(false)}
           footer={(
             <>
+              <div className="wb-quick-actions">
+                <QuickModelPicker
+                  runtime={runtime}
+                  value={quickModelSelectionState}
+                  onChange={setQuickModelSelection}
+                  disabled={busy}
+                  onError={setError}
+                  alignRight
+                />
+              </div>
               <button className="wb-btn" onClick={() => setShowQuick(false)}>取消</button>
               <button
                 className="wb-btn primary"
@@ -2501,7 +2512,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
               <span>一句话描述任务</span>
               <textarea
                 autoFocus
-                rows={4}
+                rows={3}
                 value={quickText}
                 onChange={(e) => setQuickText(e.target.value)}
                 onPaste={(e) => {
@@ -2520,17 +2531,6 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                 placeholder="例如：周五 10:30 接待重要客户，也可以粘贴或拖入图片、PDF、DOCX"
               />
             </label>
-            <div className="wb-quick-meta">
-              <span className="wb-quick-meta-label">澄清模型</span>
-              <QuickModelPicker
-                runtime={runtime}
-                value={quickModelSelectionState}
-                onChange={setQuickModelSelection}
-                disabled={busy}
-                onError={setError}
-                alignRight
-              />
-            </div>
             {quickAttachments.length > 0 && (
               <div className="wb-quick-image-rail" aria-label="快速录入附件">
                 {quickAttachments.map((attachment) => (
