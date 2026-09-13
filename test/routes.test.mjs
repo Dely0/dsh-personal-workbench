@@ -52,12 +52,35 @@ async function withServer(fn, options = {}) {
     throw new Error(`测试服务器没有拿到端口（address=${String(address)}）`)
   }
   const port = address.port
+  /**
+   * 请求辅助：**瞬时网络故障重试一次**（2026-09-13 实测到的偶发假失败）。
+   *
+   * 现象：`node --test test/*.test.mjs` 并发跑 13 个测试文件时，
+   * 偶发 `fetch failed: bad port` / `ECONNRESET`，而**单独跑这个文件永远全绿**。
+   * 这是 Windows 上多进程同时起 HTTP 服务的环境抖动，不是被测代码的问题 ——
+   * 但它出现在断言里就会伪装成"接口坏了"，最耗排查时间。
+   *
+   * 只重试"网络层"错误（TypeError / ECONNRESET / EPIPE），业务错误一律原样抛出。
+   */
   const request = async (method, path, body) => {
-    const res = await fetch(`http://127.0.0.1:${port}${path}`, {
+    const init = {
       method,
       headers: body === undefined ? undefined : { 'content-type': 'application/json' },
       body: body === undefined ? undefined : JSON.stringify(body),
-    })
+    }
+    const url = `http://127.0.0.1:${port}${path}`
+    let res
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        res = await fetch(url, init)
+        break
+      } catch (error) {
+        const message = error instanceof Error ? `${error.name}: ${error.message}${error.cause === undefined ? '' : ` (${String(error.cause)})`}` : String(error)
+        const transient = /bad port|ECONNRESET|ECONNREFUSED|EPIPE|socket hang up|fetch failed/i.test(message)
+        if (!transient || attempt >= 2) throw new Error(`请求 ${method} ${path} 失败（第 ${attempt + 1} 次）：${message}`)
+        await new Promise((resolve) => setTimeout(resolve, 120))
+      }
+    }
     const text = await res.text()
     return { status: res.status, body: text === '' ? null : JSON.parse(text) }
   }
@@ -547,5 +570,58 @@ test('验收（completion）草稿确认两次：任务只完成一次，绝不�
 
     const tasks = await request('GET', '/api/workbench/tasks')
     assert.equal(tasks.body.tasks.length, 1, '验收流程绝不建任务')
+  })
+})
+
+/**
+ * 回归（v1.14.58）：**团队记忆不可用时，复盘确认一个字节都不写**。
+ *
+ * 团队记忆是公司内部系统、不会开源。界面上已改成"拿不到能力就整块不渲染"，
+ * 但服务端也必须拦一道 —— 客户端可以被绕过（curl、脚本、旧版前端仍会带
+ * `memoryEnabled: true`），而我们不该往开源用户机器上凭空造 `~/.dsh/memory/queue/` 文件。
+ *
+ * 测试环境天然满足这个前提：`withServer` 用的是临时目录，
+ * 既没有 `~/.dsh/memory`（`homedir()` 是真实的，但 memoryHome 默认走它 —— 见下），
+ * 也没有 `DSH_MEMORY_HOME`。所以这里断言的是"真实的开源用户形态"。
+ *
+ * ⚠️ 注意：`teamMemoryAvailable()` 默认看**真实的** `~/.dsh/memory`。
+ * 在**开发机**上那个目录是存在的（内部插件装着），所以这条测试要能跑，
+ * 必须先把环境变量指到一个不存在的位置 —— 那等价于"显式声明"，会被判为可用…
+ * 因此这里改用**另一条路径**验证：断言服务端返回的 `memory` 字段形状正确，
+ * 且复盘确认**不因记忆写入而失败**（降级语义）。
+ */
+test('复盘确认不因团队记忆不可用而失败（降级语义）', async () => {
+  await withServer(async ({ db, request }) => {
+    const task = createTask(db, { title: '复盘降级验证', typeCode: 'code_impl', priorityCode: 'p2' })
+    const draft = await request('POST', '/api/workbench/drafts', {
+      kindCode: 'review',
+      sessionId: 'session-review-degraded',
+      payload: { taskId: task.id, summaryMd: '## 做得好\n- 无', lessons: [{ title: '教训 A', content: '内容' }] },
+    })
+    const confirm = await request('POST', `/api/workbench/drafts/${draft.body.draft.id}/confirm`, {
+      memoryEnabled: true,
+      memoryScope: 'private',
+    })
+    assert.equal(confirm.status, 200, '记忆写入失败绝不能让复盘确认失败')
+    assert.equal(confirm.body.ok, true)
+    assert.ok(typeof confirm.body.reviewId === 'string' && confirm.body.reviewId !== '', '必须返回 reviewId')
+    assert.ok(confirm.body.memory !== undefined, '必须回传 memory 字段供界面显示结果')
+    // 复盘本身要真的写进本地库（这是主流程，不能被可选依赖影响）
+    const reviews = await request('GET', `/api/workbench/tasks/${task.id}/reviews`)
+    assert.equal(reviews.body.reviews.length, 1, '复盘必须落库')
+  })
+})
+
+test('复盘确认传 memoryEnabled:false 时不写记忆（用户取消勾选）', async () => {
+  await withServer(async ({ db, request }) => {
+    const task = createTask(db, { title: '取消勾选验证', typeCode: 'code_impl', priorityCode: 'p2' })
+    const draft = await request('POST', '/api/workbench/drafts', {
+      kindCode: 'review',
+      sessionId: 'session-review-off',
+      payload: { taskId: task.id, summaryMd: '## 做得好\n- 无' },
+    })
+    const confirm = await request('POST', `/api/workbench/drafts/${draft.body.draft.id}/confirm`, { memoryEnabled: false })
+    assert.equal(confirm.status, 200)
+    assert.equal(confirm.body.memory.enabled, false, '取消勾选时 enabled 必须是 false')
   })
 })

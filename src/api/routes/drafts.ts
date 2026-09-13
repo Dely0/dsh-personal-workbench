@@ -6,7 +6,7 @@ import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import type { DatabaseSync } from 'node:sqlite'
 import { abandonDraft, addTaskMemory, appendEvent, completeTaskCascade, confirmDailyPlanDraft, confirmIdeaClusterDraft, confirmIdeaTaskDraft, confirmKnowledgeDraft, confirmReportDraft, confirmSubtaskPlanDraft, confirmTaskDraft, createDraft, createTaskReview, deferDraft, getDictionary, getDraft, getDraftBySession, getLatestActiveDraft, getTask, isDeferrableDraftKind, linkTaskSession, listDeferredDrafts, resumeDraft, updateDraft, updateTaskWithCompletion } from '../../db/repo.js'
 import { DRAFTS_PREFIX, isLoopbackRequest, pathSegments, publicTask, readJsonBody, writeJson } from './helpers.js'
-import { writeReviewToTeamMemory, type TeamMemoryService } from '../../review-memory.js'
+import { writeReviewToTeamMemory, teamMemoryAvailable, type TeamMemoryService } from '../../review-memory.js'
 
 /** 草稿关联的任务 id（验收 / 复盘 / 拆解类草稿会带；任务类草稿确认后才存在）。 */
 function taskIdOf(draft: { payload: Record<string, unknown> }): string | undefined {
@@ -189,17 +189,27 @@ export function makeDraftRoutes(db: DatabaseSync, deps: { teamMemory?: TeamMemor
               /**
                * v1.14.0：复盘确认时**顺带**把结论写进团队记忆库（否则复盘只活在本机）。
                *
-               * 三条硬约束：
+               * ## ⚠️ 团队记忆是**公司内部系统**（v1.14.58 补的能力门卫）
+               *
+               * 它不会开源，开源用户拿不到 `dsh-team-memory` 插件与内网记忆服务。
+               * 界面上已经改成"拿不到能力就整块不渲染"，但**服务端也要拦一道**：
+               * 客户端可以被绕过（curl / 脚本 / 旧版前端仍会带 `memoryEnabled: true`），
+               * 而我们**不该往一个开源用户机器上凭空造 `~/.dsh/memory/queue/` 文件**。
+               * 所以这里先问 `teamMemoryAvailable()`，不可用就直接不写、回 `enabled: false`。
+               *
+               * 三条硬约束（原样保留）：
                * 1. 可见性默认 `private`（复盘可能含客户信息），由确认弹窗传 `memoryScope` 覆盖；
                * 2. `memoryEnabled === false`（用户在弹窗里取消勾选）→ 一个字节都不写；
                * 3. **写失败绝不让复盘确认失败** —— 复盘已经进本地库了，这是"额外的沉淀"，
                *    不是前置条件；失败只回一条 degradedReason 给界面显示。
                */
-              const memory = await writeReviewToTeamMemory(db, reviewId, {
-                enabled: body?.memoryEnabled !== false,
-                scope: body?.memoryScope === 'team' ? 'team' : 'private',
-                service: teamMemory,
-              })
+              const memory = teamMemoryAvailable()
+                ? await writeReviewToTeamMemory(db, reviewId, {
+                    enabled: body?.memoryEnabled !== false,
+                    scope: body?.memoryScope === 'team' ? 'team' : 'private',
+                    service: teamMemory,
+                  })
+                : { enabled: false as const, scope: 'private' as const, written: 0, skipped: 0 }
               return writeJson(res, 200, { ok: true, reviewId, memory })
             }
             if (draft.kindCode === 'completion') {

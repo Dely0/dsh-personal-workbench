@@ -32,7 +32,7 @@
  * 全部路径都 try/catch，失败只回一条 `degradedReason`，由界面显示
  * "本地已留档，待补传"。绝不因为可选依赖拖死宿主（插件既有原则）。
  */
-import { mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -74,6 +74,49 @@ const WRITTEN_META_KEY = 'review_memory_written'
 export function memoryHome(env: NodeJS.ProcessEnv = process.env): string {
   const explicit = env.DSH_MEMORY_HOME ?? env.TEAM_MEMORY_HOME
   return explicit !== undefined && explicit.trim() !== '' ? explicit : join(homedir(), '.dsh', 'memory')
+}
+
+/**
+ * **团队记忆能力是否可用**（v1.14.58）—— 决定界面上要不要出现「同步到团队记忆库」。
+ *
+ * ## 为什么需要它（用户 2026-09-13 说明）
+ *
+ * 团队记忆是**公司内部系统**，不会开源；GitHub 上的开源用户拿不到
+ * `dsh-team-memory` 插件与内网记忆服务。而复盘草稿的确认弹框**无条件**渲染了
+ * 「🧠 同步到团队记忆库」勾选框与"结构化教训（每条会单独写入团队记忆）"这类引导语 ——
+ * 对开源用户来说那是一个**永远用不了的功能**，纯噪音。
+ *
+ * 所以这里给界面一个可靠的"有没有"信号，拿不到就**整块不渲染**（不是置灰：
+ * 置灰仍会把内部系统的名词摆到开源用户面前）。
+ *
+ * ## 判据为什么选"记忆库根目录"
+ *
+ * 1. **不能在客户端猜**：客户端既没有 fs，也不该知道 `~/.dsh/memory` 这种内部约定；
+ * 2. **不能靠 `ctx.get('teamMemory')`**：那个服务目前**并不存在**
+ *    （`dsh-team-memory` 只暴露 AI 工具 `ls_team_memory_*`，没有 `ctx.provide`），
+ *    拿它当判据会在**内部机器上误判为"不可用"**、把真功能藏掉；
+ * 3. `~/.dsh/memory` 目录就是这个插件自己的落盘根（`notes/` + `queue/`），
+ *    内部机器上必然在（已实测）；开源机器上不会有人手工建它。
+ *    另外允许用 `DSH_MEMORY_HOME` / `TEAM_MEMORY_HOME` **显式声明** ——
+ *    显式配置本身就是"我知道这个功能"的证据，此时即便目录尚未创建也算可用。
+ */
+export function teamMemoryAvailable(env: NodeJS.ProcessEnv = process.env, options: { home?: string } = {}): boolean {
+  const explicit = env.DSH_MEMORY_HOME ?? env.TEAM_MEMORY_HOME
+  if (explicit !== undefined && explicit.trim() !== '') return true
+  /**
+   * `options.home`：**只给测试用**的注入点。
+   *
+   * 为什么必须留它：`homedir()` 读的是 **OS 的真实用户主目录**，不认传进来的 `env`
+   * （实测过：`teamMemoryAvailable({ USERPROFILE: 'Z:\\nope' })` 依然返回 true）——
+   * 也就是说"不可用"这一路**根本无法用 env 证伪**。没有这个注入点，
+   * 这条判定就没人能测，而它决定的是"内部功能要不要出现在开源用户面前"，必须可测。
+   */
+  try {
+    return existsSync(options.home ?? memoryHome(env))
+  } catch {
+    /** 探测失败一律当"不可用"：宁可少显示一个内部功能，也不要给开源用户摆个假的。 */
+    return false
+  }
 }
 
 /**

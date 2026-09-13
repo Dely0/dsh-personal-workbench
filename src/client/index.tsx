@@ -1631,6 +1631,14 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
         onNotice={(message, tone) => pushToast(message, tone)}
         onConfirmed={(outcome) => handleDraftConfirmed(outcome, pendingDraft)}
         switchedFrom={draftSwitchedFrom === null ? undefined : { kindCode: dicts.find((d) => d.kind === 'draft_kind' && d.code === draftSwitchedFrom.kindCode)?.name ?? draftSwitchedFrom.kindCode }}
+        /**
+         * 团队记忆能力：来自 `GET /api/workbench/bootstrap` 的 `memoryAvailable`。
+         *
+         * 团队记忆是**公司内部系统**、不会开源，开源用户拿不到服务 —— 所以
+         * `bootstrap` 还没回来 / 旧服务端不给这个字段时**按不可用处理**，
+         * 复盘弹框里的「🧠 同步到团队记忆库」整块不渲染。
+         */
+        memoryAvailable={bootstrap?.memoryAvailable === true}
         onDismissed={() => { dismissDraft(pendingDraft) }}
         /**
          * 「回到…会话」用：**只把横幅从投影里拿掉**，不触发任何网络刷新。

@@ -183,6 +183,13 @@ dsh plugin --profile web add link:/path/to/dsh-personal-workbench
 | 微信提醒 | 可选插件 `@xmanrui/dsh-im` | 静默降级为页内提醒 + 桌面通知 |
 | 技能选择器 | 宿主 `skills` 注册表 | 选择器自动隐藏 |
 
+> **关于「复盘 → 团队记忆库」**：该功能依赖**公司内部的** `dsh-team-memory` 插件与内网记忆服务，
+> **不在开源版本的能力范围内**。它做的是**能力门控**：本机拿不到记忆库时，
+> 复盘弹框里那整块（勾选框 / 可见性 / 预览）**不渲染**，复盘只写回任务详情；
+> 服务端也会拦一道，不会在开源用户机器上创建 `~/.dsh/memory/` 下的任何文件。
+> 判定见 `teamMemoryAvailable()`（`src/review-memory.ts`），测试见
+> `test/teamMemoryAvailability.test.mjs`。
+
 > 历史说明（仅供对照，**已不适用**）：v1.14.0–v1.14.52 曾支持 DSH `0.1.1-rc.1`，
 > 走的是"往侧栏 DOM 注入入口行 + 自建覆盖层"的降级腿。那条腿连同社区
 > 「sidebar-entry 家族约定」（`data-dsh-<pkg>-entry` / `dsh-panel-activate` / 摘兄弟

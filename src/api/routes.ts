@@ -23,6 +23,7 @@ import { makeReminderRoutes, type ReminderRouteDeps } from './routes/reminders.j
 import { makeReportRoutes } from './routes/reports.js'
 import { makeTaskRoutes } from './routes/tasks.js'
 import type { TeamMemoryService } from '../review-memory.js'
+import { teamMemoryAvailable } from '../review-memory.js'
 
 /**
  * 插件版本：直接读包内 package.json，避免再出现"代码已升级、health 还报旧版本"的漂移。
@@ -198,6 +199,14 @@ export function makeRoutes(db: DatabaseSync, deps: WorkbenchRouteDeps = {}): Web
           stats: { overdue: overdue.length, todayDue: todayDue.length, doing: doing.length, total: tasks.length },
           todayPlan: planView,
           now: now.toISOString(),
+          /**
+           * 团队记忆是否可用（v1.14.58）。
+           *
+           * 它是**内部系统**、不会开源，所以界面必须能知道"这台机器上有没有"：
+           * 拿不到就整块不渲染「同步到团队记忆库」，否则开源用户会看到一个永远用不了的勾选框。
+           * 判据在 `teamMemoryAvailable()`（看 `~/.dsh/memory` 是否存在，或环境变量显式声明）。
+           */
+          memoryAvailable: teamMemoryAvailable(),
         })
       },
     },

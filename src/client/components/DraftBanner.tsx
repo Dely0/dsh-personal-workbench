@@ -115,6 +115,18 @@ export interface DraftBannerProps {
    * 刚才那份，其实已经是另一份了 —— 接着点主按钮就会确认错东西。
    */
   switchedFrom?: { kindCode: string }
+  /**
+   * **团队记忆能力**（v1.14.58）：只有 `true` 才渲染「🧠 同步到团队记忆库」整块。
+   *
+   * 团队记忆是**公司内部系统**、不会开源 —— 开源用户没有 `dsh-team-memory` 插件与内网服务。
+   * 拿不到能力时**整块不渲染**（不是置灰：置灰仍会把内部系统的名词摆给开源用户，
+   * 而那是一个永远用不了的勾选框，纯噪音）。
+   *
+   * 缺省按 `false` 处理：宁可不显示，也不要显示一个点了没用的东西。
+   * 值来自 `GET /api/workbench/bootstrap` 的 `memoryAvailable`（判据在服务端：
+   * `~/.dsh/memory` 是否存在，或 `DSH_MEMORY_HOME` / `TEAM_MEMORY_HOME` 显式声明）。
+   */
+  memoryAvailable?: boolean
 }
 
 interface DraftPresentation {
@@ -249,7 +261,7 @@ export function reviewMemoryNotes(payload: Record<string, unknown>): string[] {
   ))
 }
 
-export function DraftBanner({ draft, onDone, runtime, closePanel, kindName, onProblems, onNotice, onDismissed, onClose, onConfirmed, onSettled, switchedFrom }: DraftBannerProps): ReactNode {
+export function DraftBanner({ draft, onDone, runtime, closePanel, kindName, onProblems, onNotice, onDismissed, onClose, onConfirmed, onSettled, switchedFrom, memoryAvailable = false }: DraftBannerProps): ReactNode {
   const [busy, setBusy] = useState(false)
   /**
    * 复盘的团队记忆可见性（v1.14.0：复盘确认时自动写入团队记忆库）。
@@ -459,7 +471,10 @@ export function DraftBanner({ draft, onDone, runtime, closePanel, kindName, onPr
           </div>
         )}
         {presentation.body}
-        {/* 复盘：团队记忆可见性选择器（受控，状态在本组件） */}        {draft.kindCode === 'review' && (
+        {/* 复盘：团队记忆可见性选择器（受控，状态在本组件）。
+            ⚠️ 仅当 `memoryAvailable` 为真才渲染 —— 团队记忆是内部系统（v1.14.58），
+            开源用户拿不到服务，渲染它等于摆一个永远用不了的勾选框。 */}
+        {draft.kindCode === 'review' && memoryAvailable && (
           <MemoryScopeField
             enabled={memoryEnabled}
             scope={memoryScope}
@@ -639,7 +654,10 @@ function describeDraft(draft: DraftView, kindName: (kind: string, code: string) 
           {taskId !== '' && <Field label="任务">{taskId.slice(0, 8)}</Field>}
           {lessons.length > 0 && (
             <div style={{ margin: '6px 0 10px' }}>
-              <div style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)', marginBottom: 4 }}>结构化教训（每条会单独写入团队记忆）：</div>
+              {/* 这里**不能**提"团队记忆"：这句是无条件渲染的，而团队记忆是内部系统
+                  （v1.14.58）—— 开源用户看不到那个功能，看到这个词只会困惑。
+                  教训本身会随复盘写进任务的复盘记录，措辞照这个事实写。 */}
+              <div style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)', marginBottom: 4 }}>结构化教训（每条会单独记入本次复盘）：</div>
               {lessons.map((lesson, i) => (
                 <div key={i} style={{ fontSize: 13, margin: '3px 0' }}>
                   <b>{lesson.title ?? `教训 ${i + 1}`}</b>

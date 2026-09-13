@@ -38,7 +38,21 @@ export interface TaskReportView { id: string; periodCode: 'day' | 'week'; period
 export interface KnowledgeEntry { id: string; kindCode: string; title: string; contentMd: string; tags: string[]; sourceTaskId: string | null; sourceSessionId: string | null; sourceReviewId: string | null; fileLink: string | null; createdAt: string; updatedAt: string }
 export interface Idea { id: string; title: string; contentMd: string; kindCode: string; tags: string[]; sourceSessionId: string | null; createdAt: string; updatedAt: string }
 export interface IdeaClusterView { id: string; title: string; summaryMd: string; tags: string[]; ideas: Idea[]; createdAt: string; updatedAt: string }
-export interface Bootstrap { dictionaries: Dict[]; stats: { overdue: number; todayDue: number; doing: number; total: number }; todayPlan?: DailyPlanView | null }
+export interface Bootstrap {
+  dictionaries: Dict[]
+  stats: { overdue: number; todayDue: number; doing: number; total: number }
+  todayPlan?: DailyPlanView | null
+  /**
+   * 团队记忆是否可用（v1.14.58）。
+   *
+   * 团队记忆是**公司内部系统**、不会开源，开源用户拿不到 `dsh-team-memory` 与内网服务。
+   * 所以复盘弹框里的「🧠 同步到团队记忆库」**拿得到才渲染** ——
+   * 否则开源用户会看到一个永远用不了的勾选框（它引用的服务在那边根本不存在）。
+   *
+   * `undefined`（旧服务端 / bootstrap 还没回来）= **按不可用处理**，宁可不显示。
+   */
+  memoryAvailable?: boolean
+}
 export interface TaskDetail { task: Task; children: Task[]; sessions: Array<Record<string, unknown>>; reminders: Array<{ id: string; taskId: string; offsetMinutes: number; methodCode: string; firedAt: string | null; skippedAt?: string | null; acknowledgedAt?: string | null }>; events: Array<Record<string, unknown>>; reviews: Array<Record<string, unknown>> }
 
 export interface SessionDriver {
