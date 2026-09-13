@@ -36,7 +36,22 @@ function startTestServer(options = {}) {
 async function withServer(fn, options = {}) {
   const { db, server } = startTestServer(options)
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
-  const port = server.address().port
+  /**
+   * 端口必须**读得到**才继续。
+   *
+   * ⚠️ 曾经的偶发假失败（2026-09-13 实测一次）：`server.address()` 在某些时机
+   * 返回 `null`（listen 回调已触发但 address 尚未就绪），于是 `port` 是 `undefined`，
+   * 请求变成 `http://127.0.0.1:undefined` → `fetch failed: bad port`。
+   * 看起来像被测代码坏了，实际是测试脚手架自己的时序问题 —— 这类"清理/搭建期的假失败"
+   * 最耗排查时间，所以在源头堵住：拿不到端口就显式报错，而不是构造一个非法 URL。
+   */
+  const address = server.address()
+  if (address === null || typeof address === 'string') {
+    server.close()
+    db.close()
+    throw new Error(`测试服务器没有拿到端口（address=${String(address)}）`)
+  }
+  const port = address.port
   const request = async (method, path, body) => {
     const res = await fetch(`http://127.0.0.1:${port}${path}`, {
       method,
