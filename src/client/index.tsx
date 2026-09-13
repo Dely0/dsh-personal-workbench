@@ -22,6 +22,7 @@ import {
 import { isWslStylePath, joinPath, normalizeWindowsPathToWsl } from './workspacePath.js'
 import { WORKBENCH_CSS } from './styles.js'
 import { ACTIVATE_EVENT, ACTIVE_ATTR, OFFICIAL_ATTR, PANEL_NAME, PENDING_ATTR, REDUNDANT_ROW_ATTR, VIEW_ATTR } from './constants.js'
+import { panelDataOpen, shouldShowPanel } from './panelState.js'
 import {
   BLOCKED_ATTR, ENTRY_ATTR, ENTRY_CLASS, ENTRY_HTML, ENTRY_PLUGIN_ATTR, ENTRY_PLUGIN_ID, ENTRY_PART_ATTR,
   ENTRY_LABEL_TEXT, ENTRY_PART_VALUE, ENTRY_TITLE, OFFICIAL_MAIN_SLOT, OFFICIAL_OVERLAY_SLOT, OFFICIAL_PANEL_LIST_SLOT,
@@ -3107,9 +3108,18 @@ function WorkbenchHeaderEntry({ workbench }: { workbench: WorkbenchSlotApi }): J
     const unsubscribe = hostPanelId === undefined ? workbench.subscribe?.(() => setTick((value) => value + 1)) : undefined
     return () => { observer.disconnect(); unsubscribe?.() }
   }, [hostPanelId === undefined])
-  const active = hostPanelId !== undefined
-    ? hostPanelId === PANEL_NAME
-    : workbench.isHostSelected?.() ?? workbench.isOpen()
+  /**
+   * 本地回落：宿主没给全局 props 时，先问通用订阅句柄，再退到本地开关。
+   *
+   * 这一段是**取值**（把三条可能的来源收敛成一个布尔），判定本身交给 `decidePanel` ——
+   * 与面板容器、`isDisplayed()` 共用同一份判据（设计文档 P1）。
+   */
+  const localSelected = (hostPanelId === undefined ? workbench.isHostSelected?.() : undefined) ?? workbench.isOpen()
+  const active = shouldShowPanel({
+    stateReadable: hostPanelId !== undefined,
+    hostPanelId: hostPanelId ?? null,
+    intentOpen: localSelected,
+  })
   return (
     <button
       type="button"
@@ -3251,12 +3261,29 @@ function WorkbenchPanelContent(props: Record<string, unknown>): JSX.Element | nu
     if (host === undefined) return
     return host.subscribe(() => setTick((value) => value + 1))
   }, [host])
-  const hostSelected = hostPanelId === PANEL_NAME
+  /**
+   * 三个输入都是**取值**（把宿主能力与本地标志读成布尔），判定交给下面的纯函数。
+   *
+   * - `hostReadable`：宿主是否提供了 `usePanelInfo`（= 面板状态可读，走官方路径）；
+   * - `localOpen` / `forcedClosed`：本地开关及其"被用户强制收起"标记，仅作回落。
+   */
   const hostReadable = host?.hasPanelInfoHook?.() === true
   const localOpen = host?.isLocalOpen?.() ?? host?.isOpen() ?? false
   const forcedClosed = host?.isForcedClosed?.() ?? false
-  /** 显示与否**只信宿主**（不可读时才退回本地标志）。 */
-  const open = hostReadable ? hostSelected : (!forcedClosed && localOpen)
+  const snapshot = { stateReadable: hostReadable, hostPanelId: hostPanelId ?? null, intentOpen: !forcedClosed && localOpen }
+  /**
+   * 显示与否与 `data-open` 投影都走**同一个** `decidePanel()`（设计文档 P1 + I2）。
+   *
+   * 改动前这里是内联表达式 `hostReadable ? hostSelected : (!forcedClosed && localOpen)`，
+   * 而**同一个语义**在 `isDisplayed()` 里又写了一遍、在 `WorkbenchHeaderEntry` 里写了第三遍 ——
+   * 三处读的输入集合不同，bug 2/6/9 都出在这里。
+   *
+   * `stateReadable` 对应"官方路径是否驱动着显隐"：
+   * - 可读 → 只信宿主 `activePanelId`，本地标志**不参与**（否则会出现"关掉后再点官方行打不开"）；
+   * - 不可读 → 退回本地意图 `localOpen && !forcedClosed`（与迁移前一致）。
+   */
+  const open = shouldShowPanel(snapshot)
+  const dataOpen = panelDataOpen(snapshot)
 
   /**
    * ⚠️ **所有 DOM 写入都必须放在 effect 里，绝不能留在渲染期**（v1.14.47 修复）。
@@ -3314,12 +3341,19 @@ function WorkbenchPanelContent(props: Record<string, unknown>): JSX.Element | nu
    * 属于家族既定约定，不是新发明。
    */
   useEffect(() => {
-    if (!hostSelected) return
+    /**
+     * 宿主选中我们时收掉残留的兄弟标记。
+     *
+     * 判据用 `snapshot.hostPanelId`（宿主选中的是不是我们）—— 这与"面板该不该显示"
+     * **不是同一个问题**：这里问的是"宿主当前选中项是不是本插件"，所以直接把该值
+     * 与 `PANEL_NAME` 比即可，无需再走 `decidePanel()`（那会把本地回落也算进来）。
+     */
+    if (snapshot.hostPanelId !== PANEL_NAME) return
     host?.takeOverFamilyPanel?.()
-  }, [hostSelected, host])
+  }, [snapshot.hostPanelId, host])
   if (host === undefined) return null
   return (
-    <div className="wb-panel-host" data-open={open ? '1' : undefined}>
+    <div className="wb-panel-host" data-open={dataOpen}>
       <div className="wb-app-scope" {...{ [VIEW_ATTR]: '' }}>
         <WorkbenchApp runtime={host.runtime} closePanel={host.closePanel} />
       </div>
@@ -3711,7 +3745,18 @@ export function apply(ctx: unknown): () => void {
     if (subscribe === undefined) return () => {}
     try {
       const dispose = subscribe((info) => {
-        const next = info?.activePanelId === PANEL_NAME
+        /**
+         * 宿主通知"当前选中项变了" → 判定改走同一个纯函数（P1）。
+         *
+         * 注意语义：这里 `intentOpen: false` —— 宿主可读时它根本不参与判断；
+         * 只有宿主给了 store 却不给 activePanelId（既不是我们也不是 null）时，
+         * 才会得到"不显示"，与原实现 `info.activePanelId === PANEL_NAME` 等价。
+         */
+        const next = shouldShowPanel({
+          stateReadable: true,
+          hostPanelId: typeof info?.activePanelId === 'string' ? info.activePanelId : null,
+          intentOpen: false,
+        })
         try {
           const log = (window as unknown as { __wbDebugLog?: Array<Record<string, unknown>> }).__wbDebugLog
           log?.push({ at: Date.now(), from: 'layout.subscribe', activePanelId: String(info?.activePanelId), value: next })
@@ -3723,6 +3768,16 @@ export function apply(ctx: unknown): () => void {
       return typeof dispose === 'function' ? dispose : () => {}
     } catch { return () => {} }
   }
+  /**
+   * 宿主镜像给出的选中态：`undefined` = 宿主从未提供过状态通道（**不是** "没选中"）。
+   *
+   * 与 `hostSelected()` 的分工：本函数只回答"宿主说选中的是不是我们"，
+   * 不掺任何本地回落 —— 槽位句柄的 `isHostSelected` 需要的正是这个"未知"语义
+   * （调用方据此决定是否退回 `subscribe`）。
+   */
+  const hostSelectedFromMirror = (): boolean | undefined => (
+    panelInfoHookSeen ? hostPanelId === PANEL_NAME : undefined
+  )
   const hostSelected = (): boolean => {
     /**
      * v1.14.45：优先用**槽位组件回写的模块级镜像**。
@@ -3732,14 +3787,30 @@ export function apply(ctx: unknown): () => void {
      * 既没有 `subscribe` 也没有 `getSnapshot`（读宿主 `ui-layout` 源码核实）。
      * panelInfo store 挂在 root 槽位的全局 hook props 上，只有槽位组件读得到。
      * 下面那段 `getSnapshot` 试探因此在本宿主上永远拿不到值，只能作历史兼容保留。
+     *
+     * ## 为什么这里也走 `decidePanel()`
+     *
+     * 本函数被两个地方消费：槽位句柄的 `isHostSelected`（标题栏按钮的回落），
+     * 以及"本插件面板是否真的显示着"（家族互斥让位）。**两处问的都是显示态**，
+     * 所以判据必须与面板容器同源；改动前三处各写一遍，正是 bug 2/6/9 的根因。
      */
-    if (panelInfoHookSeen) return hostPanelId === PANEL_NAME
-    const candidate = layout as unknown as { getSnapshot?: () => { activePanelId?: unknown } }
+    const mirrored = hostSelectedFromMirror()
+    if (mirrored !== undefined) return mirrored
+    /**
+     * 历史兼容的第二条通道：`layout.getSnapshot()`。
+     *
+     * 本宿主没有这个接口（恒为 `undefined`），所以走到这里的结果要么是某个旧宿主
+     * 给的宿主状态，要么退回本地 `open`。
+     */
+    let fromLayout: string | null | undefined
     try {
+      const candidate = layout as unknown as { getSnapshot?: () => { activePanelId?: unknown } }
       const snapshot = candidate.getSnapshot?.()
-      if (snapshot !== undefined && 'activePanelId' in snapshot) return snapshot.activePanelId === PANEL_NAME
+      if (snapshot !== undefined && 'activePanelId' in snapshot) {
+        fromLayout = typeof snapshot.activePanelId === 'string' ? snapshot.activePanelId : null
+      }
     } catch { /* 读不到就退回本地标志 */ }
-    return open
+    return shouldShowPanel({ stateReadable: fromLayout !== undefined, hostPanelId: fromLayout ?? null, intentOpen: open })
   }
   /**
    * 本插件的面板**当前是不是真的显示着**（家族互斥的判据）。
@@ -3752,10 +3823,11 @@ export function apply(ctx: unknown): () => void {
    *
    * 所以判据必须与 `WorkbenchPanelContent` 的显示条件同源：宿主状态优先、本地兜底。
    */
-  const isDisplayed = (): boolean => {
-    if (panelInfoHookSeen) return hostPanelId === PANEL_NAME
-    return !forcedClosed && open
-  }
+  const isDisplayed = (): boolean => shouldShowPanel({
+    stateReadable: panelInfoHookSeen,
+    hostPanelId: hostPanelId ?? null,
+    intentOpen: !forcedClosed && open,
+  })
   /**
    * 互斥让位：**只关掉自己**，宿主状态随之归 null（`setOpen(false)` 会调
    * `selectPanel(null)`）。显示条件里不再压第二道"兄弟开着就不显示"的门 ——
@@ -3812,7 +3884,7 @@ export function apply(ctx: unknown): () => void {
       hostPanelId = normalized
     },
     hasPanelInfoHook: () => panelInfoHookSeen,
-    hostSelected: () => (hostPanelId === undefined ? undefined : hostPanelId === PANEL_NAME),
+    hostSelected: hostSelectedFromMirror,
     /**
      * 兄弟插件是否正开着面板。
      *
