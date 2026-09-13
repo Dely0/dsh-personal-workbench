@@ -449,3 +449,88 @@ test('PATCH /tasks/:id 改父任务：非法移动 400（中文原因，不是 5
     assert.deepEqual(reparented.map((event) => event.note).sort(), ['父任务：目标父任务 → 顶层', '父任务：顶层 → 目标父任务'])
   })
 })
+
+/**
+ * 回归（HTTP 层，2026-09-13 真实事故）：
+ * 「重复确认同一条 task 草稿」不得在库里留下两条同名任务。
+ *
+ * 事故形态：用户报「快速录入 → AI 执行 → 验收后，待处理里多出一条同名任务」。
+ * 实测复现（修前）：同一条草稿 POST /confirm 两次 → 两条任务，两次都 200。
+ * 这里把修复后的契约钉在 HTTP 层：第二次必须回放同一条任务，且总量不变。
+ */
+test('POST /drafts/:id/confirm twice must not create a duplicate task', async () => {
+  await withServer(async ({ db, request }) => {
+    const created = await request('POST', '/api/workbench/drafts', {
+      kindCode: 'task',
+      sessionId: 'session-clarify',
+      payload: { title: '仅测试，不思考，直接提交任务', typeCode: 'personal', priorityCode: 'p3', statusCode: 'todo', subtasks: [] },
+    })
+    assert.equal(created.status, 201)
+    const draftId = created.body.draft.id
+
+    const first = await request('POST', `/api/workbench/drafts/${draftId}/confirm`)
+    assert.equal(first.status, 200)
+    assert.equal(first.body.created, 1)
+
+    const second = await request('POST', `/api/workbench/drafts/${draftId}/confirm`)
+    assert.equal(second.status, 200)
+    assert.equal(second.body.replayed, true)
+    assert.equal(second.body.task.id, first.body.task.id, '第二次必须回放同一条任务')
+
+    const tasks = await request('GET', '/api/workbench/tasks')
+    assert.equal(tasks.body.tasks.length, 1, '库里只能有一条任务')
+    // 草稿被收口，不会再被自动弹窗推上来
+    const drafts = await request('GET', '/api/workbench/drafts')
+    assert.equal(drafts.body.draft, null)
+  })
+})
+
+test('两条独立同名草稿各自确认：第二条带 duplicateOf 告警（只告警、不静默合并）', async () => {
+  await withServer(async ({ db, request }) => {
+    const mk = async (sessionId, description) => {
+      const res = await request('POST', '/api/workbench/drafts', {
+        kindCode: 'task',
+        sessionId,
+        payload: { title: '仅测试，不思考，直接提交任务', typeCode: 'personal', priorityCode: 'p3', statusCode: 'todo', description, subtasks: [] },
+      })
+      return res.body.draft.id
+    }
+    const first = await request('POST', `/api/workbench/drafts/${await mk('session-clarify', 'A')}/confirm`)
+    const second = await request('POST', `/api/workbench/drafts/${await mk('session-execute', 'B')}/confirm`)
+
+    assert.equal(second.status, 200)
+    assert.ok(second.body.duplicateOf !== undefined, '必须告警')
+    assert.equal(second.body.duplicateOf.id, first.body.task.id)
+    assert.equal(second.body.duplicateOf.sameDescription, false)
+
+    // 用户看到告警后选「复用那一条」：不新建
+    const thirdDraft = await mk('session-execute-2', 'B')
+    const deduped = await request('POST', `/api/workbench/drafts/${thirdDraft}/confirm`, { intent: 'dedupe' })
+    assert.equal(deduped.status, 200)
+    assert.equal(deduped.body.reused, true)
+    assert.equal(deduped.body.task.id, first.body.task.id)
+
+    const tasks = await request('GET', '/api/workbench/tasks')
+    assert.equal(tasks.body.tasks.length, 2, '两次确认两次建单 + 一次 dedupe 不新建 = 2 条')
+  })
+})
+
+test('验收（completion）草稿确认两次：任务只完成一次，绝不新建任务', async () => {
+  await withServer(async ({ db, request }) => {
+    const task = createTask(db, { title: '被验收的任务', typeCode: 'code_impl', priorityCode: 'p2' })
+    const draft = await request('POST', '/api/workbench/drafts', {
+      kindCode: 'completion', sessionId: 'session-execute', payload: { taskId: task.id, summary: '做完了' },
+    })
+    const draftId = draft.body.draft.id
+
+    const first = await request('POST', `/api/workbench/drafts/${draftId}/confirm`)
+    assert.equal(first.status, 200)
+    assert.equal(first.body.task.statusCode, 'done')
+
+    const second = await request('POST', `/api/workbench/drafts/${draftId}/confirm`)
+    assert.equal(second.status, 400, '已确认的验收草稿不能再确认一次')
+
+    const tasks = await request('GET', '/api/workbench/tasks')
+    assert.equal(tasks.body.tasks.length, 1, '验收流程绝不建任务')
+  })
+})

@@ -23,6 +23,35 @@ export interface DraftBannerRuntime {
   sessions: { open: (sessionId: string) => void }
 }
 
+/**
+ * 任务草稿确认后，服务端回传的「库里另有一条同名任务」告警。
+ *
+ * 为什么要有它（2026-09-13 真实事故）：快速录入的草稿建出任务 A 之后，
+ * AI 执行会话又提交了一份同内容草稿并同样被确认 → 「待处理」里冒出一条同名任务。
+ * 服务端现在**只告警、不静默合并**（同名任务可能是正当需求），界面负责把这条告警
+ * 摆到用户面前，并给一个「就用已有那条」的出口。
+ */
+export interface DuplicateTaskWarning {
+  /** 库里已经存在的那条任务的 id。 */
+  id: string
+  title: string
+  statusCode: string
+  createdAt: string
+  /** 描述是否与本次草稿逐字相同（相同 ≈ 重复提交，不同 ≈ 两次独立录入）。 */
+  sameDescription: boolean
+  sameWorkspace: boolean
+}
+
+export interface DraftConfirmOutcome {
+  duplicateOf?: DuplicateTaskWarning
+  /** 本次确认**没有建新东西**，返回的是先前那次确认的产出。 */
+  replayed?: boolean
+  /** 本次确认复用了已存在的同名任务（用户在告警里选了"就用已有那条"）。 */
+  reused?: boolean
+  /** 本次确认对应的任务 id（用于「就用已有那条」时重新绑定的收口）。 */
+  taskId?: string
+}
+
 export interface DraftBannerProps {
   draft: DraftView
   onDone: () => void
@@ -52,6 +81,26 @@ export interface DraftBannerProps {
    * 少了这一步就会出现"关掉 5 秒后又弹出来"（2026-09-12 实测 BUG）。
    */
   onDismissed?: () => void
+  /**
+   * 确认接口的业务回执（同名任务告警 / 回放 / 复用）。
+   *
+   * 与 `onNotice`（纯文案 toast）分开：这条要带**动作**（"就用已有那条"），
+   * 外层需要 structured 数据来决定弹什么。
+   */
+  onConfirmed?: (outcome: DraftConfirmOutcome) => void
+  /**
+   * 「就用已有那条」：带着 dedupe 意图重新确认同一条草稿。
+   *
+   * 服务端会把库里那条同名任务当作本次产出（草稿照样收口），**不再新建**。
+   */
+  onReuseExisting?: (draft: DraftView, taskId: string) => void
+  /**
+   * 这份弹框是**递补上来**的：上一份草稿被收起后，服务端把另一种类型的草稿推了上来。
+   *
+   * 必须显式告诉用户（2026-09-13 重复建单事故）：弹框长得一模一样，用户以为还在处理
+   * 刚才那份，其实已经是另一份了 —— 接着点主按钮就会确认错东西。
+   */
+  switchedFrom?: { kindCode: string }
 }
 
 interface DraftPresentation {
@@ -186,7 +235,7 @@ export function reviewMemoryNotes(payload: Record<string, unknown>): string[] {
   ))
 }
 
-export function DraftBanner({ draft, onDone, runtime, closePanel, kindName, onProblems, onNotice, onDismissed, onClose }: DraftBannerProps): ReactNode {
+export function DraftBanner({ draft, onDone, runtime, closePanel, kindName, onProblems, onNotice, onDismissed, onClose, onConfirmed, switchedFrom }: DraftBannerProps): ReactNode {
   const [busy, setBusy] = useState(false)
   /**
    * 复盘的团队记忆可见性（v1.14.0：复盘确认时自动写入团队记忆库）。
@@ -207,7 +256,14 @@ export function DraftBanner({ draft, onDone, runtime, closePanel, kindName, onPr
     if (busy) return
     setBusy(true)
     try {
-      const res = await api<{ problems?: DraftConfirmProblemView[]; memory?: { written?: number; skipped?: number; degradedReason?: string; enabled?: boolean } }>(path, {
+      const res = await api<{
+        problems?: DraftConfirmProblemView[]
+        memory?: { written?: number; skipped?: number; degradedReason?: string; enabled?: boolean }
+        task?: { id?: string }
+        duplicateOf?: DuplicateTaskWarning
+        replayed?: boolean
+        reused?: boolean
+      }>(path, {
         method: 'POST',
         ...(body === undefined ? {} : { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
       })
@@ -225,6 +281,22 @@ export function DraftBanner({ draft, onDone, runtime, closePanel, kindName, onPr
         } else if (skipped > 0) {
           onNotice?.(`复盘已写回任务；这 ${skipped} 条此前已写入过团队记忆，未重复写入`, 'success')
         }
+      }
+      /**
+       * 业务回执交给外层（同名任务告警 / 回放 / 复用）。
+       *
+       * 三种回执都要说清楚，否则用户会遇到"点了确认，但界面什么也没说"：
+       * - `duplicateOf`：库里另有一条同名任务 → 外层弹选择（保留两条 / 就用已有那条）；
+       * - `replayed`：这条草稿之前已经确认过 → 说明"没有重复建单"；
+       * - `reused`：用户选了复用 → 说明"已按已有那条收口，没有新建"。
+       */
+      if (res !== null && typeof res === 'object') {
+        onConfirmed?.({
+          ...(res.duplicateOf === undefined ? {} : { duplicateOf: res.duplicateOf }),
+          ...(res.replayed === true ? { replayed: true } : {}),
+          ...(res.reused === true ? { reused: true } : {}),
+          ...(typeof res.task?.id === 'string' ? { taskId: res.task.id } : {}),
+        })
       }
       onDismissed?.()
       onDone()
@@ -326,6 +398,27 @@ export function DraftBanner({ draft, onDone, runtime, closePanel, kindName, onPr
       )}
     >
       <div className="wb-scroll-area">
+        {/**
+          * 「这份弹框是刚递补上来的」提示（2026-09-13 重复建单事故）。
+          *
+          * 事故形态：用户点「暂存」收起验收申请后，服务端按"最新活动草稿"把**一份 task 草稿**
+          * 递补到同一个弹框里；用户接着点主按钮，确认的已经不是他以为的那一份 ——
+          * 结果库里多出一条同名任务。这里不改递补行为（那是 `getLatestActiveDraft` 的语义），
+          * 只保证"换人了"这件事一定看得见。
+          */}
+        {switchedFrom !== undefined && (
+          <div
+            role="status"
+            style={{
+              margin: '0 0 10px', padding: '8px 10px', borderRadius: 6,
+              background: 'rgba(214,158,46,.12)', border: '1px solid rgba(214,158,46,.45)',
+              fontSize: 12.5, lineHeight: 1.6,
+            }}
+          >
+            ⚠️ 这不是刚才那一份：上一份（<b>{switchedFrom.kindCode}</b>）收起后，
+            系统把下面这一份递补上来了。请确认内容无误再操作，避免误确认。
+          </div>
+        )}
         {presentation.body}
         {/* 复盘：团队记忆可见性选择器（受控，状态在本组件） */}        {draft.kindCode === 'review' && (
           <MemoryScopeField

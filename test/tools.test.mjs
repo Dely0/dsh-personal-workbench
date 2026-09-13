@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { openWorkbenchDb } from '../lib/db/database.js'
 import { seedDictionaries } from '../lib/db/seed.js'
 import { proposeDailyPlanTool, proposeIdeaClustersTool, submitIdeaTasksTool, submitKnowledgeTool, submitReportTool, submitTaskTool, updateTaskTool, requestCompletionTool, saveTaskMemoryTool } from '../lib/tools.js'
-import { createIdea, createTask, getTask, getTaskMemoryContext, getDraftBySession, getPendingDailyPlanDraft, getPendingDraftForSession, getPendingDraftForTask, getPendingReportDraft, updateTask } from '../lib/db/repo.js'
+import { createIdea, createTask, getTask, getTaskMemoryContext, getDraftBySession, getPendingDailyPlanDraft, getPendingDraftForSession, getPendingDraftForTask, getPendingReportDraft, linkTaskSession, updateTask } from '../lib/db/repo.js'
 
 /**
  * 删临时目录，容忍 Windows 上刚 `close()` 时文件句柄尚未释放导致的 EPERM。
@@ -243,3 +243,49 @@ function localDateStr() {
   const d = new Date()
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
+
+/**
+ * 回归（工具侧，2026-09-13 真实事故）：
+ * 任务**执行会话**里再次 `workbench_submit_task` 同名任务时，回执必须提醒"这条任务已存在"。
+ *
+ * 事故形态：任务 A 的执行会话（session-5cf75152）又录了一份同名草稿，
+ * 用户在「待处理」里把它确认掉 → 库里多出一条同名任务。
+ * 工具不能拒绝（同名任务可能是正当需求），但必须让 AI 有据可依地提醒用户。
+ */
+test('workbench_submit_task 在同名任务已存在时给出提醒（尤其是当前会话就是它的关联会话）', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-personal-workbench-tools-dup-'))
+  try {
+    const db = openWorkbenchDb({ dbPath: join(dir, 'workbench.db') })
+    seedDictionaries(db)
+    const submit = submitTaskTool(db)
+
+    // ① 全新标题：不该有任何提醒
+    const clean = await submit.execute(
+      { title: '第一次录入的任务', type_code: 'personal', priority_code: 'p3' },
+      { agent: { session: { id: 'sess-clarify' } } },
+    )
+    assert.doesNotMatch(clean, /已经存在|已经有/)
+
+    // ② 任务已存在，但当前会话与它无关 → 提示但不阻断
+    const task = createTask(db, { title: '已存在的任务', typeCode: 'personal', priorityCode: 'p3' })
+    const unrelated = await submit.execute(
+      { title: '已存在的任务', type_code: 'personal', priority_code: 'p3' },
+      { agent: { session: { id: 'sess-other' } } },
+    )
+    assert.match(unrelated, /草稿已保存/, '提醒不能变成拒绝')
+    assert.match(unrelated, /已经有 1 条同名任务/)
+
+    // ③ 当前会话正是那条任务的关联会话（= 执行会话重复录入）→ 明确指出"这几乎肯定是重复录入"
+    linkTaskSession(db, { taskId: task.id, sessionId: 'sess-execute', roleCode: 'execute' })
+    const repeat = await submit.execute(
+      { title: '已存在的任务', type_code: 'personal', priority_code: 'p3' },
+      { agent: { session: { id: 'sess-execute' } } },
+    )
+    assert.match(repeat, /草稿已保存/)
+    assert.match(repeat, /已经存在/)
+    assert.match(repeat, /几乎肯定是重复录入/)
+    assert.match(repeat, new RegExp(task.id.slice(0, 8)))
+  } finally {
+    rmTempDir(dir)
+  }
+})

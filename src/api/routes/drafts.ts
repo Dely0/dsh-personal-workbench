@@ -88,10 +88,33 @@ export function makeDraftRoutes(db: DatabaseSync, deps: { teamMemory?: TeamMemor
           try {
             const draft = getDraft(db, id)
             if (draft === undefined) return writeJson(res, 404, { error: 'draft not found' })
+            /**
+             * 确认是**幂等**的（2026-09-13 真实事故的修法）。
+             *
+             * 已经 confirmed 过的草稿再 POST 一次，历史行为是**当成新的一次确认重新执行**
+             * —— 同一条 task 草稿被点两次就建出两条同名任务（实测复现：见
+             * `node scripts/repro/repro-routes.mjs`）。
+             *
+             * 现在分两种处理：
+             * - `task` 草稿：回放当次建出来的任务（用户想要的"东西已经建好了"依然成立），
+             *   响应里带 `replayed`，界面据此提示"这条已经确认过了"；
+             * - 其余类型：明确 400，让调用方知道这次点击没有产生任何新东西。
+             */
             if (draft.kindCode === 'task') {
-              const result = confirmTaskDraft(db, id)
-              // result 为 undefined 只可能是草稿消失（并发确认）；用 getTask 兜底避免非空断言炸掉。
-              if (result === undefined) return writeJson(res, 404, { error: 'draft not found' })
+              // `intent=dedupe`：用户在看到「已有同名任务」告警后，选择"就复用那一条"。
+              const intent = body?.intent === 'dedupe' ? 'dedupe' : 'create'
+              const result = confirmTaskDraft(db, id, 'user', new Date().toISOString(), intent)
+              /**
+               * `undefined` 有两种含义，**不能一律当 404**：
+               * - 草稿真的不在了 → 404（并发删除）；
+               * - 草稿还在，但不是 pending 且没有可回放的产出（例如已被「放弃」）→ 400。
+               *   报 404 会让用户以为草稿丢了，实际它好好躺在「待处理」里。
+               */
+              if (result === undefined) {
+                const current = getDraft(db, id)
+                if (current === undefined) return writeJson(res, 404, { error: 'draft not found' })
+                return writeJson(res, 400, { error: `draft is already ${current.statusCode}` })
+              }
               // problems 必须回传：界面据此标黄列出「哪几项没建、为什么」，
               // 否则就是 2026-09-12 那次「确认成功但子任务凭空少了两个」的重演。
               return writeJson(res, 200, {
@@ -99,7 +122,22 @@ export function makeDraftRoutes(db: DatabaseSync, deps: { teamMemory?: TeamMemor
                 task: publicTask(result.task),
                 created: result.childCount + 1,
                 problems: result.problems,
+                ...(result.replayed === true ? { replayed: true } : {}),
+                ...(result.reused === true ? { reused: true } : {}),
+                ...(result.duplicateOf === undefined ? {} : {
+                  duplicateOf: {
+                    id: result.duplicateOf.task.id,
+                    title: result.duplicateOf.task.title,
+                    statusCode: result.duplicateOf.task.statusCode,
+                    createdAt: result.duplicateOf.task.createdAt,
+                    sameDescription: result.duplicateOf.sameDescription,
+                    sameWorkspace: result.duplicateOf.sameWorkspace,
+                  },
+                }),
               })
+            }
+            if (draft.statusCode !== 'pending') {
+              return writeJson(res, 400, { error: `draft is already ${draft.statusCode}` })
             }
             if (draft.kindCode === 'subtask_plan') {
               const result = confirmSubtaskPlanDraft(db, id)

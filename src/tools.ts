@@ -5,7 +5,7 @@
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { DatabaseSync } from 'node:sqlite'
-import { addTaskMemory, assertValidFileLink, createDraft, getDeferredDraftForTask, getDictionary, getDraft, getIdea, getIdeaCluster, getPendingDailyPlanDraft, getPendingDraftForSession, getPendingDraftForTask, getPendingKnowledgeDraft, getPendingReportDraft, getTask, listActiveDictionaryCodes, listTaskEvents, listTasks, localDateString, updateDraft, updateTask } from './db/repo.js'
+import { addTaskMemory, assertValidFileLink, createDraft, getDeferredDraftForTask, getDictionary, getDraft, getIdea, getIdeaCluster, getPendingDailyPlanDraft, getPendingDraftForSession, getPendingDraftForTask, getPendingKnowledgeDraft, getPendingReportDraft, getTask, listActiveDictionaryCodes, listTaskEvents, listTaskSessions, listTasks, localDateString, updateDraft, updateTask } from './db/repo.js'
 import { checkWorkspacePath } from './workspace-check.js'
 
 function text(value: string): ContentBlock[] {
@@ -246,9 +246,35 @@ export function submitTaskTool(db: DatabaseSync) {
         `status=${statusCode}`,
         `ai_policy=${aiPolicyCode}`,
       ].join(' · ')
+      /**
+       * ⚠️ **同名任务提醒**（2026-09-13 重复建单事故的工具侧防线）。
+       *
+       * 事故形态：一条任务的**执行会话**里也调了本工具，把这条任务又录了一遍草稿；
+       * 用户在「待处理」里确认后，库里就多出一条同名任务。
+       *
+       * 这里**只提醒、不拒绝**（同名任务可能是正当需求），但要尽量说清楚是哪一种情形：
+       * - 当前会话正是这条同名任务的执行/澄清会话 → 几乎确定是重复录入，直说"别再建"；
+       * - 其它情况 → 只是提示，由 AI 转告用户。
+       */
+      const sessionIdForHint = exec.agent?.session?.id
+      const sameTitle = listTasks(db, { includeArchived: true }).filter((item) => item.title.trim() === title.trim())
+      let duplicateHint = ''
+      if (sameTitle.length > 0) {
+        const mine = sessionIdForHint === undefined
+          ? undefined
+          : sameTitle.find((item) => listTaskSessions(db, item.id).some((link) => link.session_id === sessionIdForHint))
+        if (mine !== undefined) {
+          duplicateHint = `\n⚠️ 这条任务**已经存在**（id=${mine.id}，状态 ${mine.statusCode}），而当前会话正是它的关联会话 —— `
+            + '这几乎肯定是重复录入：请不要再建同名任务，回到那条任务上继续工作（需要收尾就用 workbench_request_completion）。'
+        } else {
+          duplicateHint = `\n⚠️ 库里已经有 ${sameTitle.length} 条同名任务（如 ${sameTitle[0].id.slice(0, 8)}，状态 ${sameTitle[0].statusCode}）。`
+            + '如果这不是用户明确要求新建的第二条，请提醒用户避免确认出重复任务；确实是两条不同的工作则照常。'
+        }
+      }
       return `草稿已保存（id=${draft?.id}），等待用户在界面确认。请用一句话告知用户可以检查草稿；不要声称任务已创建。`
         + `\n（本次落库的字段：${echo}）`
         + `\n（合法枚举备查：type = ${enumHint(db, 'type')}；priority = ${enumHint(db, 'priority')}）`
+        + duplicateHint
     },
   })
 }

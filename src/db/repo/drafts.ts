@@ -146,6 +146,29 @@ export interface ConfirmTaskDraftResult {
   problems: DraftItemProblem[]
   /** 实际创建的子任务数（不含父任务）。 */
   childCount: number
+  /**
+   * 本次没有新建任何东西，返回的是**先前已经落地的那个任务**。
+   *
+   * 出现场景：同一条草稿被确认两次（前端并发点击、网络级重试、
+   * 或本幂等守卫上线前就已确认过的老草稿）。
+   */
+  replayed?: boolean
+  /** 复用了本次之前就已存在的同名同级任务（老草稿恢复路径）。 */
+  reused?: boolean
+  /**
+   * 库里**另有一条**同名任务（不是本次要复用/回放的那条）。
+   *
+   * ⚠️ 只是告警，**不阻止创建**：同一个标题建两条任务是正当需求
+   * （每周例会、按月重复的跟进）。这里把事实摆出来，由用户决定。
+   * 真实事故：快速录入建的草稿 + AI 执行会话又提交的同名草稿各被确认一次
+   * → 「待处理」里冒出一条同名任务（见 docs/issues/2026-09-13-*）。
+   */
+  duplicateOf?: {
+    task: TaskRow
+    /** 与本次草稿的差别（描述/工作区不同则说明是两次独立录入，而非重复提交）。 */
+    sameDescription: boolean
+    sameWorkspace: boolean
+  }
 }
 
 /** `confirmSubtaskPlanDraft` 的返回：建出来（或复用）的任务 + 没建出来的条目。 */
@@ -154,12 +177,27 @@ export interface ConfirmSubtaskPlanResult {
   problems: DraftItemProblem[]
 }
 
-export function confirmTaskDraft(db: DatabaseSync, draftId: string, actor = 'user', at = nowIso()): ConfirmTaskDraftResult | undefined {
+export function confirmTaskDraft(
+  db: DatabaseSync,
+  draftId: string,
+  actor = 'user',
+  at = nowIso(),
+  /**
+   * 用户的明确意图：
+   *
+   * - `create`（默认）：正常建单。同父同名**只告警不合并** —— 同名任务可能真的需要两条
+   *   （每周例会），静默合并会吃掉用户的正当需求。
+   * - `dedupe`：用户在界面上看到了「库里已有同名任务」的告警，并且**选择复用那一条**。
+   *   此时不新建，直接把已有任务当作本次产出（幂等落库，草稿照样标 confirmed）。
+   */
+  intent: 'create' | 'dedupe' = 'create',
+): ConfirmTaskDraftResult | undefined {
   const draft = getDraft(db, draftId)
   if (draft === undefined || draft.kindCode !== 'task') return undefined
   const payload = draft.payload as Partial<TaskInput> & { reminderOffsetMinutes?: number; reminder_offset_minutes?: number; subtasks?: Array<Partial<TaskInput> & Record<string, unknown>> }
   const title = typeof payload.title === 'string' ? payload.title : ''
   if (title.trim() === '') throw new Error('draft payload requires a non-empty title')
+  const parentId = typeof payload.parentId === 'string' ? payload.parentId : null
   /**
    * 工作区路径校验（v1.14.25，补子任务 4 的原始验收标准）。
    *
@@ -170,9 +208,25 @@ export function confirmTaskDraft(db: DatabaseSync, draftId: string, actor = 'use
    */
   const workspaceCheck = checkWorkspacePath(typeof payload.workspacePath === 'string' ? payload.workspacePath : null)
   if (!workspaceCheck.ok) throw new Error(String(workspaceCheck.reason))
-  return withDraftConfirm(db, draftId, 'task', (): ConfirmTaskDraftResult => {
+  return withDraftConfirm(db, draftId, 'task', (confirmedDraft): ConfirmTaskDraftResult => {
     const problems: DraftItemProblem[] = []
     let childCount = 0
+    /**
+     * `dedupe` 意图：用户在「已有同名任务」告警里选了"就复用那一条，别再建"。
+     *
+     * ⚠️ **只在这个显式意图下复用同名任务**。默认路径（`create`）即使同名也照建 ——
+     * 同一个标题建两条是正当需求（每周例会），而且"重复提交同一份草稿"这一半根因
+     * 已经由 `confirmResult` 回放彻底堵住（同一条草稿绝不会产出两个任务）。
+     * 把默认路径也改成"同名就复用"，会静默吃掉用户明确要建的第二条任务。
+     *
+     * 判据复用 `findSiblingByTitle`（`confirmSubtaskPlanDraft` 早就在用同一招防
+     * "重复确认整棵树建两遍"）—— 两条确认路径从此共享同一个判据，
+     * 不再一条有幂等、一条没有。
+     */
+    const sibling = findSiblingByTitle(db, parentId, title)
+    if (intent === 'dedupe' && sibling !== undefined) {
+      return { task: sibling, problems, childCount: listTasks(db, { parentId: sibling.id, includeArchived: true }).length, reused: true }
+    }
     const task = createTask(db, {
       title,
       description: typeof payload.description === 'string' ? payload.description : undefined,
@@ -184,7 +238,7 @@ export function confirmTaskDraft(db: DatabaseSync, draftId: string, actor = 'use
       allDay: payload.allDay === true,
       estimatedMinutes: typeof payload.estimatedMinutes === 'number' ? payload.estimatedMinutes : null,
       source: typeof payload.source === 'string' ? payload.source : 'nl',
-      parentId: typeof payload.parentId === 'string' ? payload.parentId : null,
+      parentId,
       // 用校验后的**归一化**路径：`/mnt/d/code` 在 Windows 上会被存成 `D:\code`，
       // 避免同一个工作区因为写法不同被当成两个。
       workspacePath: workspaceCheck.normalized,
@@ -201,24 +255,63 @@ export function confirmTaskDraft(db: DatabaseSync, draftId: string, actor = 'use
     }
     // workbench_submit_task 的 subtasks 参数：确认任务时同步创建简版子任务。
     const rawChildren = Array.isArray(payload.subtasks) ? payload.subtasks as DraftTaskItem[] : []
-    const walkChildren = (items: DraftTaskItem[], parentId: string): void => {
+    const walkChildren = (items: DraftTaskItem[], parentId2: string): void => {
       for (const item of items) {
         const normalized = toTaskInputFromDraftItem(item, { typeCode: task.typeCode, priorityCode: task.priorityCode, statusCode: 'todo', source: 'nl' })
         if (normalized === undefined) continue
         // 非法 code 不再 continue 了事：收进 problems 回传，界面能看见"哪一条没建、为什么"。
         const problem = validateDraftTaskItem(db, normalized)
         if (problem !== undefined) { problems.push(problem); continue }
-        const child = createTask(db, { ...normalized.input, parentId }, actor, at)
+        const child = createTask(db, { ...normalized.input, parentId: parentId2 }, actor, at)
         childCount += 1
         if (Array.isArray(item.children)) walkChildren(item.children as DraftTaskItem[], child.id)
       }
     }
     walkChildren(rawChildren, task.id)
-    if (draft.sessionId !== null && draft.sessionId !== undefined) {
-      linkTaskSession(db, { taskId: task.id, sessionId: draft.sessionId, roleCode: 'clarify' }, at)
+    if (confirmedDraft.sessionId !== null && confirmedDraft.sessionId !== undefined) {
+      linkTaskSession(db, { taskId: task.id, sessionId: confirmedDraft.sessionId, roleCode: 'clarify' }, at)
     }
-    return { task, problems, childCount }
-  }, { at })
+    /**
+     * **只告警、不合并**（用户 2026-09-13 决策）。
+     *
+     * 走到这里东西是新建的，但库里可能**另有一条**同名任务 —— 这正是本次事故的形态：
+     * 快速录入的草稿建出任务 A，AI 执行会话又提交了一份同内容草稿、随后也被确认。
+     * 把事实报给界面（含是否同描述/同工作区），由用户决定删哪一条；
+     * 静默合并会误伤"同名重复任务"这种正当场景。
+     */
+    const duplicate = findSiblingByTitle(db, parentId, title)
+    const duplicateOf = duplicate === undefined || duplicate.id === task.id
+      ? undefined
+      : {
+          task: duplicate,
+          sameDescription: (duplicate.description ?? '') === (task.description ?? ''),
+          sameWorkspace: (duplicate.workspacePath ?? '') === (task.workspacePath ?? ''),
+        }
+    return { task, problems, childCount, ...(duplicateOf === undefined ? {} : { duplicateOf }) }
+  }, {
+    at,
+    /**
+     * 回放：这条草稿以前确认过 → 把当次建出来的任务原样还回去，**绝不重建**。
+     *
+     * payload 里存的是 `ConfirmTaskDraftResult` 本体（含 `task` / `childCount`）。
+     * 老草稿（本守卫上线前确认、payload 里没有 `confirmResult`）拿不到 id 时不再猜测，
+     * 抛可读错误让用户显式「放弃」—— 猜错的代价是又建一条重复任务，那正是本 BUG 本身。
+     */
+    replay: (cached): ConfirmTaskDraftResult => {
+      const record = typeof cached === 'object' && cached !== null ? cached as { task?: { id?: unknown }; childCount?: unknown } : {}
+      const taskId = typeof record.task?.id === 'string' ? record.task.id : undefined
+      const existing = taskId === undefined ? undefined : getTask(db, taskId)
+      if (existing === undefined) {
+        throw new Error('这条任务草稿此前已经确认过（对应任务已不存在，或为旧版本留下的半截数据），不能重复确认；请选择「放弃」，或重新提交一份新草稿')
+      }
+      return {
+        task: existing,
+        problems: [],
+        childCount: typeof record.childCount === 'number' ? record.childCount : listTasks(db, { parentId: existing.id, includeArchived: true }).length,
+        replayed: true,
+      }
+    },
+  })
 }
 
 export function confirmSubtaskPlanDraft(db: DatabaseSync, draftId: string, actor = 'user', at = nowIso()): ConfirmSubtaskPlanResult {

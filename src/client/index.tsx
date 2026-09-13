@@ -31,7 +31,7 @@ import {
 } from './entryContract.js'
 import { Modal } from './components/Modal.js'
 import { SettingsModal } from './components/SettingsModal.js'
-import { DraftBanner } from './components/DraftBanner.js'
+import { DraftBanner, type DraftConfirmOutcome } from './components/DraftBanner.js'
 import { MarkdownText } from './components/MarkdownText.js'
 import { ToastHost, useToasts } from './components/Toast.js'
 import { api } from './api.js'
@@ -115,6 +115,18 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
    */
   const deferredWhenDismissedRef = useRef<Set<string>>(new Set())
   /**
+   * 弹框当前显示的是哪一份草稿，以及"这次是被递补上来的"这件事。
+   *
+   * `draftSwitchedFrom` 非空 = 上一份草稿被收起后，服务端递补了**另一种类型**的草稿上来。
+   * 只在类型变化时提示：同类型的下一份（例如两条 task 草稿）不值得打断用户。
+   *
+   * 为什么需要它（2026-09-13 重复建单事故）：弹框长得一模一样，用户点「暂存」收起
+   * 验收申请之后，递补上来的是一份 task 草稿 —— 用户接着点主按钮，确认的已经不是
+   * 他以为的那一份，于是库里多出一条同名任务。
+   */
+  const bannerDraftRef = useRef<DraftView | null>(null)
+  const [draftSwitchedFrom, setDraftSwitchedFrom] = useState<{ kindCode: string; draftId: string } | null>(null)
+  /**
    * 服务端当前**全部** pending 草稿（含"看过就收起"的）。
    * 「待处理」计数用它，绝不用本地过滤后的 `pendingDraft` —— 否则点一次关闭
    * 计数就掉 0，而草稿其实还在等用户处理（2026-09-15 用户实测的 BUG）。
@@ -125,6 +137,21 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   const [notice, setNotice] = useState<string | null>(null)
   const [reminderModalOpen, setReminderModalOpen] = useState(false)
   const [pendingOpen, setPendingOpen] = useState(false)
+  /**
+   * 「库里已有同名任务」的待决提示（2026-09-13 重复建单事故的界面侧收口）。
+   *
+   * 服务端**只告警、不静默合并**（同名任务可能是正当需求，例如每周例会），
+   * 所以这里给用户两件明确的事：保留两条，或者把这条草稿收口到已有那条上（不再新建）。
+   */
+  const [duplicatePrompt, setDuplicatePrompt] = useState<{
+    draftId: string
+    existingTaskId: string
+    existingTitle: string
+    sameDescription: boolean
+    sameWorkspace: boolean
+    /** 本次已经建出来的那条（"就删掉这条新建的"用得上）。 */
+    newTaskId: string
+  } | null>(null)
   const [settings, setSettings] = useState<WorkbenchSettings>({ defaultWorkspace: '', autoCreateTypeFolders: true, desktopNotify: true, dailyCapacityMinutes: 390, quickWorkspaceRecent: [] })
   /** 今日容量里「可投入时长」的行内编辑态（null = 只读展示） */
   const [capacityEdit, setCapacityEdit] = useState<string | null>(null)
@@ -325,6 +352,26 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
         }
         const nextDraft = res.draft !== null && dismissed.has(res.draft.id) ? null : res.draft
         if (alive) {
+          /**
+           * ⚠️ **弹框被"静默换人"时必须说出来**（2026-09-13 重复建单事故的界面侧防线）。
+           *
+           * 事故形态：用户暂存了最新那份草稿（例如验收申请），服务端按"最新活动草稿"
+           * 递补下一份 —— 而递补上来的可能是**另一种类型**的草稿（例如一份任务草稿）。
+           * 弹框长得一模一样，用户接着点主按钮时，确认的已经不是他以为的那一份了。
+           *
+           * 实测证据（`node scripts/repro/repro-banner.mjs`）：暂存验收草稿之后，
+           * 弹框内容确实会从 `completion` 换成 `task`。
+           *
+           * 这里不改变递补行为（`getLatestActiveDraft` 的语义没动），只保证
+           * **换人这件事一定可见**：类型/来源不同时，弹框里挂一条醒目提示。
+           */
+          const previous = bannerDraftRef.current
+          if (previous !== null && nextDraft !== null && previous.id !== nextDraft.id && previous.kindCode !== nextDraft.kindCode) {
+            setDraftSwitchedFrom({ kindCode: previous.kindCode, draftId: previous.id })
+          } else if (nextDraft !== null && (previous === null || previous.id !== nextDraft.id)) {
+            setDraftSwitchedFrom(null)
+          }
+          bannerDraftRef.current = nextDraft
           setPendingDraft(nextDraft)
           setAllPendingDrafts(serverDrafts)
           setDeferredDrafts(res.deferredDrafts ?? [])
@@ -1326,6 +1373,77 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
       setNotice('已唤回，待你决定')
     } catch (e) { setError(e instanceof Error ? e.message : String(e)) }
   }
+  /**
+   * 确认接口的业务回执处理（2026-09-13 重复建单事故的界面侧收口）。
+   *
+   * 三种回执（都来自服务端的结构化字段，不是文案匹配）：
+   *
+   * 1. `duplicateOf` —— 库里**另有一条**同名任务。服务端只告警不合并（同名可能是正当需求，
+   *    例如每周例会），这里弹一个小选择框：保留两条，或者收口到已有那条上。
+   * 2. `replayed` —— 这条草稿此前已经确认过，本次**没有新建任何东西**。
+   *    必须说出来：否则用户会以为又建了一条（这正是事故的心理来源）。
+   * 3. `reused` —— 用户选了"就用已有那条"，同样没有新建。
+   */
+  const handleDraftConfirmed = (outcome: DraftConfirmOutcome, draft: DraftView): void => {
+    if (outcome.duplicateOf !== undefined) {
+      setDuplicatePrompt({
+        draftId: draft.id,
+        existingTaskId: outcome.duplicateOf.id,
+        existingTitle: outcome.duplicateOf.title,
+        sameDescription: outcome.duplicateOf.sameDescription,
+        sameWorkspace: outcome.duplicateOf.sameWorkspace,
+        newTaskId: outcome.taskId ?? '',
+      })
+      return
+    }
+    if (outcome.replayed === true) {
+      setNotice('这条草稿此前已经确认过了，本次没有重复建单（库里仍是原来那一条）。')
+      return
+    }
+    if (outcome.reused === true) {
+      setNotice('已按你选的「就用已有那条」收口，没有新建任务。')
+    }
+  }
+  /**
+   * 「就用已有那条」：把这条草稿收口到已有任务上，并清掉本次多建出来的那条。
+   *
+   * 两步都必须做才算数：
+   * 1. 带 `intent=dedupe` 重新确认 → 服务端不新建、草稿收口；
+   * 2. 归档本次已经多建出来的那条 —— 否则"没有重复建单"只是句空话。
+   *
+   * 第 2 步失败不回滚第 1 步（草稿状态已经是对的），但**必须把真实结果说出来**，
+   * 不能让用户以为已经干净了。
+   */
+  const reuseExistingTask = async (prompt: NonNullable<typeof duplicatePrompt>): Promise<void> => {
+    try {
+      await api(`/api/workbench/drafts/${prompt.draftId}/confirm`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ intent: 'dedupe' }),
+      })
+    } catch (e) {
+      // 草稿已不是 pending（并发确认）时服务端会 400 —— 说明它已经收口了，不算失败。
+      const message = e instanceof Error ? e.message : String(e)
+      if (!/already (confirmed|abandoned)/i.test(message)) {
+        setError(`收口失败：${message}`)
+        return
+      }
+    }
+    dismissedDraftIdsRef.current.add(prompt.draftId)
+    setDuplicatePrompt(null)
+    const created = prompt.newTaskId
+    if (created !== '') {
+      try {
+        await api(`/api/workbench/tasks/${created}/archive`, { method: 'POST' })
+        setNotice('已收口到已有任务，本次多建的那条已归档（可在列表页「查看归档」恢复）。')
+      } catch (e) {
+        setNotice(`已收口到已有任务；本次多建的那条自动归档失败（${e instanceof Error ? e.message : String(e)}），请在任务列表里手动归档。`)
+      }
+    } else {
+      setNotice('已收口到已有任务，没有新建。')
+    }
+    void refresh()
+  }
   const linkedSessionIds = new Set((selected?.sessions ?? []).map((s) => typeof s.session_id === 'string' ? s.session_id : '').filter((id) => id !== ''))
   const sessionQuery = sessionPickerQuery.trim().toLowerCase()
   const sessionCandidates = sessionListSnapshot.ids
@@ -1513,6 +1631,8 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
         kindName={(kind, code) => dicts.find((d) => d.kind === kind && d.code === code)?.name ?? code}
         onProblems={setDraftProblems}
         onNotice={(message, tone) => pushToast(message, tone)}
+        onConfirmed={(outcome) => handleDraftConfirmed(outcome, pendingDraft)}
+        switchedFrom={draftSwitchedFrom === null ? undefined : { kindCode: dicts.find((d) => d.kind === 'draft_kind' && d.code === draftSwitchedFrom.kindCode)?.name ?? draftSwitchedFrom.kindCode }}
         onDismissed={() => { dismissDraft(pendingDraft) }}
         onDone={() => { setPendingDraft(null); setPlanRefreshKey((v) => v + 1); setReportRefreshKey((v) => v + 1); setKnowledgeRefreshKey((v) => v + 1); setIdeaRefreshKey((v) => v + 1); void refresh() }}
         /**
@@ -1524,6 +1644,45 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
          */
         onClose={() => { dismissDraft(pendingDraft); setPendingDraft(null) }}
       />}
+
+      {/**
+        * 「库里已有同名任务」选择框（2026-09-13 重复建单事故）。
+        *
+        * 服务端**只告警、不静默合并**：同名任务可能是正当需求（每周例会），
+        * 所以这里必须由用户明确选一次 —— 要么保留两条，要么把这次的产出收口到已有那条上。
+        */}
+      {duplicatePrompt !== null && (
+        <Modal
+          title={<>⚠️ 库里已经有一条同名任务</>}
+          size="sm"
+          onClose={() => setDuplicatePrompt(null)}
+          footer={(
+            <>
+              <button className="wb-btn" onClick={() => setDuplicatePrompt(null)}>保留两条，我自己处理</button>
+              <button className="wb-btn primary" onClick={() => void reuseExistingTask(duplicatePrompt)}>
+                就用已有那条（归档本次新建的那条）
+              </button>
+            </>
+          )}
+        >
+          <div style={{ fontSize: 13, lineHeight: 1.8 }}>
+            <div style={{ marginBottom: 6 }}>标题：<b>{duplicatePrompt.existingTitle}</b></div>
+            <div style={{ marginBottom: 6, color: 'var(--dsw-alias-label-secondary)' }}>
+              本次草稿确认后，库里现在有两条同名任务。已有那条 id：{duplicatePrompt.existingTaskId.slice(0, 8)}
+            </div>
+            <div style={{ fontSize: 12.5, color: 'var(--dsw-alias-label-secondary)' }}>
+              {duplicatePrompt.sameDescription
+                ? '两条的**描述逐字相同** —— 很可能是同一件事被提交了两次（例如执行会话又交了一份草稿）。'
+                : '两条的描述**不同** —— 可能是两次独立录入，也可能是执行会话重复提交，请自行判断。'}
+              {duplicatePrompt.sameWorkspace ? ' 工作区相同。' : ' 工作区不同。'}
+            </div>
+            <div style={{ marginTop: 8, fontSize: 12, color: 'var(--dsw-alias-label-secondary)' }}>
+              「就用已有那条」会把这条草稿收口到已有任务上，并归档本次新建的那条
+              （可在任务列表页「查看归档」恢复，不会丢数据）。
+            </div>
+          </div>
+        </Modal>
+      )}
 
       <div className="wb-body">
         {draftProblems.length > 0 && (
