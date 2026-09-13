@@ -23,6 +23,7 @@ import { isWslStylePath, joinPath, normalizeWindowsPathToWsl } from './workspace
 import { WORKBENCH_CSS } from './styles.js'
 import { ACTIVATE_EVENT, ACTIVE_ATTR, OFFICIAL_ATTR, PANEL_NAME, PENDING_ATTR, REDUNDANT_ROW_ATTR, VIEW_ATTR } from './constants.js'
 import { panelDataOpen, shouldShowPanel } from './panelState.js'
+import { checkHostCapabilities, refuseToStart, type SlotsProbe } from './capabilities.js'
 import {
   BLOCKED_ATTR, ENTRY_ATTR, ENTRY_CLASS, ENTRY_HTML, ENTRY_PLUGIN_ATTR, ENTRY_PLUGIN_ID, ENTRY_PART_ATTR,
   ENTRY_LABEL_TEXT, ENTRY_PART_VALUE, ENTRY_TITLE, OFFICIAL_MAIN_SLOT, OFFICIAL_OVERLAY_SLOT, OFFICIAL_PANEL_LIST_SLOT,
@@ -2853,8 +2854,12 @@ export const name = 'personal-workbench-client'
  * 正确做法是 **`ctx.inject(['slots', 'layout'], cb)` 把依赖限定在子 fiber**
  * （缺一个只让这块不启动、插件主体照常加载），而不是"不声明 + 软探测"。
  * 本项目 reminder 调度对 `timer` 就是这么做的（见 src/index.ts 的 `ctx.inject(['timer'], …)`）。
+ *
+ * ⚠️ **唯一实现在 `capabilities.ts`**（v1.14.52，设计文档 I3）：这里只转出去，
+ * 供 `test/capabilities.test.mjs` 断言"精确等于 5 项"。原地再写一份字面量
+ * 就是"同一个语义两处实现"——一旦有人只改一边，插件会在半残状态下启动。
  */
-export const inject = ['sessions', 'workspaces', 'connection', 'slots', 'layout']
+export { inject } from './capabilities.js'
 
 /**
  * 宿主上下文（由 apply() 记录），供需要软探测可选服务的模块级函数使用
@@ -3461,6 +3466,21 @@ export function apply(ctx: unknown): () => void {
   })()
   const layout = optionalService<LayoutService>(ctx, 'layout')
   const selectPanel = typeof layout?.selectPanel === 'function' ? layout.selectPanel.bind(layout) : undefined
+  /**
+   * ## 宿主能力自检：不满足就**明确不启动**（设计文档 P5，v1.14.52）
+   *
+   * 这是与"软探测 + 静默降级"**根本不同**的一条路：
+   *
+   * - 旧做法：探不到 `layout`/`slots` → 判定"宿主不支持官方槽位" → 换 DOM 腿 →
+   *   那条腿铺满屏层盖住会话区（用户"除左栏外什么都点不了"），而且**一声不响**；
+   * - 新做法：`inject` 声明完整（缺服务 cordis 直接让插件 pending），
+   *   万一进来了但槽位不全 → 打一条**可读**日志（含缺什么 + 要求什么版本），
+   *   然后**返回空清理函数，不注册任何东西、不写任何 DOM**。
+   *
+   * 老宿主上工作台不启动是**可接受且刻意**的：与其半死不活地降级，不如明确不启动。
+   */
+  const capability = checkHostCapabilities({ slots: slots as SlotsProbe | undefined, layout })
+  if (!capability.ok) return refuseToStart(capability, (message) => console.error(message))
   /**
    * `layout.selectPanel` 的可用性**决定了走哪条腿**（v1.14.48 修正语义）。
    *

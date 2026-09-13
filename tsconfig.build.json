@@ -8,5 +8,5 @@
     "outDir": "lib",
     "rootDir": "src"
   },
-  "include": ["src/index.ts", "src/client/taskFilterSort.ts", "src/client/workspacePath.ts", "src/client/skillPrompt.ts", "src/client/entryContract.ts", "src/client/panelState.ts", "src/review-memory.ts", "src/workspace-check.ts"]
+  "include": ["src/index.ts", "src/client/taskFilterSort.ts", "src/client/workspacePath.ts", "src/client/skillPrompt.ts", "src/client/entryContract.ts", "src/client/panelState.ts", "src/client/capabilities.ts", "src/review-memory.ts", "src/workspace-check.ts"]
 }

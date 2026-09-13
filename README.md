@@ -147,6 +147,21 @@ dsh plugin --profile web add link:/path/to/dsh-personal-workbench
 
 **实测组合**：DSH 0.1.1-rc.1（DOM 入口路径）与 0.1.5-rc.1（官方槽位路径）均可加载使用。
 
+> ⚠️ **架构变更公告（v1.14.52 起，进行中）**：本插件**只支持 DSH 新版**（最低 `0.1.5-rc.1`），
+> 正在**删除 DOM 降级腿**。定稿设计见
+> [`docs/design/2026-09-13-client-architecture-official-only.md`](docs/design/2026-09-13-client-architecture-official-only.md)。
+> 其中已落地：**面板可见性的唯一权威源**（`src/client/panelState.ts`，全仓只有一处回答
+> "面板该不该显示"）、**宿主能力门槛**（`src/client/capabilities.ts`：`inject` 精确 5 项，
+> 缺能力时**明确不启动并打可读日志**，不再"半死不活地降级"）。下面的"两条路径"说明
+> 在阶段 2 完成后会被删除。
+
+**最低支持版本：DSH `0.1.5-rc.1`**。低于该版本时面板整块**不启动**（刻意如此）：
+`inject` 声明了 `sessions` / `workspaces` / `connection` / `slots` / `layout` 五项，
+缺任何一项 cordis 会让插件 pending；万一进来了而槽位不全，`apply()` 会打一条
+含"缺什么 + 要求什么版本"的中文日志后直接返回，**不注册任何东西、不写任何 DOM**。
+早先"探测失败就换自建 DOM 腿"的做法会铺一张 `position:fixed; inset:0` 的满屏层，
+收不起来就永久盖住会话区（用户原话："除左栏外什么都点不了"）—— 那个兜底不再有了。
+
 ### 侧栏入口的两条路径
 
 1. **官方槽位路径（DSH 0.1.5-rc.1+，首选）**：侧栏面板行注册到 `sidebar.panellist`、
@@ -175,9 +190,22 @@ dsh plugin --profile web add link:/path/to/dsh-personal-workbench
 v1.13.3 的再次根治；v1.13.1 的标题栏入口则是因为直接读 `ctx.slots` 而崩。
 本版本新增的 `slots` / `layout` / `teamMemory` 全部按此规则处理。
 
+**边界要分清（v1.14.52 澄清）**：`slots` / `layout` 是**面板功能的前置条件**，
+所以它们进 `inject` —— 拿不到就整块不启动（明说原因），而不是偷偷降级；
+`uiWorkspace` / `teamMemory` / `dshIm` / `skills` 是**可选增强**，
+一律软探测、缺了只是少一个能力。
+
 ### 其它
 
 - 入口分两条：**会话标题栏按钮**走 DSH 官方槽位 `conversation.session.header.actions`（稳定）。
+- **面板互斥由 DSH 宿主的 `activePanelId` 保证**（`layout.selectPanel` 是单值状态）。
+  若同时使用**不使用官方槽位、而以 DOM 接管中栏**的插件（如 `dsh-client-ui-task-board` /
+  `dsh-ssh` / `dsh-mnemon`），可能出现两个面板同时激活 ——
+  **这是宿主缺少统一面板机制导致的已知限制，不是本插件的缺陷**：那些插件没向宿主注册面板，
+  宿主的 `activePanelId` 无从知晓它们存在。因此本插件**不做跨插件 DOM 协调**：
+  不读、不写任何兄弟插件的 `data-dsh-*` 属性，也不广播/监听 `dsh-panel-activate`。
+  本插件只写两个自带属性（且幂等）：`<html data-dsh-personal-workbench-active>` 与
+  `<html style="--wb-sidebar-w: Npx">`。
 - 与 `dsh-web-ui`（task-board / ssh / mnemon）共存时使用其 `data-dsh-*` 互斥协议（**仅 DOM 降级路径需要**）；未安装时自动失效，**不依赖 dsh-web-ui**。
 - 互斥判定按**属性名格式**识别（`data-dsh-*-active`），不是硬编码兄弟包名清单 ——
   家族新增成员不需要改本插件。
