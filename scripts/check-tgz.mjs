@@ -10,13 +10,27 @@
  * 不做完整解包，只核对：① gzip 能解；② tar 里能找到 package.json；③ 版本与期望一致；
  * ④ lib/client.js 与 lib/index.js 都在且非空。
  *
- * 用法：node scripts/check-tgz.mjs [tgz路径] [期望版本]
+ * 用法：node scripts/check-tgz.mjs <tgz路径> [期望版本]
  */
 import { createGunzip } from 'node:zlib'
 import { createReadStream, statSync } from 'node:fs'
 import { basename } from 'node:path'
 
-const tgz = process.argv[2] ?? 'dely0-dsh-personal-workbench-1.14.45.tgz'
+/**
+ * ⚠️ tgz 路径**必须显式给**（2026-09-13 改）。
+ *
+ * 原先是 `process.argv[2] ?? 'dely0-dsh-personal-workbench-1.14.45.tgz'` ——
+ * 一个写死的旧版本号默认值。它有两重坑：
+ * 1. 忘了传参时会去校验一个跟当前版本无关的老包（甚至可能静默"通过"）；
+ * 2. 整理归档后 tgz 已不在仓库根（历史包在 `_local-archive/tgz/`），
+ *    那个默认值只会报"文件不存在"，把排查方向带偏。
+ */
+const tgz = process.argv[2]
+if (tgz === undefined) {
+  console.error('用法：node scripts/check-tgz.mjs <tgz路径> [期望版本]')
+  console.error('  （tgz 由仓库根跑 `pnpm pack` 生成；历史包见 _local-archive/tgz/）')
+  process.exit(2)
+}
 const expectedVersion = process.argv[3]
 
 /** 把 gzip 流解成 Buffer（tar 是顺序格式，整份读进来最简单）。 */

@@ -5,7 +5,7 @@
  * 手工复制容易漏东西、也不会留下"这个包当时对应哪份源码"的证据。
  * 存档的价值全在**可追溯**：拿到目录就能确认包、版本、指纹与当时的验收结论是一套的。
  *
- * 产出 `_archive-v<版本>-<日期时间>/`：
+ * 产出 `_local-archive/_archive-v<版本>-<日期时间>/`：
  *   - `dely0-dsh-personal-workbench-<版本>.tgz`  装盘包（正式产物）
  *   - `package.json`                              源码清单（版本号的来源）
  *   - `FINGERPRINT.txt`                           装盘产物 vs 开发树构建的逐文件指纹校验输出
@@ -45,8 +45,17 @@ if (!existsSync(tgzPath)) {
 const parts = new Date()
 const pad = (value) => String(value).padStart(2, '0')
 const stamp = `${parts.getFullYear()}${pad(parts.getMonth() + 1)}${pad(parts.getDate())}-${pad(parts.getHours())}${pad(parts.getMinutes())}${pad(parts.getSeconds())}`
+/**
+ * 存档目录统一放在 `_local-archive/` 下（2026-09-13 整理）。
+ *
+ * 为什么不直接放仓库根：本机曾累积 6 个 `_wsl-backup-*`（共 ~394 MB）与 8 个 `_archive-*`，
+ * 把仓库根堆成了杂物间、误判"这个仓库多大"都做不到。现在根目录只留**当前装盘 pin 的那个 tgz**
+ * （profile 用绝对路径指着它），其余历史产物全部归位到 `_local-archive/`，约定见该目录的 README。
+ */
 const dirName = `_archive-v${version}-${stamp}`
-const dir = join(ROOT, dirName)
+const archiveRoot = join(ROOT, '_local-archive')
+mkdirSync(archiveRoot, { recursive: true })
+const dir = join(archiveRoot, dirName)
 mkdirSync(dir, { recursive: true })
 
 /** 跑一条命令并把输出同时打印与落盘（失败不中断，存档要尽量完整）。 */
