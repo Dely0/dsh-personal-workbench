@@ -1634,6 +1634,14 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
         onConfirmed={(outcome) => handleDraftConfirmed(outcome, pendingDraft)}
         switchedFrom={draftSwitchedFrom === null ? undefined : { kindCode: dicts.find((d) => d.kind === 'draft_kind' && d.code === draftSwitchedFrom.kindCode)?.name ?? draftSwitchedFrom.kindCode }}
         onDismissed={() => { dismissDraft(pendingDraft) }}
+        /**
+         * 「回到…会话」用：**只把横幅从投影里拿掉**，不触发任何网络刷新。
+         *
+         * 修的是 2026-09-13 用户实测的"点回到会话后过 5 秒弹框才消失"：
+         * 旧路径只登记屏蔽集合、不动 `pendingDraft`，于是界面要等下一轮 5 秒轮询
+         * 才被覆盖。这里同步清掉，同一帧就消失。
+         */
+        onSettled={() => setPendingDraft(null)}
         onDone={() => { setPendingDraft(null); setPlanRefreshKey((v) => v + 1); setReportRefreshKey((v) => v + 1); setKnowledgeRefreshKey((v) => v + 1); setIdeaRefreshKey((v) => v + 1); void refresh() }}
         /**
          * 右上角 X / Esc / 点遮罩 = **收起这条横幅**（不是放弃草稿）。

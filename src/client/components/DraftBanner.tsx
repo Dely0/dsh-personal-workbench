@@ -95,6 +95,20 @@ export interface DraftBannerProps {
    */
   onReuseExisting?: (draft: DraftView, taskId: string) => void
   /**
+   * **把这份草稿从当前投影里立刻拿掉**（只改本地状态，不触发任何网络刷新）。
+   *
+   * 与 `onDone` 的分工（2026-09-13 实测 BUG 的修法）：
+   *
+   * - `onSettled` = 纯投影更新：用户做了个动作，横幅必须**同一帧**消失。
+   *   否则"关闭"要等到下一轮 5 秒轮询才被覆盖 —— 用户看到的是"点了没反应，
+   *   过一会儿才消失"，读不出自己这一下生效没有。
+   * - `onDone` = 投影更新 **+ 数据刷新**：确认/放弃/暂存改动了服务端数据，
+   *   需要顺带刷新计划、报告、知识库、点子等工作台数据。
+   *
+   * 需要"立刻收掉但不必刷新数据"的路径（点「回到…会话」）只调 `onSettled`。
+   */
+  onSettled?: () => void
+  /**
    * 这份弹框是**递补上来**的：上一份草稿被收起后，服务端把另一种类型的草稿推了上来。
    *
    * 必须显式告诉用户（2026-09-13 重复建单事故）：弹框长得一模一样，用户以为还在处理
@@ -235,7 +249,7 @@ export function reviewMemoryNotes(payload: Record<string, unknown>): string[] {
   ))
 }
 
-export function DraftBanner({ draft, onDone, runtime, closePanel, kindName, onProblems, onNotice, onDismissed, onClose, onConfirmed, switchedFrom }: DraftBannerProps): ReactNode {
+export function DraftBanner({ draft, onDone, runtime, closePanel, kindName, onProblems, onNotice, onDismissed, onClose, onConfirmed, onSettled, switchedFrom }: DraftBannerProps): ReactNode {
   const [busy, setBusy] = useState(false)
   /**
    * 复盘的团队记忆可见性（v1.14.0：复盘确认时自动写入团队记忆库）。
@@ -335,6 +349,29 @@ export function DraftBanner({ draft, onDone, runtime, closePanel, kindName, onPr
    * 3. **收横幅（登记 id）放在最后**，且失败也要做 —— 否则 5 秒轮询又推回来，
    *    用户会以为"什么都没发生"。
    */
+  /**
+   * 「回到…会话」：切到那个会话，并**立刻**把这条横幅收起来。
+   *
+   * ## 顺序很关键（2026-09-15 用户实测"只会让弹框消失，不会真的回到会话"）
+   *
+   * 1. **先在当前事件里发起会话切换**（`sessions.open`）；
+   * 2. **收横幅放在最后**，且失败也要做 —— 否则轮询又把它推回来，
+   *    用户会以为"什么都没发生"。
+   *
+   * ## 为什么不能再"延迟收起"（2026-09-13 用户实测 BUG）
+   *
+   * 旧实现把 `closePanel()` 放进 `setTimeout(0)` —— 本意是"别打断宿主的会话切换"，
+   * 但副作用是**收横幅也跟着被推迟**：用户看到的是"点了回到会话，过了好一会儿
+   * 弹框才消失"（实测是 5 秒，正好等于 `setPendingDraft` 被下一轮 5 秒轮询覆盖的时刻）。
+   *
+   * 更根本的问题是**两件事被绑在了一起**：
+   *
+   * - **收横幅**（`onDismissed` / `onDone`）：纯本地状态，必须**同一帧**生效，
+   *   否则用户读不出"我这一下到底生效没有"；
+   * - **收面板**（`closePanel()`）：要避让宿主的视图切换，需要延后。
+   *
+   * 现在把它们拆开：横幅立刻收（本函数内同步完成），面板仍在下一个宏任务里收。
+   */
   const openSession = (): void => {
     if (presentation.sessionId === '') {
       onNotice?.('这份草稿没有关联会话（可能是手动创建的），无法跳回。', 'warning')
@@ -346,11 +383,13 @@ export function DraftBanner({ draft, onDone, runtime, closePanel, kindName, onPr
     } catch (error) {
       failure = error instanceof Error ? error.message : String(error)
     }
-    // 先让宿主的会话切换落地，再收面板（顺序反了会把切换打断）。
+    // ① 横幅：立刻消失（登记屏蔽 + 清投影；不触发任何网络刷新）
+    onDismissed?.()
+    onSettled?.()
+    // ② 面板：让宿主的会话切换先落地，再收面板（顺序反了会把切换打断）
     window.setTimeout(() => {
       try { closePanel() } catch { /* 面板收起失败不影响跳转 */ }
     }, 0)
-    onDismissed?.()
     if (failure !== '') onNotice?.(`切换会话失败：${failure}`, 'warning')
   }
   const canDefer = presentation.canDefer !== false
