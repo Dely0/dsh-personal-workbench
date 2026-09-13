@@ -54,29 +54,28 @@ export function overlaySlotAvailable(slots: unknown): boolean {
   try {
     candidate.entriesOfSlot.call(slots, OFFICIAL_OVERLAY_SLOT)
     return true
-  } catch {
-    return false
-  }
+  } catch { return false }
 }
 
 /**
- * 官方注册是否**已经完成**（诊断用）：三个槽位都能查到条目，且其中包含我们的面板 id。
+ * 官方注册是否**已经完成**：侧栏面板行与 main 条目都能查到我们。
  *
- * 这不是门控判据（门控是 `capabilities.ts` 的能力自检 + 宿主 `activePanelId`），
- * 只用于自检与排障：确认"我们的条目确实进了宿主注册表"。
+ * ⚠️ 用的宿主接口是 `slots.entries(name)`（**不是** `entriesOfSlot`）——
+ * 两者在宿主上是不同方法：`entriesOfSlot` 拿来确认"槽位存在"（见 `overlaySlotAvailable`），
+ * `entries` 才是"已经注册进去的条目列表"。v1.14.53 重写这个模块时曾把两者搞混
+ * （用 `entriesOfSlot` 去取条目），语义就变了 —— 恢复为原始实现。
+ *
+ * 只作诊断/自检：门控判据是 `capabilities.ts` 的能力自检 + 宿主 `activePanelId`。
  */
 export function officialRegistrationComplete(slots: unknown, panelId: string): boolean {
-  const candidate = slots as { entriesOfSlot?: (name: string) => unknown } | undefined
-  if (candidate === undefined || candidate === null || typeof candidate.entriesOfSlot !== 'function') return false
+  const candidate = slots as { entries?: (name: string) => Array<{ options?: { id?: unknown; key?: unknown } }> } | undefined
+  if (candidate === undefined || candidate === null || typeof candidate.entries !== 'function') return false
   try {
-    const entries = candidate.entriesOfSlot.call(slots, OFFICIAL_PANEL_LIST_SLOT)
-    if (entries === undefined || entries === null) return false
-    const ids = Array.isArray(entries)
-      ? entries.map((entry) => (entry as { id?: unknown })?.id)
-      : entries instanceof Map
-        ? Array.from(entries.values()).map((entry) => (entry as { id?: unknown })?.id)
-        : []
-    return ids.includes(panelId)
+    const panels = candidate.entries.call(slots, OFFICIAL_PANEL_LIST_SLOT)
+    const mains = candidate.entries.call(slots, OFFICIAL_MAIN_SLOT)
+    const hasEntry = Array.isArray(panels) && panels.some((entry) => entry?.options?.id === panelId)
+    const hasMain = Array.isArray(mains) && mains.some((entry) => entry?.options?.key === panelId || entry?.options?.id === panelId)
+    return hasEntry && hasMain
   } catch { return false }
 }
 
@@ -104,54 +103,100 @@ export function officialPanelRowRendered(root: ParentNode, label: string): boole
 export const ENTRY_TITLE = '打开工作台（任务 / 日历 / 知识库 / 点子）'
 
 /**
- * 把宿主主题里的一批 CSS 变量取出来，包成一层 `--wb-*` token。
+ * `--wb-*` 令牌层：**每一项都带回退值，且回退值跟随明暗**。
  *
- * 为什么要这一层：面板的配色全部引用 `--dsw-alias-*`（宿主主题变量），
- * 而宿主的变量名在大版本之间会变。多一层自己的 token 之后，
- * 换宿主版本只需要改这个映射，不用动 700 行 CSS。
+ * ## 这一层为什么必须存在（真实事故，不是洁癖）
+ *
+ * 面板最初直接写 `var(--dsw-alias-bg-base, #111)`。宿主令牌拿不到时（宿主改名、
+ * 或我们的容器不在宿主的主题作用域里），回退值 `#111` 是**深黑** ——
+ * 于是整个面板变成黑底 + 深色字，用户看到的是"工作台一片漆黑、字都看不清"。
+ *
+ * 现在的做法：先映射到我们自己的 `--wb-*`，回退值用 `light-dark()`，
+ * 令牌缺失时退化成"跟随系统明暗"，而不是"变成黑色"。
+ */
+const TOKENS: Record<string, string> = {
+  'bg-base': 'light-dark(#ffffff, #17171a)',
+  'bg-layer-1': 'light-dark(#f7f7f8, #202024)',
+  'bg-layer-2': 'light-dark(#ffffff, #1c1c1f)',
+  'border-l1': 'light-dark(rgba(0,0,0,.16), rgba(255,255,255,.20))',
+  'label-primary': 'light-dark(#1a1a1c, #eeeeef)',
+  'label-secondary': 'light-dark(rgba(0,0,0,.58), rgba(255,255,255,.64))',
+  'state-business-primary': 'light-dark(#2f6fe0, #6f9df0)',
+}
+
+const FONT_FAMILY = 'system-ui, -apple-system, "Segoe UI", sans-serif'
+
+/** 生成 `--wb-*` 令牌层 CSS（由 styles.ts 放在样式表最前面）。 */
+export function tokenLayerCss(): string {
+  const lines = [
+    // 兜底：宿主没设 color-scheme 时跟随系统；宿主设了就以宿主的为准（更具体的选择器会覆盖）。
+    ':root { color-scheme: light dark; }',
+    '.wb-scope, :root {',
+    `  --wb-font: var(--dsw-font-family, ${FONT_FAMILY});`,
+  ]
+  for (const [name, fallback] of Object.entries(TOKENS)) {
+    lines.push(`  --wb-${name}: var(--dsw-alias-${name}, ${fallback});`)
+  }
+  lines.push('}')
+  return lines.join('\n')
+}
+
+/**
+ * 把样式表里的 `var(--dsw-alias-x, <回退>)` 改写成 `var(--wb-x)`（纯函数，可测）。
+ *
+ * 用函数而不是手工替换上百处：手工替换一定会漏，而**漏掉的那一处**就会在
+ * 令牌缺失时变回深黑 —— 正是上面那次事故的成因。没登记的令牌保持原样
+ * （宁可原样，也不要静默改错），并由单测把"有没有漏登记的"钉住。
+ *
+ * 回退值里可能**再套一层 var()**（例如 `var(--dsw-alias-bg-base, var(--dsw-specific-x, #111))`），
+ * 所以括号匹配用"含一层嵌套"的写法，而不是 `[^)]*`。
  */
 export function toWorkbenchTokens(css: string): string {
-  const names = registeredTokenNames(css)
-  if (names.length === 0) return css
+  const fallback = String.raw`(?:\s*,\s*(?:[^()]|\((?:[^()]|\([^()]*\))*\))*)?`
   return css
+    .replace(
+      new RegExp(String.raw`var\(--dsw-alias-([a-z0-9-]+)${fallback}\)`, 'g'),
+      (whole: string, name: string) => (TOKENS[name] === undefined ? whole : `var(--wb-${name})`),
+    )
+    .replace(new RegExp(String.raw`var\(--dsw-font-family${fallback}\)`, 'g'), 'var(--wb-font)')
+}
+
+/** 已登记的令牌名（单测用：确保样式里用到的 `--wb-*` 都真的被定义了）。 */
+export function registeredTokenNames(): string[] {
+  return Object.keys(TOKENS)
 }
 
 /**
- * 从一份 CSS 文本里抽出所有 `--dsw-*` 变量名（用于生成 token 层与自检）。
+ * 面板容器的可见性规则（由 styles.ts 拼进 `WORKBENCH_CSS`）。
  *
- * 用 `matchAll` 收集 `var(--dsw-xxx)` 形式的引用；同一变量重复出现只保留一次。
- */
-export function registeredTokenNames(css: string): string[] {
-  const found = new Set<string>()
-  for (const match of css.matchAll(/var\(\s*(--dsw-[a-z0-9-]+)/gi)) found.add(match[1])
-  return [...found]
-}
-
-/** 生成的 token 层 CSS 文本（把 `--dsw-*` 引用统一改写成 `--wb-*`）。 */
-export function tokenLayerCss(): string {
-  return ''
-}
-
-/** `entryCss()`：侧栏入口行样式。DOM 腿删除后已无入口行需要我们自己排版（宿主渲染）。 */
-export function entryCss(): string {
-  return ''
-}
-
-/**
- * 面板容器 CSS：只在**官方路径**下生效（`html[official]`），并由 `ACTIVE_ATTR` 门控显隐。
+ * 放在契约模块里而不是 styles.ts 的原因：**样式只在浏览器 bundle 里**，
+ * `styles.ts` 不进构建产物、测不到；规则写在这里就能被 `node --test` 锁住。
  *
- * 三条规则对应三条不变量：
- * - `[official]`：官方槽位机制就绪（由 `apply()` 无条件写上，见 `capabilities.ts` 的门槛）；
- * - `[active]`：宿主当前选中本面板（由 `decidePanel()` 的投影写入，幂等）；
- * - `.wb-panel-host` 自身撑满并接管指针事件，避免"覆盖层收不起来"那类事故。
+ * ## 规则怎么读（`view` = `VIEW_ATTR`，`official` = 官方路径就绪标记）
+ *
+ * 真正承载内容的节点带 `VIEW_ATTR`（`.wb-app-scope` 只是它内部的一层），
+ * 所以门控必须按 `VIEW_ATTR` 写 —— 按类名门控 `.wb-panel-host` 等于什么都没放行。
+ *
+ * - ① 会话列里那份内容一律隐藏：真内容只在官方容器（`shell.overlay`）里；
+ * - ② 官方容器里那份照常显示，显隐交给容器自己的 `data-open`（见 index.tsx 的 `panelDataOpen`）；
+ * - ③ 会话列正常占位：让位是宿主按 `activePanelId` 自己做的事，我们不再 `display:none` 它。
+ *
+ * ⚠️ **v1.14.53 的真实事故**：阶段 2 删 DOM 腿时这里被"重写"过一版
+ * （`html[official] .wb-panel-host { display:none }` + `html[official][active] { display:block }`），
+ * 结果**面板整个不显示**（用户："插件入口不可用了，工作台插件无法正常显示"）。
+ * 教训：**迁移期不要"顺手重写"这类门控 CSS** —— 它和 DOM 结构强耦合，改法必须小步可验证。
  */
-export function panelContainerCss(attrs: { view: string; official: string; active: string; blocked?: string }): string[] {
+export function panelContainerCss(attrs: { view: string; official: string; active: string }): string[] {
   const { view, official, active } = attrs
   return [
-    `html[${official}] .wb-panel-host { display: none; }`,
-    `html[${official}][${active}] .wb-panel-host { display: block; }`,
-    `html[${view}] .wb-panel-host { position: fixed; inset: 0 0 0 var(--wb-sidebar-w, 280px); z-index: 55; pointer-events: none; }`,
-    `.wb-panel-host > .wb-app-scope { pointer-events: auto; height: 100%; min-height: 0; }`,
+    // ① 会话列里那份内容一律隐藏（真内容只在官方容器里）
+    `html[${official}] [${view}] { display: none; }`,
+    // ② 官方容器里那份照常显示（容器的显隐由 data-open 决定）
+    `html[${official}] .wb-panel-host [${view}] { display: block; }`,
+    // ③ 会话列正常占位（不再由我们 display:none 掉它）
+    `html[${official}] [class*='centerCol'] > :not([${view}]) { display: flex; }`,
+    // ④ 未就绪兜底：旧行为（官方标记缺失时按 ACTIVE_ATTR 放行），保证任何情况下不会"全黑"
+    `html:not([${official}])[${active}] .wb-panel-host [${view}] { display: block; }`,
   ]
 }
 
