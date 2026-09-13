@@ -80,10 +80,16 @@ Turn your DSH into a **calendar + task list + AI assistant workbench**.
 
 ### 前置条件
 
-- [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) **0.1.5-rc.1** Web 版
+- [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) **0.1.5-rc.1 及以上** Web 版
+  （这是硬边界：低于它面板整块不启动，理由见「兼容性与已知限制」）
 - Node.js `^22.19.0` 或 `>=24.0.0`
 - pnpm `>=11.7.0 <12`
 - 网络可访问 npm registry（或使用镜像）
+
+> ⚠️ **装完必须重启 `dsh web`，刷新页面不够。**
+> 客户端 bundle 由 `dsh-client-modules` 在宿主**启动时**读进内存 Map
+> （`bundleResource()` 只查那张 Map），所以"装好了 → 刷新浏览器"拿到的是**旧代码**，
+> 连 URL 上的 `rev` 都对不上。同理，升级/回退之后也都要重启。
 
 ### 从 npm 安装（推荐）
 
@@ -133,55 +139,76 @@ dsh plugin --profile web add link:/path/to/dsh-personal-workbench
 ## 兼容性与已知限制
 
 > 滚动维护的**已知问题与待办清单**见 [`docs/issues/2026-09-13-outstanding-issues.md`](docs/issues/2026-09-13-outstanding-issues.md)。
-> 本节的版本矩阵里仍保留 0.1.1-rc.1 那一行，是用来对照"为什么现在不再支持它"（见下方公告）。
+> 本节只讲**当前版本的依赖与支持边界**。历史结论（DOM 降级腿、家族互斥）已随 v1.14.53 删除，
+> **别照着旧文档配环境**。
 
-### DSH 版本支持矩阵
+### 一句话依赖结论
 
-插件对 DSH 的能力要求分三档。**降级一律是"少一个入口/少一个能力"，不是"插件加载失败"**：
-
-| 能力 | 需要的 DSH 版本 | 拿不到时的行为 |
+| 项 | 要求 | 说明 |
 |---|---|---|
-| 插件本体、任务/日历/知识库/点子、AI 会话关联 | 0.1.0-rc.6+ | — |
-| 会话标题栏入口（官方槽位 `conversation.session.header.actions`） | 0.1.1-rc.1+ | 无该按钮，侧栏入口仍可用 |
-| **侧栏面板行（官方槽位 `sidebar.panellist`）+ 中央面板（官方槽位 `main`）** | **0.1.5-rc.1+** | 回落到 DOM 注入入口（见下） |
-| `layout.selectPanel`（面板选中状态由宿主单值状态管理） | 0.1.5-rc.1+ | 同上 |
+| **DSH** | **`0.1.5-rc.1` 及以上**（Web 版） | 低于此版本**客户端面板整块不启动**（刻意如此，见下） |
+| Node | `^22.19.0` 或 `>=24.0.0` | 与 `package.json` 的 `engines` 一致 |
+| pnpm | `>=11.7.0 <12` | 仅开发/构建时需要 |
+| `@deepseek-ai/cordis` | `^4.0.1` | peer 依赖 |
+| `@deepseek-ai/dsh-host-webserver` / `dsh-system-prompt` / `dsh-tools` | `^0.1.0-rc.6` | peer 依赖（服务端半边） |
+| DSH 提供的客户端槽位 | `sidebar.panellist` + `main` + `shell.overlay` | **三个都要有**，缺一个就不启动 |
+| `layout.selectPanel` | 必须有 | 它是"面板能被选中"的唯一开关 |
+| `@xmanrui/dsh-im` | 可选 | 微信提醒通道；未装则降级为页内提醒 + 桌面通知 |
+
+**最低支持版本：DSH `0.1.5-rc.1`。** 这一条是硬边界，不是"建议"。
+
+### 低于最低版本会怎样：**明确不启动**（不是降级）
+
+`inject` 精确声明 5 项：`sessions` / `workspaces` / `connection` / `slots` / `layout`
+（唯一实现见 `src/client/capabilities.ts`，`test/capabilities.test.mjs` 把它锁死）。
+缺任何一项，cordis 会让插件 pending；万一进来了但槽位不全，`apply()` 会打一条
+**含"缺什么 + 要求什么版本"的中文日志**后直接返回 —— **不注册任何东西、不写任何 DOM**。
+
+为什么不做兼容层：早先的实现是"探测不到官方槽位就换自建 DOM 腿"，
+而那条腿会铺一张 `position:fixed; inset:0` 的**满屏层**，一旦收不起来就永久盖住会话区
+（用户原话："除左栏外什么都点不了"）。与其"半死不活地降级"，不如**明确不启动并说明原因**。
+
+> **服务端能力不受此限制**：任务/日历/知识库/点子、提醒、日报周报与 `workbench_*` 工具
+> 只需要 `0.1.0-rc.6+`。所以老宿主上你仍能用 AI 侧的工具与提醒，只是**看不到面板界面**。
+
+### 支持的能力矩阵
+
+| 能力 | 需要的 DSH 版本 | 拿不到时 |
+|---|---|---|
+| 服务端能力：任务/日历/知识库/点子、AI 会话关联、提醒、日报周报、`workbench_*` 工具 | 0.1.0-rc.6+ | — |
+| **面板本体：`sidebar.panellist` + `main` + `shell.overlay`** | **0.1.5-rc.1+** | **面板整块不启动**（打可读日志） |
+| **`layout.selectPanel`**（面板选中状态由宿主单值状态管理） | **0.1.5-rc.1+** | 同上 |
+| 会话标题栏入口（官方槽位 `conversation.session.header.actions`） | 0.1.5-rc.1+ | 无该按钮；侧栏面板行仍可用 |
 | 官方 `uiWorkspace.connectWorkspace`（AI 会话切工作区） | 0.1.5-rc.1+ | 回落 `workspaces.openPath` |
-| 团队记忆库（复盘自动沉淀） | 与 `dsh-team-memory` 无关（走它的落盘/队列格式） | 复盘只写回任务详情，不写团队库 |
+| 团队记忆库（复盘自动沉淀） | 与 `dsh-team-memory` **无关**（走它的落盘/队列格式） | 复盘只写回任务详情，不写团队库 |
+| 微信提醒 | 可选插件 `@xmanrui/dsh-im` | 静默降级为页内提醒 + 桌面通知 |
+| 技能选择器 | 宿主 `skills` 注册表 | 选择器自动隐藏 |
 
-**实测组合**：DSH 0.1.1-rc.1（DOM 入口路径）与 0.1.5-rc.1（官方槽位路径）均可加载使用。
-
-> ⚠️ **架构变更公告（v1.14.52 起，进行中）**：本插件**只支持 DSH 新版**（最低 `0.1.5-rc.1`），
-> 正在**删除 DOM 降级腿**。定稿设计见
+> 历史说明（仅供对照，**已不适用**）：v1.14.0–v1.14.52 曾支持 DSH `0.1.1-rc.1`，
+> 走的是"往侧栏 DOM 注入入口行 + 自建覆盖层"的降级腿。那条腿连同社区
+> 「sidebar-entry 家族约定」（`data-dsh-<pkg>-entry` / `dsh-panel-activate` / 摘兄弟
+> `data-dsh-*-active`）在 v1.14.53 **整体删除**。定稿设计见
 > [`docs/design/2026-09-13-client-architecture-official-only.md`](docs/design/2026-09-13-client-architecture-official-only.md)。
-> 其中已落地：**面板可见性的唯一权威源**（`src/client/panelState.ts`，全仓只有一处回答
-> "面板该不该显示"）、**宿主能力门槛**（`src/client/capabilities.ts`：`inject` 精确 5 项，
-> 缺能力时**明确不启动并打可读日志**，不再"半死不活地降级"）。下面的"两条路径"说明
-> 在阶段 2 完成后会被删除。
 
-**最低支持版本：DSH `0.1.5-rc.1`**。低于该版本时面板整块**不启动**（刻意如此）：
-`inject` 声明了 `sessions` / `workspaces` / `connection` / `slots` / `layout` 五项，
-缺任何一项 cordis 会让插件 pending；万一进来了而槽位不全，`apply()` 会打一条
-含"缺什么 + 要求什么版本"的中文日志后直接返回，**不注册任何东西、不写任何 DOM**。
-早先"探测失败就换自建 DOM 腿"的做法会铺一张 `position:fixed; inset:0` 的满屏层，
-收不起来就永久盖住会话区（用户原话："除左栏外什么都点不了"）—— 那个兜底不再有了。
+### 唯一的入口与面板路径（v1.14.53 起）
 
-### 侧栏入口的两条路径
+1. **侧栏面板行**注册到官方槽位 `sidebar.panellist`（`kind=list`、`scope=root`）——
+   行按钮、Tooltip、`aria-label`/`aria-current`、行高与折叠态圆形**全部由宿主 `PanelRow` 渲染**，
+   本插件只提供图标（`WorkbenchPanelIcon`）。
+2. **中央面板**注册到官方键槽 `main`，但**只放一个返回 `null` 的空占位** ——
+   它存在的唯一理由是让 `layout.selectPanel(id)` 的校验通过。
+3. **真内容**注册到 `shell.overlay`（框架级浮层，**始终挂载**）。
+   为什么不放 `main`：`main` 是键槽，`activePanelId` 一变宿主就卸载整棵子树，
+   而我们这棵树里装着**跨页面常驻的草稿弹框** —— 关面板会连弹框一起消失
+   （用户实测"只能回到工作台页面才看得到弹框"）。
+4. **面板显隐**只有一个答案：`decidePanel()`（`src/client/panelState.ts`，纯函数 + 表驱动单测）。
+   宿主状态可读时只信 `activePanelId`，不可读时才退回本地意图。
+   `data-open` 属性由同一个函数派生（`panelDataOpen()`），所以"决策"与"投影"不可能打架。
 
-1. **官方槽位路径（DSH 0.1.5-rc.1+，首选）**：侧栏面板行注册到 `sidebar.panellist`、
-   面板内容注册到 `main`（`key` 与入口 `id` 同为 `personal-workbench`）。
-   行按钮、Tooltip、`aria-label`/`aria-current`、行高与折叠态圆形**全部由宿主渲染**；
-   面板互斥由宿主的 `activePanelId`（单值状态）保证，本插件不参与。
-2. **DOM 降级路径（旧宿主）**：往侧栏 DOM 注入入口行 + 覆盖式面板，依赖 `data-pane` /
-   `logoRow` / `centerCol` 等 class，并遵守社区「sidebar-entry 家族约定」
-   （`data-dsh-<pkg>-entry` / `data-dsh-plugin` / `data-dsh-part="sidebar-entry"` +
-    `dsh-panel-activate` 广播 + `data-dsh-<pkg>-active` 互斥）。
-   契约细节与回归断言见 `src/client/entryContract.ts` 与 `test/entryContract.test.mjs`。
+**没有第二条路径。** 本插件不往宿主侧栏注入任何 DOM（`test/clientInvariants.test.mjs` 的 I6 钉住）。
 
-   **DSH 升级到新的大版本时，请重新验证降级路径的这些选择器；官方槽位路径不受影响。**
-
-判定走哪条路径的是纯函数 `officialSlotDecision()`
-（`slots` 服务 + `layout.selectPanel` + `sidebar.panellist` 槽位三者齐备才走官方路径），
-任一缺失即整体回落 DOM 腿 —— 宁可降级，也不能出现"面板再也打不开"。
+判定"面板该不该显示"的只有一处实现（`decidePanel()`）；**没有"走哪条路径"的选择逻辑了** ——
+`officialSlotDecision()` / `officialPathConfirmed()` 随降级腿一起删除。**能力不满足就明确不启动。**
 
 ### 硬规则：可选服务一律软探测
 
@@ -200,7 +227,8 @@ v1.13.3 的再次根治；v1.13.1 的标题栏入口则是因为直接读 `ctx.s
 
 ### 其它
 
-- 入口分两条：**会话标题栏按钮**走 DSH 官方槽位 `conversation.session.header.actions`（稳定）。
+- 入口只有一个：**宿主渲染的侧栏面板行**（`sidebar.panellist`）。会话标题栏按钮同样走官方槽位
+  `conversation.session.header.actions`。
 - **面板互斥由 DSH 宿主的 `activePanelId` 保证**（`layout.selectPanel` 是单值状态）。
   若同时使用**不使用官方槽位、而以 DOM 接管中栏**的插件（如 `dsh-client-ui-task-board` /
   `dsh-ssh` / `dsh-mnemon`），可能出现两个面板同时激活 ——
@@ -208,10 +236,7 @@ v1.13.3 的再次根治；v1.13.1 的标题栏入口则是因为直接读 `ctx.s
   宿主的 `activePanelId` 无从知晓它们存在。因此本插件**不做跨插件 DOM 协调**：
   不读、不写任何兄弟插件的 `data-dsh-*` 属性，也不广播/监听 `dsh-panel-activate`。
   本插件只写两个自带属性（且幂等）：`<html data-dsh-personal-workbench-active>` 与
-  `<html style="--wb-sidebar-w: Npx">`。
-- 与 `dsh-web-ui`（task-board / ssh / mnemon）共存时使用其 `data-dsh-*` 互斥协议（**仅 DOM 降级路径需要**）；未安装时自动失效，**不依赖 dsh-web-ui**。
-- 互斥判定按**属性名格式**识别（`data-dsh-*-active`），不是硬编码兄弟包名清单 ——
-  家族新增成员不需要改本插件。
+  `<html style="--wb-sidebar-w: Npx">`；`test/clientInvariants.test.mjs` 的 I4/I5 把这两条钉住。
 - 微信提醒依赖 `@xmanrui/dsh-im`：**软探测**（`ctx.get('dshIm')`），未安装或未配置投递目标时静默降级为页内提醒 + 桌面通知，不影响其它功能。
 - 技能目录依赖宿主 `skills` 注册表：未安装时 Skill 选择器自动隐藏。
 - 团队记忆沉淀（复盘 → 团队记忆库）复用 `dsh-team-memory` 的本地 Markdown + 上传队列格式：
@@ -236,6 +261,9 @@ v1.13.3 的再次根治；v1.13.1 的标题栏入口则是因为直接读 `ctx.s
    所以改完要走：改版本号 → `pnpm build` → `pnpm pack` → `dsh plugin add <新 tgz>` → 重启。
 
 ## 版本历史
+
+> 详细发行说明（含依赖/支持边界、验收证据、踩坑记录）：**[`docs/releases/v1.14.57.md`](docs/releases/v1.14.57.md)**；
+> 更早的见 [`docs/releases/`](docs/releases/)。
 
 | 版本 | 要点 |
 |---|---|
@@ -318,16 +346,63 @@ Then restart `dsh web` and hard-refresh the browser.
 
 ## Compatibility
 
-- Built and tested against **DeepSeek Harness 0.1.5-rc.1 Web**; also loadable on 0.1.1-rc.1
-  (the sidebar entry then falls back to the DOM-contract path).
-- Official slots are used when available: `sidebar.panellist` + `main` for the sidebar panel,
-  `conversation.session.header.actions` for the header button. Panel mutual exclusion is owned by
-  the host's single-value `activePanelId`, so this plugin no longer races sibling plugins for it.
-- **Hard rule:** every optional DSH service is soft-probed with `ctx.get(name)` and never listed in
-  `inject`. Putting a version-specific service into `inject` makes the whole plugin go `pending`
-  (`Failed to load plugins`) on older hosts — this happened three times before it became a rule.
-- Does **not** depend on `dsh-web-ui`; optional coexistence protocol only (DOM fallback path).
-- Node.js `^22.19.0 || >=24.0.0`, pnpm `>=11.7.0 <12`.
+**Minimum: DeepSeek Harness `0.1.5-rc.1` (Web).** This is a hard boundary, not a suggestion.
+
+| Requirement | Version | Notes |
+|---|---|---|
+| DSH (Web) | **`0.1.5-rc.1`+** | Below this, **the panel does not start at all** (see below) |
+| Client slots provided by DSH | `sidebar.panellist` + `main` + `shell.overlay` | **All three** are required |
+| `layout.selectPanel` | required | The only switch that can select our panel |
+| Node.js | `^22.19.0 \|\| >=24.0.0` | matches `engines` |
+| pnpm | `>=11.7.0 <12` | dev/build only |
+| `@deepseek-ai/cordis` | `^4.0.1` | peer |
+| `@deepseek-ai/dsh-host-webserver`, `dsh-system-prompt`, `dsh-tools` | `^0.1.0-rc.6` | peer (server half) |
+| `@xmanrui/dsh-im` | optional | WeChat reminder channel; falls back to in-page + desktop notifications |
+
+### On older hosts the panel **refuses to start** (it does not degrade)
+
+`inject` declares exactly five services — `sessions`, `workspaces`, `connection`, `slots`, `layout`
+(see `src/client/capabilities.ts`; `test/capabilities.test.mjs` locks the list). Missing any of them
+makes cordis keep the plugin `pending`. If it does load but a slot is missing, `apply()` logs a
+**readable reason (what is missing + which version is required)** and returns immediately —
+**registering nothing and writing no DOM**.
+
+Why there is no compatibility layer: the old implementation fell back to a self-built DOM leg, which
+laid down a full-screen `position:fixed; inset:0` layer. When it failed to collapse it covered the
+conversation area permanently (user quote: "nothing outside the left column is clickable").
+Refusing to start with a clear log is strictly better than half-working degradation.
+
+> **Server-side features are not gated by this**: tasks/calendar/knowledge/ideas, reminders,
+> reports and the `workbench_*` agent tools only need `0.1.0-rc.6+`. On an older host you can still
+> use them through the agent — you just get **no panel UI**.
+
+### Panel arbitration & sibling plugins: an explicit "not our problem" policy
+
+- Official slots only: `sidebar.panellist` for the sidebar row, `main` for a null placeholder
+  (so `layout.selectPanel` validation passes), `shell.overlay` for the real content —
+  it is always mounted, so the draft dialog survives closing the panel.
+- Whether the panel is visible is answered in **exactly one place**: `decidePanel()`
+  (`src/client/panelState.ts`, a pure function with table-driven tests).
+- **No cross-plugin DOM coordination.** Panel arbitration is owned by the host's single-value
+  `activePanelId`. Plugins that do *not* use official slots and instead take over the center column
+  via DOM (e.g. `dsh-client-ui-task-board`, `dsh-ssh`, `dsh-mnemon`) may end up active at the same
+  time. That is a **known limitation caused by the host lacking a unified panel registry**, not a
+  defect of this plugin. Accordingly we never read or write another plugin's `data-dsh-*`
+  attributes and never dispatch `dsh-panel-activate`. We only write two attributes of our own:
+  `<html data-dsh-personal-workbench-active>` and `<html style="--wb-sidebar-w: Npx">`
+  (enforced by `test/clientInvariants.test.mjs`, I4/I5/I6).
+
+### Soft-probing (this does not contradict the above)
+
+**Any DSH service that is not present in every supported version must be soft-probed with
+`ctx.get(name)` and never listed in `inject`.** The distinction:
+
+- `slots` / `layout` are **preconditions of the panel feature** → they go into `inject`,
+  and a missing one means the panel block does not start (with a readable log);
+- `uiWorkspace` / `teamMemory` / `dshIm` / `skills` are **optional enhancements** →
+  soft-probed; missing one only removes a feature.
+
+Does **not** depend on `dsh-web-ui`.
 
 ## Roadmap
 
@@ -337,6 +412,7 @@ Then restart `dsh web` and hard-refresh the browser.
 - [x] V2: Custom prompt input before AI sessions (except quick intake; append user input after the default prompt) (1.5.0)
 - [x] V2: Manual editing for today/calendar plan panel (reorder, edit notes, add/remove plan items; keep AI generate + confirm + complete/defer) (1.5.0)
 - [x] V2: Official sidebar slots, task re-parenting, review-to-team-memory, defer for every draft kind (1.14.0)
+- [x] Official-slots-only architecture: single source of truth for panel visibility, DOM fallback leg removed, capability gate (1.14.57)
 - [ ] Future: scheduled automation, multi-device sync, drag-and-drop, import/export
 
 ## License
