@@ -545,9 +545,15 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
           }
         }
       }
-      const ws = safeService<WorkbenchRuntime['workspaces']>(runtime, 'workspaces')?.list.getSnapshot() ?? { items: [] }
+      const ws = safeService<WorkbenchRuntime['workspaces']>(runtime, 'workspaces')?.list?.getSnapshot?.() ?? { items: [] }
       let workspaceId = ws.items[0]?.workspaceId
-      const hostHome = safeService<WorkbenchRuntime['connection']>(runtime, 'connection')?.generation.getSnapshot()?.host.home
+      /**
+       * ⚠️ 与 `detectWslHost` 同一个坑（v1.14.50 一起修）：
+       * `?.generation.getSnapshot()` 只保护了外层，`generation` 在低版本宿主上不存在 →
+       * 直接抛 `TypeError: … reading 'getSnapshot'`。
+       * 这里在**创建 AI 会话的主流程**上，抛错会让"发起澄清/执行"整条链路失败。
+       */
+      const hostHome = safeService<WorkbenchRuntime['connection']>(runtime, 'connection')?.generation?.getSnapshot?.()?.host?.home
       const isWsl = hostHome !== undefined
         ? isWslStylePath(hostHome)
         : ws.items.some((item) => typeof item.path === 'string' && isWslStylePath(item.path))
@@ -1242,7 +1248,8 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
     return ids
   })()
 
-  const sessionListSnapshot = safeService<WorkbenchRuntime['sessions']>(runtime, 'sessions')?.list.getSnapshot() ?? { ids: [], byId: {}, current: undefined }
+  /** 同上：`?.list.getSnapshot()` 只保护外层，低版本宿主缺 `list` 时会抛 —— 一并加固。 */
+  const sessionListSnapshot = safeService<WorkbenchRuntime['sessions']>(runtime, 'sessions')?.list?.getSnapshot?.() ?? { ids: [], byId: {}, current: undefined }
   /** 待你处理的事项数：待确认草稿 + 已暂存草稿 + 到期提醒。 */
   /** 待你处理的事项数：服务端的待确认草稿 + 到期提醒（草稿数不参与本地过滤）。 */
   const pendingCount = allPendingDrafts.length + reminders.length
@@ -2766,16 +2773,44 @@ let hostPanelId: string | null | undefined
 /** 宿主是否提供了 `usePanelInfo`（只要给过就置真，之后不再回退）。 */
 let panelInfoHookSeen = false
 
-/** 从运行时快照判断 DSH 跑在 WSL 还是原生 Windows（用于路径形态选择）。 */function detectWslHost(runtime: WorkbenchRuntime): boolean {
-  const hostHome = safeService<WorkbenchRuntime['connection']>(runtime, 'connection')?.generation.getSnapshot()?.host.home
-  if (hostHome !== undefined) return isWslStylePath(hostHome)
-  const items = safeService<WorkbenchRuntime['workspaces']>(runtime, 'workspaces')?.list.getSnapshot().items ?? []
-  return items.some((item) => typeof item.path === 'string' && isWslStylePath(item.path))
+/**
+ * 从运行时快照判断 DSH 跑在 WSL 还是原生 Windows（用于路径形态选择）。
+ *
+ * ## ⚠️ 这里曾经让低版本宿主上的「快速录入」整个失效（v1.14.50 修复）
+ *
+ * 原写法是 `safeService(…, 'connection')?.generation.getSnapshot()?.host.home`。
+ * `?.` 只保护了**外层调用**，`generation` 本身仍是直接属性访问 ——
+ * 而低版本 DSH（0.1.1-rc.1）的 `connection` 服务**没有 `generation`**，
+ * 于是抛 `TypeError: Cannot read properties of undefined (reading 'getSnapshot')`。
+ *
+ * 后果链（实测）：`openQuickEntry` 第一行就调本函数 → 抛错 →
+ * `setShowQuick(true)` 永远执行不到 → **点「快速录入」没有任何反应**（弹窗不出现）。
+ * 用户现象就是"WSL 上快速录入用不了"。
+ *
+ * 修法：**每一层都用 `?.`**（`generation?.getSnapshot?.()`），并且整体包 try/catch ——
+ * 这只是一个"猜宿主平台"的启发式判断，**任何情况下都不该把调用方炸掉**。
+ *
+ * 同类隐患的通用规矩：链式可选访问只有**每个可能为空的环节都加 `?.`** 才安全；
+ * `a?.b.c` 在 `a.b === undefined` 时照样抛错。
+ */
+function detectWslHost(runtime: WorkbenchRuntime): boolean {
+  try {
+    const connection = safeService<WorkbenchRuntime['connection']>(runtime, 'connection')
+    /** 低版本没有 `generation`；旧版本的快照接口 `getSnapshot` 也可能缺 —— 两层都防。 */
+    const hostHome = connection?.generation?.getSnapshot?.()?.host?.home
+    if (typeof hostHome === 'string' && hostHome !== '') return isWslStylePath(hostHome)
+    const items = safeService<WorkbenchRuntime['workspaces']>(runtime, 'workspaces')?.list?.getSnapshot?.()?.items ?? []
+    return items.some((item) => typeof item.path === 'string' && isWslStylePath(item.path))
+  } catch {
+    /** 探测失败就当"不是 WSL"（最保守：路径按原样处理，不会因此崩掉交互）。 */
+    return false
+  }
 }
 
 /** 已打开的工作区路径列表（快速录入的工作区候选之一，去重由调用方做）。 */
 function openWorkspacePaths(runtime: WorkbenchRuntime): string[] {
-  return (safeService<WorkbenchRuntime['workspaces']>(runtime, 'workspaces')?.list.getSnapshot().items ?? [])
+  /** 与 `detectWslHost` 同一处加固：每一层都要 `?.`，否则低版本缺 `list` 时会抛。 */
+  return (safeService<WorkbenchRuntime['workspaces']>(runtime, 'workspaces')?.list?.getSnapshot?.()?.items ?? [])
     .map((item) => item.path)
     .filter((path): path is string => typeof path === 'string' && path.trim() !== '')
 }
