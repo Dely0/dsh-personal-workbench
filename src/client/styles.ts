@@ -41,7 +41,11 @@ ${panelContainerCss({ view: VIEW_ATTR, official: OFFICIAL_ATTR, active: ACTIVE_A
    2. **开合只切 display，不卸载组件** —— 草稿弹框要跨页面常驻，
       依赖 useEffect 拉数据的区块（今日容量）也不能被反复重建。 */
 .wb-panel-host {
-  position: fixed; top: 0; right: 0; bottom: 0; left: var(--wb-sidebar-w, 0px);
+  /* 左边界 = 运行时量出的侧栏宽度（--wb-sidebar-w，见 index.tsx 的 syncSidebarWidth）。
+     ⚠️ 兜底值**不能是 0**（v1.14.54 真实事故）：一旦量宽失败，left: 0 会让面板从视口
+     最左边铺起、把整个 DSH（含侧栏）盖住 —— 用户"侧边栏都没有了"。
+     用 DSH 侧栏的默认宽度 280px 兜底：最坏情况是边界偏一点，而不是遮住导航。 */
+  position: fixed; top: 0; right: 0; bottom: 0; left: var(--wb-sidebar-w, 280px);
   z-index: 55; overflow: hidden; display: none;
   background: var(--wb-bg-base);
   pointer-events: none;

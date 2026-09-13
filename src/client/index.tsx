@@ -3873,20 +3873,47 @@ export function apply(ctx: unknown): () => void {
     document.documentElement.style.setProperty('--wb-sidebar-w', next)
   }
   const sidebarResizeObserver = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(() => syncSidebarWidth())
-  const observeSidebar = (): void => {
+  /**
+   * 找到侧栏并量宽；找不到返回 false，由下面的轮询继续重试。
+   *
+   * ## ⚠️ 为什么必须"重试到量到为止"（v1.14.54 真实事故）
+   *
+   * 本函数原先只在 `apply()` 里被调用**一次**，而 `apply()` 发生在插件加载那一刻 ——
+   * 那时 DSH 界面**还没渲染**，`sidebarCol` 不存在 → 直接 return，
+   * `--wb-sidebar-w` 从未被写上。
+   *
+   * 后果：`.wb-panel-host` 的 `left: var(--wb-sidebar-w, 0px)` 拿到兜底 **0px**，
+   * 面板从视口最左边开始铺 → **整个 DSH 页面（含侧栏）被工作台盖住**
+   * （用户原话："工作台页面会完全覆盖整个DSH页面，侧边栏都没有了"）。
+   *
+   * 阶段 2 删 DOM 降级腿时，我把原先那个 `MutationObserver`（`watcher`）一并删了 ——
+   * 它虽然主要服务于"往侧栏插入口行"，但也是**唯一**会让本函数被反复调用的东西。
+   * 现在补一个职责单一的观察器：只负责"等侧栏出现并量宽"，量到就断开。
+   */
+  const observeSidebar = (): boolean => {
     const column = document.querySelector<HTMLElement>('[data-pane="sidebar"], [class*="sidebarCol"]')
-    if (column === null) return
+    if (column === null) return false
     sidebarResizeObserver?.disconnect()
     sidebarResizeObserver?.observe(column)
     syncSidebarWidth()
+    return true
   }
-  observeSidebar()
+  let sidebarObserver: MutationObserver | undefined
+  if (!observeSidebar()) {
+    sidebarObserver = new MutationObserver(() => {
+      if (!observeSidebar()) return
+      sidebarObserver?.disconnect()
+      sidebarObserver = undefined
+    })
+    sidebarObserver.observe(document.body, { childList: true, subtree: true })
+  }
 
   const cleanup = (): void => {
     if (disposed) return
     disposed = true
     instanceAlive = false
     sidebarResizeObserver?.disconnect()
+    sidebarObserver?.disconnect()
     for (const dispose of officialDisposers.splice(0)) {
       try { dispose() } catch { /* 卸载阶段不再纠缠 */ }
     }

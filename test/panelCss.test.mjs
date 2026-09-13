@@ -101,3 +101,29 @@ test('面板容器自身的基线样式仍在（display:none + data-open=1 才�
   assert.ok(styles.includes(".wb-panel-host[data-open='1'] { display: block; }"),
     '面板容器的显隐必须由 data-open 决定（决策 ⟺ 投影，见 panelState.ts）')
 })
+
+/**
+ * 回归：**面板左边界要"宁可偏一点，也不能遮住侧栏"**。
+ *
+ * v1.14.54 真实事故：`.wb-panel-host` 的 `left: var(--wb-sidebar-w, 0px)` ——
+ * 而 `--wb-sidebar-w` 是运行时量出来的（`syncSidebarWidth`）。阶段 2 删 DOM 腿时
+ * 顺带删掉了唯一会**反复**调用它的 `MutationObserver`，于是 `apply()` 那一刻
+ * 侧栏还没渲染 → 变量从未被写上 → 兜底 `0px` 生效 →
+ * **工作台把整个 DSH 页面（含侧栏）盖住**（用户："侧边栏都没有了"）。
+ */
+test('左边界兜底值不得为 0（否则量宽失败就会盖住侧栏）', () => {
+  const styles = readFileSync(new URL('../src/client/styles.ts', import.meta.url), 'utf8')
+  assert.ok(styles.includes('left: var(--wb-sidebar-w, 280px)'),
+    '左边界必须用 280px（DSH 侧栏默认宽度）兜底；0px 在量宽失败时会遮住整个侧栏')
+  assert.equal(/left:\s*var\(--wb-sidebar-w,\s*0px\)/.test(styles), false, '不得回退成 0px 兜底')
+})
+
+test('侧栏宽度必须"重试到量到为止"（apply 时宿主还没渲染侧栏）', () => {
+  const index = readFileSync(new URL('../src/client/index.tsx', import.meta.url), 'utf8')
+  assert.ok(index.includes('const observeSidebar = (): boolean =>'),
+    'observeSidebar 必须能报告"没找到"，好让调用方继续重试')
+  assert.ok(index.includes('if (!observeSidebar()) {'),
+    '必须处理"apply 时侧栏还不存在"：首次找不到时要挂观察器重试')
+  assert.ok(/sidebarObserver\?\.disconnect\(\)/.test(index),
+    '清理函数必须断开侧栏观察器（否则残留实例会继续写 --wb-sidebar-w）')
+})
