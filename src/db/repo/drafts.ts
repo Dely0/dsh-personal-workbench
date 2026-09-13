@@ -10,6 +10,7 @@ import { nowIso, getDraft, setDraftStatus, withDraftConfirm, parseDraft, type Dr
 import { getTask, listTasks, createTask } from './tasks.js'
 import { getDictionary } from './dictionaries.js'
 import { linkTaskSession } from './task-sessions.js'
+import { checkWorkspacePath } from '../../workspace-check.js'
 import { addReminder } from './reminders.js'
 import type { DraftInput, TaskInput, TaskRow } from '../repo.js'
 
@@ -95,13 +96,83 @@ export function getDraftBySession(db: DatabaseSync, sessionId: string): DraftRow
 
 
 
-export function confirmTaskDraft(db: DatabaseSync, draftId: string, actor = 'user', at = nowIso()): TaskRow | undefined {
+/**
+ * 草稿确认时「本该创建、但没创建」的条目。
+ *
+ * 存在的原因是一次真实事故：`workbench_submit_task` 的 subtasks 里只要有一个
+ * `type_code` 不在字典中，旧实现就 `continue` —— 无告警、无记录、接口照样返回成功，
+ * 用户看到的是「5 个子任务里凭空少了 2 个」（见
+ * docs/issues/2026-09-12-subtask-type-code-silently-dropped.md）。
+ *
+ * 现在的契约：**任何一项没建出来，都必须出现在 problems 里**，由确认接口回传、
+ * 界面标黄列出。宁可让用户看见一条"没建成功"，也绝不静默丢件。
+ */
+export interface DraftItemProblem {
+  /** 该条目的标题（可能为空串，用于展示"哪一条没建"）。 */
+  title: string
+  /** 非法字段：typeCode / priorityCode。 */
+  field: 'typeCode' | 'priorityCode'
+  /** 调用方实际传入的值。 */
+  code: string
+  /** 给人看的中文原因。 */
+  reason: string
+}
+
+/**
+ * 校验一个草稿任务节点的 type/priority code 是否可落库。
+ * 返回 undefined 表示通过；否则返回问题项（调用方应收集并跳过创建）。
+ *
+ * 注意这里是**两遍扫描的第一遍**：validate → collect，第二遍才真正建树。
+ * 这样"父层非法"能整棵子树跳过并只报一条，不会出现"父没了子还在"的半截树。
+ */
+export function validateDraftTaskItem(
+  db: DatabaseSync,
+  normalized: { title: string; input: { typeCode: string; priorityCode: string } },
+): DraftItemProblem | undefined {
+  const { title, input } = normalized
+  if (getDictionary(db, 'type', input.typeCode)?.active !== 1) {
+    return { title, field: 'typeCode', code: input.typeCode, reason: `任务类型「${input.typeCode}」不在字典中（或已停用），本项及其子项未创建` }
+  }
+  if (getDictionary(db, 'priority', input.priorityCode)?.active !== 1) {
+    return { title, field: 'priorityCode', code: input.priorityCode, reason: `优先级「${input.priorityCode}」不在字典中（或已停用），本项及其子项未创建` }
+  }
+  return undefined
+}
+
+/** `confirmTaskDraft` 的返回：建出来的任务 + 没建出来的条目。 */
+export interface ConfirmTaskDraftResult {
+  task: TaskRow
+  /** 计划创建但被校验拦下的条目（正常情况为空数组）。 */
+  problems: DraftItemProblem[]
+  /** 实际创建的子任务数（不含父任务）。 */
+  childCount: number
+}
+
+/** `confirmSubtaskPlanDraft` 的返回：建出来（或复用）的任务 + 没建出来的条目。 */
+export interface ConfirmSubtaskPlanResult {
+  tasks: TaskRow[]
+  problems: DraftItemProblem[]
+}
+
+export function confirmTaskDraft(db: DatabaseSync, draftId: string, actor = 'user', at = nowIso()): ConfirmTaskDraftResult | undefined {
   const draft = getDraft(db, draftId)
   if (draft === undefined || draft.kindCode !== 'task') return undefined
   const payload = draft.payload as Partial<TaskInput> & { reminderOffsetMinutes?: number; reminder_offset_minutes?: number; subtasks?: Array<Partial<TaskInput> & Record<string, unknown>> }
   const title = typeof payload.title === 'string' ? payload.title : ''
   if (title.trim() === '') throw new Error('draft payload requires a non-empty title')
-  return withDraftConfirm(db, draftId, 'task', () => {
+  /**
+   * 工作区路径校验（v1.14.25，补子任务 4 的原始验收标准）。
+   *
+   * 原始标准要求"不存在/不可写的工作区给出明确提示，**而不是静默回落默认值**"。
+   * 实测过：提交 `Z:\不存在的目录\xyz` 会被静默接受（HTTP 200 / problems=0）。
+   * 这里在建任务**之前**拦下：路径无效就直接抛错，草稿保持 pending 供用户改，
+   * 调用方（路由层）把中文原因回传给界面/工具。
+   */
+  const workspaceCheck = checkWorkspacePath(typeof payload.workspacePath === 'string' ? payload.workspacePath : null)
+  if (!workspaceCheck.ok) throw new Error(String(workspaceCheck.reason))
+  return withDraftConfirm(db, draftId, 'task', (): ConfirmTaskDraftResult => {
+    const problems: DraftItemProblem[] = []
+    let childCount = 0
     const task = createTask(db, {
       title,
       description: typeof payload.description === 'string' ? payload.description : undefined,
@@ -114,7 +185,9 @@ export function confirmTaskDraft(db: DatabaseSync, draftId: string, actor = 'use
       estimatedMinutes: typeof payload.estimatedMinutes === 'number' ? payload.estimatedMinutes : null,
       source: typeof payload.source === 'string' ? payload.source : 'nl',
       parentId: typeof payload.parentId === 'string' ? payload.parentId : null,
-      workspacePath: typeof payload.workspacePath === 'string' && payload.workspacePath !== '' ? payload.workspacePath : null,
+      // 用校验后的**归一化**路径：`/mnt/d/code` 在 Windows 上会被存成 `D:\code`，
+      // 避免同一个工作区因为写法不同被当成两个。
+      workspacePath: workspaceCheck.normalized,
       extra: payload.extra ?? {},
     }, actor, at)
     const explicitOffset = typeof payload.reminderOffsetMinutes === 'number'
@@ -132,10 +205,11 @@ export function confirmTaskDraft(db: DatabaseSync, draftId: string, actor = 'use
       for (const item of items) {
         const normalized = toTaskInputFromDraftItem(item, { typeCode: task.typeCode, priorityCode: task.priorityCode, statusCode: 'todo', source: 'nl' })
         if (normalized === undefined) continue
-        const { input } = normalized
-        if (getDictionary(db, 'type', input.typeCode)?.active !== 1) continue
-        if (getDictionary(db, 'priority', input.priorityCode)?.active !== 1) continue
-        const child = createTask(db, { ...input, parentId }, actor, at)
+        // 非法 code 不再 continue 了事：收进 problems 回传，界面能看见"哪一条没建、为什么"。
+        const problem = validateDraftTaskItem(db, normalized)
+        if (problem !== undefined) { problems.push(problem); continue }
+        const child = createTask(db, { ...normalized.input, parentId }, actor, at)
+        childCount += 1
         if (Array.isArray(item.children)) walkChildren(item.children as DraftTaskItem[], child.id)
       }
     }
@@ -143,13 +217,13 @@ export function confirmTaskDraft(db: DatabaseSync, draftId: string, actor = 'use
     if (draft.sessionId !== null && draft.sessionId !== undefined) {
       linkTaskSession(db, { taskId: task.id, sessionId: draft.sessionId, roleCode: 'clarify' }, at)
     }
-    return task
+    return { task, problems, childCount }
   }, { at })
 }
 
-export function confirmSubtaskPlanDraft(db: DatabaseSync, draftId: string, actor = 'user', at = nowIso()): TaskRow[] {
+export function confirmSubtaskPlanDraft(db: DatabaseSync, draftId: string, actor = 'user', at = nowIso()): ConfirmSubtaskPlanResult {
   const draft = getDraft(db, draftId)
-  if (draft === undefined || draft.kindCode !== 'subtask_plan') return []
+  if (draft === undefined || draft.kindCode !== 'subtask_plan') return { tasks: [], problems: [] }
   const payload = draft.payload as { parentTaskId?: string; subtasks?: DraftTaskItem[] }
   const parentTaskId = typeof payload.parentTaskId === 'string' ? payload.parentTaskId : undefined
   if (parentTaskId === undefined) throw new Error('subtask_plan requires parentTaskId')
@@ -159,15 +233,17 @@ export function confirmSubtaskPlanDraft(db: DatabaseSync, draftId: string, actor
     throw new Error(`parent task「${parent.title}」is archived or closed`)
   }
   const subtasks = Array.isArray(payload.subtasks) ? payload.subtasks : []
-  return withDraftConfirm(db, draftId, 'subtask_plan', (): TaskRow[] => {
+  return withDraftConfirm(db, draftId, 'subtask_plan', (): ConfirmSubtaskPlanResult => {
     const created: TaskRow[] = []
+    const problems: DraftItemProblem[] = []
     const walk = (items: DraftTaskItem[], parentId: string | null): void => {
       for (const item of items) {
         const normalized = toTaskInputFromDraftItem(item, { typeCode: parent.typeCode, priorityCode: parent.priorityCode, source: parent.source })
         if (normalized === undefined) continue
         const { title, input } = normalized
-        if (getDictionary(db, 'type', input.typeCode)?.active !== 1) continue
-        if (getDictionary(db, 'priority', input.priorityCode)?.active !== 1) continue
+        // 同 confirmTaskDraft：非法 code 收进 problems 而不是静默 continue。
+        const problem = validateDraftTaskItem(db, normalized)
+        if (problem !== undefined) { problems.push(problem); continue }
         // 幂等：同父下已有同名节点就复用，不重复建树（重确认同一份提案时保持任务 id/状态/用户编辑不变）。
         const existing = findSiblingByTitle(db, parentId, title)
         const task = existing ?? createTask(db, { ...input, parentId }, actor, at)
@@ -181,8 +257,8 @@ export function confirmSubtaskPlanDraft(db: DatabaseSync, draftId: string, actor
         linkTaskSession(db, { taskId: task.id, sessionId: draft.sessionId, roleCode: 'breakdown' }, at)
       }
     }
-    return created
-  }, { at, emptyValue: [] })
+    return { tasks: created, problems }
+  }, { at, emptyValue: { tasks: [], problems: [] } })
 }
 
 export function getLatestPendingDraft(db: DatabaseSync): DraftRow | undefined {
@@ -214,16 +290,27 @@ export function getDeferredDraftForTask(db: DatabaseSync, kindCode: string, task
 }
 
 /**
- * 可「暂存」的草稿类型白名单。
- * 只开放验收类：完成验收申请（completion）与复盘草稿（review）——这两类需要用户先做验证/回看再决定。
+ * 「暂存」的适用范围：**默认全部草稿类型都可暂存**。
+ *
+ * 历史：v1.12.0 只给验收类草稿（completion / review）加了「⏸ 暂存（先验证）」，
+ * 其余 9 种（task / subtask_plan / daily_plan / report / knowledge / idea_cluster /
+ * idea_tasks）只有「确认」和「放弃」两个出口 —— 草稿 pending 时红点常驻、轮询每 5 秒
+ * 把它拉回来，用户被"钉"在工作台里，想去 DSH 里核对一下都做不到。
+ *
+ * 现在反过来：默认全部可暂存，用**黑名单**排除确实不该暂存的类型。
+ * 目前黑名单为空 —— 保留这个开关是为了将来万一出现"暂存会造成语义错误"的类型
+ * （例如某个必须在同一回合内处理完的即时确认）时有地方可写，而不是重新变回硬编码白名单。
  */
-export const DEFERRABLE_DRAFT_KINDS = ['completion', 'review'] as const
+export const NON_DEFERRABLE_DRAFT_KINDS = [] as const
+
+/** 兼容旧调用方（曾反向表达）：现在永远是空数组。 */
+export const DEFERRABLE_DRAFT_KINDS = NON_DEFERRABLE_DRAFT_KINDS
 
 export function isDeferrableDraftKind(kindCode: string): boolean {
-  return (DEFERRABLE_DRAFT_KINDS as readonly string[]).includes(kindCode)
+  return !(NON_DEFERRABLE_DRAFT_KINDS as readonly string[]).includes(kindCode)
 }
 
-/** 暂存：仅 pending 且属于可暂存类型的草稿可暂存；返回 undefined 表示不允许。 */
+/** 暂存：pending 的草稿都可暂存（黑名单除外）；返回 undefined 表示不允许。 */
 export function deferDraft(db: DatabaseSync, draftId: string, at = nowIso()): DraftRow | undefined {
   const draft = getDraft(db, draftId)
   if (draft === undefined || draft.statusCode !== 'pending' || !isDeferrableDraftKind(draft.kindCode)) return undefined

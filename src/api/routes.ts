@@ -22,6 +22,7 @@ import { makePlanRoutes } from './routes/plans.js'
 import { makeReminderRoutes, type ReminderRouteDeps } from './routes/reminders.js'
 import { makeReportRoutes } from './routes/reports.js'
 import { makeTaskRoutes } from './routes/tasks.js'
+import type { TeamMemoryService } from '../review-memory.js'
 
 /**
  * 插件版本：直接读包内 package.json，避免再出现"代码已升级、health 还报旧版本"的漂移。
@@ -42,8 +43,57 @@ export function readDailyCapacityMinutes(db: DatabaseSync): number {
   return Math.min(1440, Math.round(raw))
 }
 
+/** 快速录入「最近用过的工作区」上限（再多候选列表就不好用了）。 */
+export const QUICK_WORKSPACE_RECENT_LIMIT = 5
 
-export function makeRoutes(db: DatabaseSync, deps: ReminderRouteDeps = {}): WebRoute[] {
+/**
+ * 读取「最近用过的工作区」列表。
+ *
+ * 存 meta 的 JSON 字符串（单键，不动 schema）：这是**用户偏好**而非业务数据，
+ * 且必须容忍脏值（手改过 meta、旧版本写过别的形状）——解析失败就返回空数组，
+ * 绝不让一个坏字符串把设置接口整个打挂。
+ */
+export function readRecentWorkspaces(db: DatabaseSync): string[] {
+  const raw = readMeta(db, 'quick_workspace_recent')
+  if (raw === undefined || raw === '') return []
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter((item): item is string => typeof item === 'string' && item.trim() !== '').slice(0, QUICK_WORKSPACE_RECENT_LIMIT)
+  } catch { return [] }
+}
+
+/**
+ * 把新用过的路径并入候选列表：去重（忽略大小写与末尾斜杠差异）、最新的排最前、截断到上限。
+ * 纯函数，便于单测。
+ */
+export function updateRecentWorkspaces(current: string[], used: unknown[]): string[] {
+  const key = (value: string): string => value.trim().replace(/[\\/]+$/, '').toLowerCase()
+  const incoming = used
+    .filter((item): item is string => typeof item === 'string' && item.trim() !== '')
+    .map((item) => item.trim())
+  const merged: string[] = []
+  const seen = new Set<string>()
+  for (const path of [...incoming, ...current]) {
+    const k = key(path)
+    if (k === '' || seen.has(k)) continue
+    seen.add(k)
+    merged.push(path)
+    if (merged.length >= QUICK_WORKSPACE_RECENT_LIMIT) break
+  }
+  return merged
+}
+
+
+export interface WorkbenchRouteDeps extends ReminderRouteDeps {
+  /**
+   * 团队记忆服务（`dsh-team-memory` 目前**并未** provide 任何服务，所以通常是 undefined）。
+   * 软探测拿到时才注入；拿不到就走"本地 Markdown + 队列补传"的等价通道。
+   */
+  teamMemory?: TeamMemoryService
+}
+
+export function makeRoutes(db: DatabaseSync, deps: WorkbenchRouteDeps = {}): WebRoute[] {
   return [
     ...makeReminderRoutes(db, {
       channel: deps.channel,
@@ -88,6 +138,7 @@ export function makeRoutes(db: DatabaseSync, deps: ReminderRouteDeps = {}): WebR
               autoCreateTypeFolders: (readMeta(db, 'auto_create_type_folders') ?? '1') === '1',
               desktopNotify: (readMeta(db, 'desktop_notify') ?? '1') === '1',
               dailyCapacityMinutes: readDailyCapacityMinutes(db),
+              quickWorkspaceRecent: readRecentWorkspaces(db),
             },
           })
         }
@@ -101,11 +152,15 @@ export function makeRoutes(db: DatabaseSync, deps: ReminderRouteDeps = {}): WebR
             const minutes = Math.min(1440, Math.max(30, Math.round(body.dailyCapacityMinutes)))
             writeMeta(db, 'daily_capacity_minutes', String(minutes))
           }
+          if (Array.isArray(body.quickWorkspaceRecent)) {
+            writeMeta(db, 'quick_workspace_recent', JSON.stringify(updateRecentWorkspaces(readRecentWorkspaces(db), body.quickWorkspaceRecent)))
+          }
           return writeJson(res, 200, { ok: true, settings: {
             defaultWorkspace: readMeta(db, 'ai_default_workspace') ?? '',
             autoCreateTypeFolders: (readMeta(db, 'auto_create_type_folders') ?? '1') === '1',
             desktopNotify: (readMeta(db, 'desktop_notify') ?? '1') === '1',
             dailyCapacityMinutes: readDailyCapacityMinutes(db),
+            quickWorkspaceRecent: readRecentWorkspaces(db),
           } })
         }
         return writeJson(res, 405, { error: 'method not allowed' })
@@ -162,7 +217,7 @@ export function makeRoutes(db: DatabaseSync, deps: ReminderRouteDeps = {}): WebR
         }
       },
     },
-    ...makeDraftRoutes(db),
+    ...makeDraftRoutes(db, { teamMemory: deps.teamMemory }),
     ...makeIdeaRoutes(db),
     ...makeIdeaClusterRoutes(db),
     ...makeKnowledgeRoutes(db),

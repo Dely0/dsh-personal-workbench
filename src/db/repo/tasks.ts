@@ -6,7 +6,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import type { DatabaseSync } from 'node:sqlite'
-import { parseTask, effectiveDueAtForTask, effectiveWorkspacePathForTask, appendEvent, collectArchivedDescendants, type RawTaskRow } from './task-primitives.js'
+import { parseTask, effectiveDueAtForTask, effectiveWorkspacePathForTask, appendEvent, collectArchivedDescendants, isDescendantOf, type RawTaskRow } from './task-primitives.js'
 import { listDictionaries } from './dictionaries.js'
 import { nowIso, type TaskInput, type TaskPatch, type TaskRow } from '../repo.js'
 
@@ -98,11 +98,38 @@ export function listChildren(db: DatabaseSync, parentId: string): TaskRow[] {
 }
 
 
+/**
+ * 改父任务（re-parent）的守卫，放在仓储层：路由、AI 工具、级联/归档等**所有**调用方
+ * 都走 updateTask，因此校验只此一份，不会有人绕过。
+ *
+ * 拒绝的四种情况（消息直接回给用户，所以用中文说清楚原因）：
+ * 1. 挂到自己身上；2. 父任务不存在；3. 父任务已归档；4. 父任务在自己的子树里（会成环）。
+ * 返回归一化后的 parentId（null = 顶层）。
+ */
+function assertParentChangeAllowed(db: DatabaseSync, task: Pick<TaskRow, 'id' | 'title'>, parentId: string | null): string | null {
+  if (parentId === null) return null
+  if (parentId === task.id) throw new Error('不能把任务挂到自己身上')
+  const parent = getTask(db, parentId)
+  if (parent === undefined) throw new Error(`父任务不存在：${parentId}`)
+  if (parent.archived === 1) throw new Error(`父任务「${parent.title}」已归档，不能把任务挂到它下面`)
+  if (isDescendantOf(db, parentId, task.id)) throw new Error('不能把任务挂到它自己的子任务下（会形成环）')
+  return parentId
+}
+
+/** 「记录」页签里可读的父任务描述：顶层 / 父任务标题（取不到时退回 id）。 */
+function parentLabel(db: DatabaseSync, parentId: string | null): string {
+  if (parentId === null) return '顶层'
+  return getTask(db, parentId)?.title ?? parentId
+}
+
 export function updateTask(db: DatabaseSync, id: string, patch: TaskPatch, actor = 'user', at = nowIso()): TaskRow | undefined {
   const before = getTask(db, id)
   if (before === undefined) return undefined
+  // 改父任务：undefined = 不变，null = 移到顶层，字符串 = 挂到该父任务下（先校验再写）。
+  const parentId = patch.parentId === undefined ? before.parentId : assertParentChangeAllowed(db, before, patch.parentId)
   const next: TaskRow = {
     ...before,
+    parentId,
     title: patch.title ?? before.title,
     description: patch.description ?? before.description,
     typeCode: patch.typeCode ?? before.typeCode,
@@ -127,16 +154,27 @@ export function updateTask(db: DatabaseSync, id: string, patch: TaskPatch, actor
     UPDATE tasks SET
       title = ?, description = ?, type_code = ?, status_code = ?, priority_code = ?,
       ai_policy_code = ?, due_at = ?, all_day = ?, estimated_minutes = ?, archived = ?,
-      workspace_path = ?, extra = ?, recurrence_code = ?, recurrence_rule = ?,
+      workspace_path = ?, parent_id = ?, extra = ?, recurrence_code = ?, recurrence_rule = ?,
       updated_at = ?, completed_at = ?, cancelled_at = ?
     WHERE id = ?
   `).run(
     next.title, next.description, next.typeCode, next.statusCode, next.priorityCode,
     next.aiPolicyCode, next.dueAt, next.allDay, next.estimatedMinutes, next.archived,
-    next.workspacePath, JSON.stringify(next.extra), next.recurrenceCode, JSON.stringify(next.recurrenceRule),
+    next.workspacePath, next.parentId, JSON.stringify(next.extra), next.recurrenceCode, JSON.stringify(next.recurrenceRule),
     next.updatedAt, next.completedAt, next.cancelledAt, id,
   )
   appendEvent(db, id, 'updated', { before, after: next, actor, at })
+  // 改父任务额外留一条可读事件：任务详情「记录」页签直接显示「父任务：A → B」，
+  // 而不是让用户从 before/after JSON 里自己比对 parent_id。
+  if (next.parentId !== before.parentId) {
+    appendEvent(db, id, 'reparented', {
+      before: { parentId: before.parentId },
+      after: { parentId: next.parentId },
+      actor,
+      at,
+      note: `父任务：${parentLabel(db, before.parentId)} → ${parentLabel(db, next.parentId)}`,
+    })
+  }
   return next
 }
 

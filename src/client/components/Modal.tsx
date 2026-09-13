@@ -20,6 +20,19 @@ export interface ModalProps {
   /** 阻止 ESC / 遮罩关闭（用于有未保存改动时二次确认） */
   closeOnBackdrop?: boolean
   children: ReactNode
+  /**
+   * **非模态**（v1.14.16）：不铺全屏遮罩、不锁页面滚动、不抢焦点。
+   *
+   * 为什么需要它：草稿弹框原先带全屏遮罩（`position:fixed; inset:0`，点击即关闭），
+   * 于是只要它一出现，用户点任何地方都会先打在遮罩上 ——
+   * 点侧栏「工作台」只会把弹框关掉、面板根本不开（2026-09-15 实测：
+   * 点击后 `panelOpen` 仍为 null，我们的开关日志里连一次调用都没有）。
+   * 这正是用户抱怨的"弹框出现后什么都干不了"。
+   *
+   * 非模态形态：浮在右下角的卡片，**不拦截点击**，用户可以随时去做别的事，
+   * 不必先"暂存"再操作 DSH。
+   */
+  nonModal?: boolean
 }
 
 const FOCUSABLE = 'a[href],button:not([disabled]),textarea:not([disabled]),input:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex="-1"])'
@@ -40,19 +53,24 @@ function useScrollLock(): void {
   }, [])
 }
 
-export function Modal({ title, titleExtra, size = 'md', footer, onClose, closeOnBackdrop = true, children }: ModalProps): ReactNode {
+export function Modal({ title, titleExtra, size = 'md', footer, onClose, closeOnBackdrop = true, children, nonModal = false }: ModalProps): ReactNode {
   const panelRef = useRef<HTMLDivElement | null>(null)
   const restoreFocusRef = useRef<HTMLElement | null>(null)
-  useScrollLock()
+  /**
+   * 非模态浮卡**不锁滚动、不抢焦点、不铺遮罩** —— 这样才能"弹框在旁边，
+   * 我照样能点别处"。滚动锁与焦点陷阱只在模态弹窗下启用。
+   */
+  if (!nonModal) useScrollLock()
 
   useEffect(() => {
+    if (nonModal) return
     // 记住打开前的焦点，关闭后还回去（键盘用户不会迷失位置）
     restoreFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
     const panel = panelRef.current
     const first = panel?.querySelector<HTMLElement>(FOCUSABLE)
     ;(first ?? panel)?.focus()
     return () => { restoreFocusRef.current?.focus?.() }
-  }, [])
+  }, [nonModal])
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
@@ -61,7 +79,7 @@ export function Modal({ title, titleExtra, size = 'md', footer, onClose, closeOn
         onClose()
         return
       }
-      if (event.key !== 'Tab') return
+      if (nonModal || event.key !== 'Tab') return
       const panel = panelRef.current
       if (panel === null) return
       const items = Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE)).filter((el) => el.offsetParent !== null)
@@ -78,17 +96,17 @@ export function Modal({ title, titleExtra, size = 'md', footer, onClose, closeOn
     }
     document.addEventListener('keydown', onKeyDown, true)
     return () => { document.removeEventListener('keydown', onKeyDown, true) }
-  }, [onClose])
+  }, [onClose, nonModal])
 
   return createPortal(
     <div
-      className="wb-overlay"
-      onMouseDown={(event) => { if (closeOnBackdrop && event.target === event.currentTarget) onClose() }}
+      className={nonModal ? 'wb-dock' : 'wb-overlay'}
+      onMouseDown={nonModal ? undefined : (event) => { if (closeOnBackdrop && event.target === event.currentTarget) onClose() }}
     >
       <div
         className={`wb-dialog wb-dialog-${size}`}
         role="dialog"
-        aria-modal="true"
+        {...(nonModal ? {} : { 'aria-modal': 'true' })}
         tabIndex={-1}
         ref={panelRef}
       >

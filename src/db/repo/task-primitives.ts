@@ -34,26 +34,65 @@ export interface RawTaskRow {
   cancelled_at: string | null
 }
 
-/** 递归向上查找最近一个有截止时间的祖先（含自身）。带深度/防环保护。 */
-export function effectiveDueAtForTask(db: DatabaseSync, task: Pick<TaskRow, 'id' | 'parentId' | 'dueAt'>): string | null {
-  if (task.dueAt !== null) return task.dueAt
-  const seen = new Set<string>([task.id])
-  let cursorId = task.parentId
-  let guard = 0
-  while (cursorId !== null && guard < 64) {
-    if (seen.has(cursorId)) return null
-    seen.add(cursorId)
-    const row = db.prepare('SELECT id, parent_id, due_at FROM tasks WHERE id = ?').get(cursorId) as { id: string; parent_id: string | null; due_at: string | null } | undefined
-    if (row === undefined) return null
-    if (row.due_at !== null) return row.due_at
-    cursorId = row.parent_id
-    guard += 1
-  }
-  return null
+/** 祖先链遍历的深度上限（防脏数据/既有环把遍历拖成无限循环）。 */
+export const MAX_ANCESTOR_DEPTH = 64
+
+/** 祖先链上的一行任务投影：只含向上遍历与「向上继承」需要的列。 */
+export interface AncestorRow {
+  id: string
+  parentId: string | null
+  dueAt: string | null
+  workspacePath: string | null
+  archived: number
+}
+
+/** 读取单个任务的祖先投影；任务不存在时返回 undefined。 */
+function readAncestorRow(db: DatabaseSync, id: string): AncestorRow | undefined {
+  const row = db.prepare('SELECT id, parent_id, due_at, workspace_path, archived FROM tasks WHERE id = ?').get(id) as
+    | { id: string; parent_id: string | null; due_at: string | null; workspace_path: string | null; archived: number }
+    | undefined
+  if (row === undefined) return undefined
+  return { id: row.id, parentId: row.parent_id, dueAt: row.due_at, workspacePath: row.workspace_path, archived: row.archived }
 }
 
 /**
- * 递归向上查找最近一个已设置工作区的祖先（含自身）。带深度/防环保护。
+ * **唯一**一份「沿 parent_id 向上走父链」的实现：有效截止继承、有效工作区继承、
+ * 归档祖先判定与环检测（isDescendantOf）全部复用它，避免同一模式被复制多份。
+ *
+ * 防环/防深：`seen` 记住走过的节点（含 selfId），一旦重复或超过 MAX_ANCESTOR_DEPTH 立即停止，
+ * 因此**既有脏数据里已经存在环时也不会死循环**；`resolve` 返回 undefined（任务已删除/取不到）
+ * 时同样停止。`visit` 返回非 undefined 即短路，把该值作为结果返回。
+ */
+export function walkUpAncestors<T>(
+  resolve: (id: string) => AncestorRow | undefined,
+  selfId: string,
+  startParentId: string | null,
+  visit: (row: AncestorRow) => T | undefined,
+): T | undefined {
+  const seen = new Set<string>([selfId])
+  let cursorId = startParentId
+  let guard = 0
+  while (cursorId !== null && guard < MAX_ANCESTOR_DEPTH) {
+    if (seen.has(cursorId)) return undefined
+    seen.add(cursorId)
+    const row = resolve(cursorId)
+    if (row === undefined) return undefined
+    const hit = visit(row)
+    if (hit !== undefined) return hit
+    cursorId = row.parentId
+    guard += 1
+  }
+  return undefined
+}
+
+/** 向上查找最近一个有截止时间的祖先（含自身）。带深度/防环保护。 */
+export function effectiveDueAtForTask(db: DatabaseSync, task: Pick<TaskRow, 'id' | 'parentId' | 'dueAt'>): string | null {
+  if (task.dueAt !== null) return task.dueAt
+  return walkUpAncestors((id) => readAncestorRow(db, id), task.id, task.parentId, (row) => row.dueAt ?? undefined) ?? null
+}
+
+/**
+ * 向上查找最近一个已设置工作区的祖先（含自身）。带深度/防环保护。
  * 语义与 effectiveDueAtForTask 完全同构：子任务未显式设工作区时，跟随最近的祖先；
  * 一旦子任务自己设了工作区，父任务再改动也不会影响它。
  */
@@ -62,21 +101,25 @@ export function effectiveWorkspacePathForTask(
   task: Pick<TaskRow, 'id' | 'parentId' | 'workspacePath'>,
 ): string | null {
   if (task.workspacePath !== null) return task.workspacePath
-  const seen = new Set<string>([task.id])
-  let cursorId = task.parentId
-  let guard = 0
-  while (cursorId !== null && guard < 64) {
-    if (seen.has(cursorId)) return null
-    seen.add(cursorId)
-    const row = db.prepare('SELECT id, parent_id, workspace_path FROM tasks WHERE id = ?').get(cursorId) as
-      | { id: string; parent_id: string | null; workspace_path: string | null }
-      | undefined
-    if (row === undefined) return null
-    if (row.workspace_path !== null) return row.workspace_path
-    cursorId = row.parent_id
-    guard += 1
-  }
-  return null
+  return walkUpAncestors((id) => readAncestorRow(db, id), task.id, task.parentId, (row) => row.workspacePath ?? undefined) ?? null
+}
+
+/**
+ * 判断 candidateId 是否在 ancestorId 的子树内（含两者相等）。带防环保护，不会因既有环而死循环。
+ *
+ * 用于「改父任务」前的环检测：把任务挂到自己的后代下会形成环，必须拒绝。
+ * 走的是向上父链（深度上限 MAX_ANCESTOR_DEPTH），不需要向下展开整棵子树。
+ */
+export function isDescendantOf(db: DatabaseSync, candidateId: string, ancestorId: string): boolean {
+  if (candidateId === ancestorId) return true
+  const self = readAncestorRow(db, candidateId)
+  if (self === undefined) return false
+  return walkUpAncestors(
+    (id) => readAncestorRow(db, id),
+    candidateId,
+    self.parentId,
+    (row) => (row.id === ancestorId ? true : undefined),
+  ) === true
 }
 
 export function parseTask(row: RawTaskRow | undefined, db?: DatabaseSync): TaskRow | undefined {
@@ -158,21 +201,22 @@ export function collectArchivedDescendants(db: DatabaseSync, rows: RawTaskRow[])
     parentOf.set(row.id, row.parent_id)
     if (row.archived === 1) archived.add(row.id)
   }
+  // 祖先状态优先用内存映射（避免逐层回查）；映射里没有的节点视为链断（与旧实现一致）。
+  const resolveFromMap = (id: string): AncestorRow | undefined => {
+    if (!parentOf.has(id)) return undefined
+    return {
+      id,
+      parentId: parentOf.get(id) ?? null,
+      dueAt: null,
+      workspacePath: null,
+      archived: archived.has(id) ? 1 : 0,
+    }
+  }
   const excluded = new Set<string>()
   for (const row of rows) {
     if (row.archived === 1) continue
-    const seen = new Set<string>([row.id])
-    let cursorId = row.parent_id
-    let guard = 0
-    while (cursorId !== null && guard < 64) {
-      if (seen.has(cursorId)) break
-      seen.add(cursorId)
-      if (archived.has(cursorId)) { excluded.add(row.id); break }
-      const next = parentOf.get(cursorId)
-      if (next === undefined) break
-      cursorId = next
-      guard += 1
-    }
+    const hitArchived = walkUpAncestors(resolveFromMap, row.id, row.parent_id, (ancestor) => (ancestor.archived === 1 ? true : undefined))
+    if (hitArchived === true) excluded.add(row.id)
   }
   return excluded
 }

@@ -52,6 +52,17 @@ export interface DraftBannerProps {
    * 少了这一步就会出现"关掉 5 秒后又弹出来"（2026-09-12 实测 BUG）。
    */
   onDismissed?: () => void
+  /**
+   * 「暂存」成功（v1.14.5）。
+   *
+   * **必须与 `onDismissed` 分开**：暂存把草稿交给后端的 deferred 列表，
+   * 前台还要继续在「待处理 → 已暂存」里展示它。如果沿用 `onDismissed`，
+   * 外层会把这个 id 记进屏蔽集合（那是给确认/放弃用的），
+   * 而屏蔽集合又会过滤轮询返回的 `deferredDrafts` ——
+   * 结果就是**刚暂存完，列表里却看不到它**，必须切到别的会话再回来才出现
+   * （2026-09-12 实测 BUG）。所以暂存走这条独立回调：隐藏待确认横幅，但不屏蔽 id。
+   */
+  onDeferred?: () => void
 }
 
 interface DraftPresentation {
@@ -186,7 +197,7 @@ export function reviewMemoryNotes(payload: Record<string, unknown>): string[] {
   ))
 }
 
-export function DraftBanner({ draft, onDone, runtime, closePanel, kindName, onProblems, onNotice, onDismissed, onClose }: DraftBannerProps): ReactNode {
+export function DraftBanner({ draft, onDone, runtime, closePanel, kindName, onProblems, onNotice, onDismissed, onDeferred, onClose }: DraftBannerProps): ReactNode {
   const [busy, setBusy] = useState(false)
   /**
    * 复盘的团队记忆可见性（v1.14.0：复盘确认时自动写入团队记忆库）。
@@ -203,7 +214,7 @@ export function DraftBanner({ draft, onDone, runtime, closePanel, kindName, onPr
   const memoryPreview = memoryNotes.length === 0
     ? '（复盘正文为空，不会写入任何条目）'
     : `${memoryNotes.length} 条` + `（${memoryNotes.slice(0, 3).map((title) => `「${title}」`).join('、')}${memoryNotes.length > 3 ? ` 等 ${memoryNotes.length} 条` : ''}）`
-  const act = async (path: string, body?: Record<string, unknown>): Promise<void> => {
+  const act = async (path: string, body?: Record<string, unknown>, action?: 'defer'): Promise<void> => {
     if (busy) return
     setBusy(true)
     try {
@@ -226,9 +237,9 @@ export function DraftBanner({ draft, onDone, runtime, closePanel, kindName, onPr
           onNotice?.(`复盘已写回任务；这 ${skipped} 条此前已写入过团队记忆，未重复写入`, 'success')
         }
       }
-      onDismissed?.()
-      onDone()
-
+      // 暂存走独立收尾（见 onDeferred 的说明）：不屏蔽 id，草稿要继续出现在「已暂存」里。
+      if (action === 'defer') { onDeferred?.(); onDone() }
+      else { onDismissed?.(); onDone() }
     } catch (error) {
       /**
        * 失败路径也必须把弹框**收掉**（2026-09-12 实测 BUG 的直接修复）。
@@ -244,24 +255,22 @@ export function DraftBanner({ draft, onDone, runtime, closePanel, kindName, onPr
       const message = error instanceof Error ? error.message : String(error)
       const alreadySettled = /already (abandoned|confirmed)|is not pending|not found/i.test(message)
       if (!alreadySettled) onNotice?.(`操作失败：${message}`, 'warning')
-      onDismissed?.()
-      onDone()
-
+      // 与成功路径同理：暂存失败也要走独立收尾，别把 id 记进屏蔽集合。
+      if (action === 'defer') { onDeferred?.(); onDone() }
+      else { onDismissed?.(); onDone() }
     } finally { setBusy(false) }
   }
   const presentation = describeDraft(draft, kindName)
   /**
    * 「回到…会话」：切到那个会话，并把这条横幅收起来。
    *
-   * 顺序与时机都很关键（2026-09-15 用户实测"只会让弹框消失，不会真的回到会话"）：
-   *
-   * 1. **先在当前事件里发起会话切换**（`sessions.open`）；
-   * 2. **面板收起放到下一个宏任务**（`setTimeout(0)`）—— 收起面板会触发
-   *    `layout.selectPanel(null)`，宿主随即卸载/重排视图；如果在同一个事件里
-   *    既切会话又切面板，宿主的会话切换会被紧随其后的面板切换打断
-   *    （表现：弹框没了，但界面还停在工作台）；
-   * 3. **收横幅（登记 id）放在最后**，且失败也要做 —— 否则 5 秒轮询又推回来，
-   *    用户会以为"什么都没发生"。
+   * 三个必须按顺序做对的地方（2026-09-12 实测"点了没反应"）：
+   * 1. **先开会话、再关面板** —— 关面板会卸载本面板所在的 React 树，
+   *    顺序反了后面的调用就落在已拆掉的组件上；
+   * 2. **每一步都独立 try/catch** —— 宿主会话接口在其它插件下面可能抛错，
+   *    不能因为第一步失败就完全没反应；收横幅这件事无论如何都要完成；
+   * 3. **收横幅时必须登记 id** —— 否则 5 秒轮询立刻把它推回来，
+   *    看起来就像"什么都没发生"。
    */
   const openSession = (): void => {
     if (presentation.sessionId === '') {
@@ -274,11 +283,9 @@ export function DraftBanner({ draft, onDone, runtime, closePanel, kindName, onPr
     } catch (error) {
       failure = error instanceof Error ? error.message : String(error)
     }
-    // 先让宿主的会话切换落地，再收面板（顺序反了会把切换打断）。
-    window.setTimeout(() => {
-      try { closePanel() } catch { /* 面板收起失败不影响跳转 */ }
-    }, 0)
+    // 无论跳转成功与否都要收掉横幅（并登记 id），否则用户会以为点击无效。
     onDismissed?.()
+    onClose?.()
     if (failure !== '') onNotice?.(`切换会话失败：${failure}`, 'warning')
   }
   const canDefer = presentation.canDefer !== false
@@ -291,14 +298,6 @@ export function DraftBanner({ draft, onDone, runtime, closePanel, kindName, onPr
       title={presentation.title}
       size="md"
       onClose={() => { onDismissed?.(); (onClose ?? onDone)() }}
-      /**
-       * **非模态**（v1.14.16）：待确认草稿是"待办通知"，不是"必须立刻回答的问题"。
-       *
-       * 用全屏遮罩时用户被钉死：点任何地方都先打在遮罩上 —— 点侧栏「工作台」
-       * 只会把弹框关掉、面板根本不开（2026-09-15 实测）。改成右下角浮卡后，
-       * 一边挂着草稿一边正常操作 DSH，不必先"暂存"。
-       */
-      nonModal
       footer={(
         <>
           <button
@@ -312,7 +311,7 @@ export function DraftBanner({ draft, onDone, runtime, closePanel, kindName, onPr
             {presentation.confirmLabel}
           </button>
           {canDefer && (
-            <button className="wb-btn" disabled={busy} title={presentation.deferHint ?? DEFER_HINT} onClick={() => void act(`/api/workbench/drafts/${draft.id}/defer`, deferBody)}>
+            <button className="wb-btn" disabled={busy} title={presentation.deferHint ?? DEFER_HINT} onClick={() => void act(`/api/workbench/drafts/${draft.id}/defer`, deferBody, 'defer')}>
               {presentation.deferLabel ?? DEFER_LABEL}
             </button>
           )}
@@ -327,7 +326,8 @@ export function DraftBanner({ draft, onDone, runtime, closePanel, kindName, onPr
     >
       <div className="wb-scroll-area">
         {presentation.body}
-        {/* 复盘：团队记忆可见性选择器（受控，状态在本组件） */}        {draft.kindCode === 'review' && (
+        {/* 复盘：团队记忆可见性选择器（受控，状态在本组件） */}
+        {draft.kindCode === 'review' && (
           <MemoryScopeField
             enabled={memoryEnabled}
             scope={memoryScope}

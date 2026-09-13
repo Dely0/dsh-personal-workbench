@@ -5,10 +5,64 @@
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { DatabaseSync } from 'node:sqlite'
-import { addTaskMemory, assertValidFileLink, createDraft, getDeferredDraftForTask, getDictionary, getDraft, getIdea, getIdeaCluster, getPendingDailyPlanDraft, getPendingDraftForSession, getPendingDraftForTask, getPendingKnowledgeDraft, getPendingReportDraft, getTask, listTaskEvents, localDateString, updateDraft, updateTask } from './db/repo.js'
+import { addTaskMemory, assertValidFileLink, createDraft, getDeferredDraftForTask, getDictionary, getDraft, getIdea, getIdeaCluster, getPendingDailyPlanDraft, getPendingDraftForSession, getPendingDraftForTask, getPendingKnowledgeDraft, getPendingReportDraft, getTask, listActiveDictionaryCodes, listTaskEvents, listTasks, localDateString, updateDraft, updateTask } from './db/repo.js'
+import { checkWorkspacePath } from './workspace-check.js'
 
 function text(value: string): ContentBlock[] {
   return [{ type: 'text', text: value }]
+}
+
+/**
+ * 把「合法枚举」拼成给调用方看的一行说明。
+ *
+ * 为什么值得做：`workbench_submit_task` 的 subtasks 里写了一个字典外的 type_code
+ * （真实案例用的 `ops`）时，旧实现是**静默丢弃**——AI 以为自己建了 5 个子任务，
+ * 用户确认后只出现 3 个，双方都不知道。根因之一是 AI 只能靠猜 code。
+ * 现在把枚举直接回给 AI（工具描述里也带一份），猜错就当场报错而不是丢件。
+ */
+function enumHint(db: DatabaseSync, kind: string): string {
+  const codes = listActiveDictionaryCodes(db, kind)
+  return codes.length === 0 ? '(字典为空)' : codes.join(' / ')
+}
+
+/**
+ * 递归校验草稿里每个任务节点的 type_code / priority_code 是否在字典中。
+ *
+ * 返回 undefined 表示全部合法；否则返回**可直接回给 AI 的中文错误**（含合法枚举）。
+ * 与 repo 层 `validateDraftTaskItem` 是同一套规则的两道防线：
+ * 工具层拦住"写草稿时就写错"，repo 层拦住"确认时才发现错"。
+ */
+function validateTaskItems(
+  db: DatabaseSync,
+  items: unknown[],
+  opts: { required: boolean; depth?: number },
+): string | undefined {
+  const depth = opts.depth ?? 1
+  if (items.length === 0) return opts.required ? '错误：任务数组不能为空' : undefined
+  if (depth > 3) return undefined
+  for (const raw of items) {
+    const item = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
+    const title = typeof item.title === 'string' && item.title.trim() !== '' ? item.title.trim() : '(未命名)'
+    const typeCode = item.type_code ?? item.typeCode
+    if (typeCode !== undefined && typeCode !== null && typeCode !== '') {
+      if (typeof typeCode !== 'string' || getDictionary(db, 'type', typeCode)?.active !== 1) {
+        return `错误：子项「${title}」的 type_code 不是有效值：${String(typeCode)}。`
+          + `合法值：${enumHint(db, 'type')}。请改正后**重新提交整份提案**（草稿仍为 pending，可直接覆盖）。`
+      }
+    }
+    const priorityCode = item.priority_code ?? item.priorityCode
+    if (priorityCode !== undefined && priorityCode !== null && priorityCode !== '') {
+      if (typeof priorityCode !== 'string' || getDictionary(db, 'priority', priorityCode)?.active !== 1) {
+        return `错误：子项「${title}」的 priority_code 不是有效值：${String(priorityCode)}。`
+          + `合法值：${enumHint(db, 'priority')}。请改正后重新提交整份提案。`
+      }
+    }
+    if (Array.isArray(item.children)) {
+      const nested = validateTaskItems(db, item.children as unknown[], { required: false, depth: depth + 1 })
+      if (nested !== undefined) return nested
+    }
+  }
+  return undefined
 }
 
 function requireCode(db: DatabaseSync, kind: string, code: unknown, field: string): string {
@@ -41,6 +95,42 @@ function str(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() !== '' ? value : undefined
 }
 
+/** 常见同义写法 → 合法 code（只在**显式给值**且该值不合法时尝试，失败就报错）。 */
+const TYPE_ALIASES: Record<string, string> = {
+  training: 'training', learning: 'training', learn: 'training', study: 'training',
+  work: 'project_delivery', code: 'code_impl', life: 'personal', living: 'personal', home: 'personal',
+}
+
+/**
+ * `type_code` 的**封闭枚举**校验（v1.14.0 修正）。
+ *
+ * 原来这里用的是 `normalizeCode(..., 'personal', ...)`：字典里查不到就**静默回退成
+ * `personal`**，工具却照样返回"草稿已保存"。用户实测发现"非法 code 拦截失败"正是这个 ——
+ * 传 `not_a_type` / `999` / `CODE_IMPL` 都能落成草稿，类型被悄悄改成 `personal`。
+ *
+ * 这与工具描述里"封闭枚举，不要自造"以及子任务那条"写错会被当场拒绝"自相矛盾，
+ * 而且**静默改写比静默丢弃更难发现**（用户以为建的是"培训学习"，实际是"个人生活"）。
+ *
+ * 现在的规则：
+ * - 参数缺失/空串 → 用 `fallback`（顶层任务确实需要一个默认类型）；
+ * - 显式给值 → 必须命中字典中的启用项，或命中别名表；
+ * - 否则**当场报错**，并把合法枚举列出来让调用方改正。
+ *
+ * `priority_code` / `ai_policy_code` 保持原有的宽松回退：它们有天然默认值，
+ * 且写错的语义损失远小于任务类型（但同样会把最终值写回执里，便于自查）。
+ */
+function strictTypeCode(db: DatabaseSync, code: unknown, fallback: string): string {
+  const raw = typeof code === 'string' ? code.trim() : ''
+  if (raw === '') return fallback
+  if (getDictionary(db, 'type', raw)?.active === 1) return raw
+  const alias = TYPE_ALIASES[raw] ?? TYPE_ALIASES[raw.toLowerCase()]
+  if (alias !== undefined && getDictionary(db, 'type', alias)?.active === 1) return alias
+  throw new Error(
+    `type_code 不是有效值：${raw}。合法值（封闭枚举）：${enumHint(db, 'type')}。`
+    + `若该类型确实需要新增，请让用户在「工作台 → 设置 → 字典管理」里添加后再用。`,
+  )
+}
+
 export function submitTaskTool(db: DatabaseSync) {
   return defineTool({
     name: 'workbench_submit_task',
@@ -51,8 +141,8 @@ export function submitTaskTool(db: DatabaseSync) {
       draft_id: { type: 'string', description: '已有草稿 id；更新草稿时必传，首次提交不传' },
       title: { type: 'string', required: true, description: '任务标题，简洁、动词开头更好' },
       description: { type: 'string', description: 'Markdown 描述：背景/目标/验收标准/注意事项' },
-      type_code: { type: 'string', required: true, description: '任务类型 code，如 client_meeting / code_impl' },
-      priority_code: { type: 'string', required: true, description: '优先级 code: p0/p1/p2/p3' },
+      type_code: { type: 'string', required: true, description: `任务类型 code（封闭枚举，不要自造）：${enumHint(db, 'type')}` },
+      priority_code: { type: 'string', required: true, description: `优先级 code（封闭枚举）：${enumHint(db, 'priority')}；含义 p0=今天必须处理 p1=本周内完成 p2=按计划推进 p3=有空再做` },
       status_code: { type: 'string', description: '状态 code，默认 todo' },
       due_at: { type: 'string', description: '截止时间 ISO8601 带时区；全天任务用当天 00:00' },
       all_day: { type: 'boolean', description: '是否全天任务，默认 false' },
@@ -61,7 +151,7 @@ export function submitTaskTool(db: DatabaseSync) {
       reminder_offset_minutes: { type: 'number', description: '截止前多少分钟提醒；缺省按任务类型默认' },
       parent_id: { type: 'string', description: '父任务 id（子任务场景）' },
       workspace_path: { type: 'string', description: '任务 AI 会话使用的具体工作区路径；用户在澄清会话中指定，或留空使用默认工作区' },
-      subtasks: { type: 'json', description: '可选：用户明确要求拆解时的简版子任务数组' },
+      subtasks: { type: 'json', description: '可选：用户明确要求拆解时的简版子任务数组；每项 type_code/priority_code 缺省继承父任务。**type_code 必须是封闭枚举里的值**，写错会被当场拒绝（不再静默丢件）' },
       extra: { type: 'json', description: '附加信息：原始输入、澄清问答摘要等' },
     },
     output: {
@@ -71,7 +161,18 @@ export function submitTaskTool(db: DatabaseSync) {
     async execute(args: Record<string, unknown>, exec: { agent?: { session?: { id?: string; header?: { cwd?: string } } } }) {
       const title = str(args.title)
       if (title === undefined) return '错误：title 必填'
-      const typeCode = normalizeCode(db, 'type', args.type_code, 'personal', { training: 'training', learning: 'training', learn: 'training', study: 'training' })
+      /**
+       * `type_code` 走**封闭枚举**并在失败时返回可读错误（而不是抛异常）。
+       *
+       * 抛异常会让工具以"异常"形式结束，调用方看到的是堆栈而不是"该怎么改"；
+       * 本工具其余校验一律用 `return '错误：…'`，这里保持一致。
+       */
+      let typeCode: string
+      try {
+        typeCode = strictTypeCode(db, args.type_code, 'personal')
+      } catch (error) {
+        return `错误：${error instanceof Error ? error.message : String(error)}`
+      }
       const priorityCode = normalizeCode(db, 'priority', args.priority_code ?? 'p2', 'p2')
       const statusCode = normalizeCode(db, 'status', args.status_code ?? 'todo', 'todo')
       if (statusCode === 'done' || statusCode === 'cancelled') return '错误：澄清草稿不能直接创建为已完成/已取消任务，请使用待办类状态，完成请走执行验收流程。'
@@ -85,6 +186,12 @@ export function submitTaskTool(db: DatabaseSync) {
       const reminderOffset = typeof args.reminder_offset_minutes === 'number'
         ? args.reminder_offset_minutes
         : typeDefault ?? priorityDefault
+      const subtasks = Array.isArray(args.subtasks) ? args.subtasks as unknown[] : []
+      // 子任务 code 当场校验：写错就报错改正，绝不落进"确认时静默丢件"的老路。
+      if (subtasks.length > 0) {
+        const invalid = validateTaskItems(db, subtasks, { required: false })
+        if (invalid !== undefined) return invalid
+      }
       const payload: Record<string, unknown> = {
         title,
         description: str(args.description) ?? '',
@@ -97,8 +204,21 @@ export function submitTaskTool(db: DatabaseSync) {
         aiPolicyCode,
         reminderOffsetMinutes: reminderOffset ?? null,
         parentId: str(args.parent_id) ?? null,
-        workspacePath: str(args.workspace_path) ?? exec.agent?.session?.header?.cwd ?? null,
-        subtasks: args.subtasks ?? [],
+        /**
+         * 工作区路径：显式传入时**先校验**（v1.14.25）。
+         *
+         * 原始验收标准要求"不存在/不可写的工作区给出明确提示，而不是静默回落默认值"。
+         * 这里直接回错误字符串让 AI 当场改正；确认草稿时还有一道同样的校验兜底
+         * （用户可能在界面上手改路径）。
+         */
+        workspacePath: (() => {
+          const explicit = str(args.workspace_path)
+          if (explicit === undefined) return exec.agent?.session?.header?.cwd ?? null
+          const verdict = checkWorkspacePath(explicit)
+          if (!verdict.ok) throw new Error(String(verdict.reason))
+          return verdict.normalized
+        })(),
+        subtasks,
         extra: args.extra ?? {},
         source: 'nl',
       }
@@ -112,7 +232,23 @@ export function submitTaskTool(db: DatabaseSync) {
       const draft = draftId !== undefined && existing !== undefined
         ? updateDraft(db, draftId, payload)
         : createDraft(db, { kindCode: 'task', sessionId, payload })
+      /**
+       * 回执里要写**最终落库的值**（而不是调用方传进来的值）。
+       *
+       * 原先只报"草稿已保存"，于是 `type_code` 被静默回退成 `personal` 时调用方毫不知情
+       * （2026-09-12 用户实测"非法 code 拦截失败"）。现在 type_code 走严格枚举、
+       * priority / ai_policy 仍可能被归一化，所以把最终值显式回显 ——
+       * 调用方一眼能看出自己给的值有没有被改动，这类"静默改写"是用户最难发现的偏差。
+       */
+      const echo = [
+        `type=${typeCode}`,
+        `priority=${priorityCode}`,
+        `status=${statusCode}`,
+        `ai_policy=${aiPolicyCode}`,
+      ].join(' · ')
       return `草稿已保存（id=${draft?.id}），等待用户在界面确认。请用一句话告知用户可以检查草稿；不要声称任务已创建。`
+        + `\n（本次落库的字段：${echo}）`
+        + `\n（合法枚举备查：type = ${enumHint(db, 'type')}；priority = ${enumHint(db, 'priority')}）`
     },
   })
 }
@@ -280,6 +416,10 @@ export function submitIdeaTasksTool(db: DatabaseSync) {
         })
       }
       const tasks = normalize(raw)
+      // 点子落地同样校验：`confirmIdeaTaskDraft` 对未知 code 是**回退**（不是丢弃），
+      // 但"静默改类型"同样是用户看不到的偏差，所以在入口处就报错让 AI 改正。
+      const invalidIdeaTasks = validateTaskItems(db, tasks, { required: false })
+      if (invalidIdeaTasks !== undefined) return invalidIdeaTasks
       const sessionId = exec.agent?.session?.id ?? null
       const payload = { sourceIdeaIds, sourceClusterId: sourceClusterId ?? null, tasks, summary: str(args.summary) ?? '' }
       const draftId = str(args.draft_id)
@@ -417,7 +557,7 @@ export function proposeSubtasksTool(db: DatabaseSync) {
     parameters: {
       parent_task_id: { type: 'string', required: true, description: '被拆解的任务/子任务 id' },
       draft_id: { type: 'string', description: '已有提案草稿 id；用户提出修改意见后再次提交时必传，用于更新同一提案' },
-      subtasks: { type: 'json', required: true, description: '提案树数组；每项含 title/description/type_code/priority_code/due_at/estimated_minutes/children' },
+      subtasks: { type: 'json', required: true, description: `提案树数组；每项含 title/description/type_code/priority_code/due_at/estimated_minutes/children。type_code 缺省继承父任务；**若显式给出必须是封闭枚举**：${enumHint(db, 'type')}` },
       rationale: { type: 'string', description: '拆分思路（一句话）' },
       no_breakdown_needed: { type: 'boolean', description: 'true 表示建议不拆，并给出原因' },
     },
@@ -458,9 +598,18 @@ export function proposeSubtasksTool(db: DatabaseSync) {
       if (draftId !== undefined && existing === undefined) return `错误：提案草稿 ${draftId} 不存在`
       if (existing !== undefined && existing.statusCode !== 'pending') return `错误：提案草稿 ${draftId} 状态为 ${existing.statusCode}，不能更新`
 
+      const normalizedSubtasks = args.no_breakdown_needed === true ? [] : normalize(args.subtasks)
+
+      // 与 workbench_submit_task 同一道防线：显式给出的 type/priority code 必须合法，
+      // 否则确认时会被静默过滤（真实事故见 docs/issues/2026-09-12-subtask-type-code-silently-dropped.md）。
+      if (args.no_breakdown_needed !== true) {
+        const invalid = validateTaskItems(db, normalizedSubtasks, { required: false })
+        if (invalid !== undefined) return invalid
+      }
+
       const payload: Record<string, unknown> = args.no_breakdown_needed === true
         ? { parentTaskId, subtasks: [], noBreakdownNeeded: true, rationale: str(args.rationale) ?? '' }
-        : { parentTaskId, subtasks: normalize(args.subtasks), rationale: str(args.rationale) ?? '' }
+        : { parentTaskId, subtasks: normalizedSubtasks, rationale: str(args.rationale) ?? '' }
 
       const draft = draftId !== undefined && existing !== undefined
         ? updateDraft(db, draftId, payload)
@@ -468,16 +617,59 @@ export function proposeSubtasksTool(db: DatabaseSync) {
       if (payload.subtasks !== undefined && (payload.subtasks as unknown[]).length === 0 && args.no_breakdown_needed !== true) {
         return '错误：subtasks 不能为空；若建议不拆，请设置 no_breakdown_needed=true'
       }
-      return `提案已保存（id=${draft?.id}），等待用户在界面确认或继续提出修改意见。请勿声称子任务已创建。`
+      return `提案已保存（id=${draft?.id}，${(normalizedSubtasks).length} 个顶层节点，其中合法 code 已校验），`
+        + '等待用户在界面确认或继续提出修改意见。请勿声称子任务已创建。'
     },
   })
+}
+
+/** 「移到顶层」的等价写法：parent_id / parent_title 只接受字符串，用它表达「没有父任务」。 */
+const TOP_LEVEL_PARENT_ALIASES = new Set(['none', 'null', 'top', 'root', '顶层', '顶级', '无'])
+
+/**
+ * 解析改父任务的入参：parent_id / parent_title 二选一。
+ *
+ * 标题只在**活跃任务**（未归档、祖先也未归档）里匹配，先全等、再包含；
+ * 命中多个或一个都没命中时明确报错并列出候选，让 AI 回去问用户——
+ * 绝不替用户在重名/相似的标题里挑一个（改错父任务的代价比多问一句大得多）。
+ */
+function resolveParentRef(db: DatabaseSync, args: Record<string, unknown>): { parentId: string | null } | { error: string } {
+  const rawId = str(args.parent_id)
+  const rawTitle = str(args.parent_title)
+  if (rawId !== undefined && rawTitle !== undefined) return { error: '错误：parent_id 与 parent_title 只能给一个' }
+  if (rawId === undefined && rawTitle === undefined) {
+    return { error: '错误：parent_id 与 parent_title 至少给一个（移到顶层用 parent_id="none"）' }
+  }
+  if (rawId !== undefined) {
+    const value = rawId.trim()
+    if (TOP_LEVEL_PARENT_ALIASES.has(value.toLowerCase())) return { parentId: null }
+    const parent = getTask(db, value)
+    if (parent === undefined) return { error: `错误：父任务 ${value} 不存在` }
+    if (parent.archived === 1) return { error: `错误：父任务「${parent.title}」已归档，不能挂到它下面` }
+    return { parentId: parent.id }
+  }
+  const wanted = (rawTitle ?? '').trim().toLowerCase()
+  const active = listTasks(db)
+  const exact = active.filter((item) => item.title.trim().toLowerCase() === wanted)
+  const matches = exact.length > 0 ? exact : active.filter((item) => item.title.toLowerCase().includes(wanted))
+  if (matches.length === 0) {
+    const candidates = active.slice(0, 10).map((item) => `${item.title}（${item.id}）`).join('、')
+    return { error: `错误：没有找到标题匹配「${rawTitle}」的活跃任务：无法确定父任务。当前活跃任务：${candidates === '' ? '（无）' : candidates}。请让用户确认，或改用 parent_id。` }
+  }
+  if (matches.length > 1) {
+    const candidates = matches.map((item) => `${item.title}（${item.id}）`).join('、')
+    return { error: `错误：标题「${rawTitle}」匹配到 ${matches.length} 个活跃任务，不能替你选：${candidates}。请让用户确认后用 parent_id 指定。` }
+  }
+  return { parentId: matches[0].id }
 }
 
 export function updateTaskTool(db: DatabaseSync) {
   return defineTool({
     name: 'workbench_update_task',
     description:
-      '个人工作台任务编辑工具：更新一个已有任务（例如把咨询/澄清的结论回写到任务描述）。只更新传入的字段；task_id 必填。不要把咨询结论提交成新任务。',
+      '个人工作台任务编辑工具：更新一个已有任务（例如把咨询/澄清的结论回写到任务描述）。只更新传入的字段；task_id 必填。不要把咨询结论提交成新任务。' +
+      '也可以改父任务（把任务挪到别的父任务下，或移到顶层）：用 parent_id 指定父任务 id（移到顶层传 "none"），' +
+      '用户只给了父任务标题时用 parent_title。改父任务会做存在性、归档与防环校验，失败会返回中文原因。',
     parameters: {
       task_id: { type: 'string', required: true, description: '要更新的任务 id' },
       title: { type: 'string', description: '新标题' },
@@ -487,6 +679,8 @@ export function updateTaskTool(db: DatabaseSync) {
       status_code: { type: 'string', description: '状态 code' },
       due_at: { type: 'string', description: 'ISO8601 截止时间' },
       ai_policy_code: { type: 'string', description: 'AI 策略 code' },
+      parent_id: { type: 'string', description: '改父任务：新父任务 id；移到顶层传 "none"（顶层）。与 parent_title 二选一' },
+      parent_title: { type: 'string', description: '改父任务：用父任务标题指定（仅在活跃任务里精确匹配，重名会让用户确认）；与 parent_id 二选一' },
     },
     output: {
       schema: { type: 'string' },
@@ -512,9 +706,22 @@ export function updateTaskTool(db: DatabaseSync) {
       if (str(args.due_at) !== undefined) patch.dueAt = str(args.due_at)
       const aiPolicy = optionalCode(db, 'ai_policy', args.ai_policy_code, 'ai_policy_code')
       if (aiPolicy !== undefined) patch.aiPolicyCode = aiPolicy
+      // 改父任务：先解析（id / 标题），存在性、归档与防环校验由仓储层统一兜底。
+      let reparentNote = ''
+      if (args.parent_id !== undefined || args.parent_title !== undefined) {
+        const resolved = resolveParentRef(db, args)
+        if ('error' in resolved) return resolved.error
+        patch.parentId = resolved.parentId
+        reparentNote = `，父任务改为「${resolved.parentId === null ? '顶层' : getTask(db, resolved.parentId)?.title ?? resolved.parentId}」`
+      }
       if (Object.keys(patch).length === 0) return '错误：至少提供一个要更新的字段'
-      updateTask(db, taskId, patch, 'ai', new Date().toISOString())
-      return `已更新任务「${task.title}」：${Object.keys(patch).join('、')}`
+      try {
+        updateTask(db, taskId, patch, 'ai', new Date().toISOString())
+      } catch (error) {
+        // 守卫抛的是给用户看的中文原因（挂到自己身上 / 会形成环 / 父任务不存在…），原样回给 AI。
+        return `错误：${error instanceof Error ? error.message : String(error)}`
+      }
+      return `已更新任务「${task.title}」：${Object.keys(patch).join('、')}${reparentNote}`
     },
   })
 }

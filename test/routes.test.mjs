@@ -322,12 +322,31 @@ test('draft defer/resume/abandon API: 暂存不弹窗、可唤回、驳回留痕
   })
 })
 
-test('draft defer API: 非验收类草稿不可暂存', async () => {
-  await withServer(async ({ request }) => {
+test('draft defer API: 所有草稿类型都可暂存，且暂存留痕走通用事件码', async () => {
+  await withServer(async ({ request, db }) => {
+    // v1.14.0：暂存白名单推广为「默认全部可暂存」，非验收类不再被拒。
     const created = await request('POST', '/api/workbench/drafts', { kindCode: 'report', payload: { periodCode: 'day' } })
     const res = await request('POST', `/api/workbench/drafts/${created.body.draft.id}/defer`)
-    assert.equal(res.status, 400)
-    assert.match(res.body.error, /cannot be deferred/)
+    assert.equal(res.status, 200)
+    assert.equal(res.body.draft.deferredAt !== null, true)
+    assert.equal(res.body.draft.deferCount, 1)
+    // 暂存后不再自动弹窗
+    const list = await request('GET', '/api/workbench/drafts')
+    assert.equal(list.body.draft, null)
+    assert.equal(list.body.deferredDrafts.length, 1)
+
+    // 带 taskId 的草稿（如复盘）暂存要写通用 draft_deferred 事件 + 共享记忆
+    const task = createTask(db, { title: '暂存留痕目标', typeCode: 'code_impl', priorityCode: 'p2' })
+    const review = await request('POST', '/api/workbench/drafts', {
+      kindCode: 'review',
+      payload: { taskId: task.id, summaryMd: '复盘正文', lessons: [] },
+    })
+    const reviewDefer = await request('POST', `/api/workbench/drafts/${review.body.draft.id}/defer`)
+    assert.equal(reviewDefer.status, 200)
+    assert.equal(
+      db.prepare("SELECT COUNT(*) AS c FROM task_events WHERE task_id = ? AND event_code = 'draft_deferred'").get(task.id).c,
+      1,
+    )
   })
 })
 
@@ -382,5 +401,51 @@ test('点子文件夹：新建 / 改名 / 归入 / 移出 / 合并', async () =>
     assert.deepEqual(merged.body.cluster.ideas.map((idea) => idea.title).sort(), ['点子 A', '点子 B'])
     const after = await request('GET', `/api/workbench/idea-clusters/${f2.body.cluster.id}`)
     assert.equal(after.status, 404)
+  })
+})
+
+test('PATCH /tasks/:id 改父任务：非法移动 400（中文原因，不是 500），合法移动 200 且落库留痕', async () => {
+  await withServer(async ({ db, request }) => {
+    const parentIdOf = (id) => db.prepare('SELECT parent_id FROM tasks WHERE id = ?').get(id).parent_id
+    const newParent = createTask(db, { title: '目标父任务', typeCode: 'code_impl', priorityCode: 'p1', dueAt: '2026-09-30T18:00:00+08:00', workspacePath: '/mnt/d/Code/NEW' })
+    const task = createTask(db, { title: '待移动任务', typeCode: 'code_impl', priorityCode: 'p1' })
+    const child = createTask(db, { title: '它的子任务', typeCode: 'code_impl', priorityCode: 'p1', parentId: task.id })
+
+    // 挂到自己身上 / 挂到自己的子任务下 / 父任务不存在：都必须是 400 + 中文原因（不是 500）
+    const self = await request('PATCH', `/api/workbench/tasks/${task.id}`, { parentId: task.id })
+    assert.equal(self.status, 400)
+    assert.match(self.body.error, /不能把任务挂到自己身上/)
+
+    const cyclic = await request('PATCH', `/api/workbench/tasks/${task.id}`, { parentId: child.id })
+    assert.equal(cyclic.status, 400)
+    assert.match(cyclic.body.error, /会形成环/)
+    assert.match(cyclic.body.error, /[\u4e00-\u9fa5]/, '错误原因必须是中文，便于直接展示给用户')
+
+    const missing = await request('PATCH', `/api/workbench/tasks/${task.id}`, { parentId: 'no-such-parent' })
+    assert.equal(missing.status, 400)
+    assert.match(missing.body.error, /父任务不存在/)
+    // 被拒的三次都没有改库
+    assert.equal(parentIdOf(task.id), null)
+
+    // 合法移动：200 + 新 parentId；有效截止/工作区跟随新父任务
+    const ok = await request('PATCH', `/api/workbench/tasks/${task.id}`, { parentId: newParent.id })
+    assert.equal(ok.status, 200)
+    assert.equal(ok.body.task.parentId, newParent.id)
+    assert.equal(ok.body.task.effectiveDueAt, newParent.dueAt)
+    assert.equal(ok.body.task.effectiveWorkspacePath, '/mnt/d/Code/NEW')
+    assert.equal(parentIdOf(task.id), newParent.id)
+
+    // 移到顶层：parentId: null
+    const toTop = await request('PATCH', `/api/workbench/tasks/${task.id}`, { parentId: null })
+    assert.equal(toTop.status, 200)
+    assert.equal(toTop.body.task.parentId, null)
+    assert.equal(parentIdOf(task.id), null)
+
+    // 留痕：任务详情的「记录」页签能看到两次调整与可读说明
+    const events = await request('GET', `/api/workbench/tasks/${task.id}/events`)
+    assert.equal(events.status, 200)
+    const reparented = events.body.events.filter((event) => event.event_code === 'reparented')
+    assert.equal(reparented.length, 2)
+    assert.deepEqual(reparented.map((event) => event.note).sort(), ['父任务：目标父任务 → 顶层', '父任务：顶层 → 目标父任务'])
   })
 })

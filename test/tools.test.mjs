@@ -8,6 +8,26 @@ import { seedDictionaries } from '../lib/db/seed.js'
 import { proposeDailyPlanTool, proposeIdeaClustersTool, submitIdeaTasksTool, submitKnowledgeTool, submitReportTool, submitTaskTool, updateTaskTool, requestCompletionTool, saveTaskMemoryTool } from '../lib/tools.js'
 import { createIdea, createTask, getTask, getTaskMemoryContext, getDraftBySession, getPendingDailyPlanDraft, getPendingDraftForSession, getPendingDraftForTask, getPendingReportDraft, updateTask } from '../lib/db/repo.js'
 
+/**
+ * 删临时目录，容忍 Windows 上刚 `close()` 时文件句柄尚未释放导致的 EPERM。
+ *
+ * 背景：`rmSync` 偶发 EPERM 会让一条**断言全过**的测试报失败，
+ * 看起来像功能坏了，实际只是杀毒/索引还在占着 WAL 文件。
+ * 这类"清理期的假失败"最耗排查时间，所以统一重试几次再放弃（放弃也不 fail）。
+ */
+function rmTempDir(dir) {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      rmSync(dir, { recursive: true, force: true })
+      return
+    } catch (error) {
+      if (error?.code !== 'EPERM' && error?.code !== 'EBUSY' && error?.code !== 'ENOTEMPTY') throw error
+      // 忙等一小会儿（同步 sleep）——测试进程里没有别的活可干，等一下最省事。
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 60)
+    }
+  }
+}
+
 test('agent tools write pending drafts and update tasks', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-personal-workbench-tools-'))
   try {
@@ -21,13 +41,27 @@ test('agent tools write pending drafts and update tasks', async () => {
     assert.match(out, /草稿已保存/)
     assert.ok(getDraftBySession(db, 'sess-1'))
 
-    // AI 可能发明/使用字典外的 type_code：training 应合法，未知 code 应回退不报错
+    // type_code 是**封闭枚举**（v1.14.0 起）：合法值通过，字典外的值**当场拒绝**。
+    //
+    // 旧行为是"未知 code 静默回退成 personal 并返回草稿已保存"，用户实测反馈
+    // 「非法 code 拦截失败」—— 静默改写比静默丢弃更难发现（以为建的是"培训学习"，
+    // 实际是"个人生活"）。这条测试原来锁的正是那个旧行为，现已按新契约反转。
     const training = await submit.execute({ title: '学做东北菜', type_code: 'training', priority_code: 'p2' }, { agent: { session: { id: 'sess-training' } } })
     assert.match(training, /草稿已保存/)
     assert.equal(getDraftBySession(db, 'sess-training').payload.typeCode, 'training')
+
     const unknown = await submit.execute({ title: '未知类型任务', type_code: 'foobar', priority_code: 'p2' }, { agent: { session: { id: 'sess-unknown' } } })
-    assert.match(unknown, /草稿已保存/)
-    assert.equal(getDraftBySession(db, 'sess-unknown').payload.typeCode, 'personal')
+    assert.match(unknown, /type_code 不是有效值/)
+    assert.match(unknown, /合法值/)
+    assert.equal(getDraftBySession(db, 'sess-unknown'), undefined, '非法 type_code 不应落成草稿')
+
+    // 大小写/字形变体同样拒绝（CODE_IMPL 不是 code_impl）；空串才允许走默认值
+    const upper = await submit.execute({ title: '大写变体', type_code: 'CODE_IMPL', priority_code: 'p2' }, { agent: { session: { id: 'sess-upper' } } })
+    assert.match(upper, /type_code 不是有效值/)
+    assert.equal(getDraftBySession(db, 'sess-upper'), undefined)
+
+    // 回执必须回显**最终落库**的字段，避免"静默改写"再次发生
+    assert.match(training, /本次落库的字段：type=training/)
 
     const update = updateTaskTool(db)
     const task = createTaskForTest(db)
@@ -135,6 +169,66 @@ test('agent tools write pending drafts and update tasks', async () => {
     const tOut = await taskTool.execute({ source_idea_ids: [idea1.id], tasks: [{ title: '落地A', type_code: 'code_impl', priority_code: 'p1' }], summary: '结论' }, { agent: { session: { id: 'sess-idea-task' } } })
     assert.match(tOut, /点子落地任务提案已保存/)
     assert.ok(getPendingDraftForSession(db, 'sess-idea-task', 'idea_tasks'))
+    db.close()
+  } finally {
+    rmTempDir(dir)
+  }
+})
+
+test('workbench_update_task 改父任务：parent_id / parent_title 解析、顶层与防环', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-personal-workbench-tools-reparent-'))
+  try {
+    const db = openWorkbenchDb({ dbPath: join(dir, 'workbench.db') })
+    seedDictionaries(db)
+    const update = updateTaskTool(db)
+    const target = createTask(db, { title: '目标父任务', typeCode: 'code_impl', priorityCode: 'p1' })
+    const other = createTask(db, { title: '另一个任务', typeCode: 'code_impl', priorityCode: 'p1' })
+    const moving = createTask(db, { title: '被移动任务', typeCode: 'code_impl', priorityCode: 'p1' })
+    const child = createTask(db, { title: '子任务', typeCode: 'code_impl', priorityCode: 'p1', parentId: moving.id })
+
+    // 用 id 指定父任务
+    const byId = await update.execute({ task_id: moving.id, parent_id: target.id })
+    assert.match(byId, /已更新任务/)
+    assert.match(byId, /父任务改为「目标父任务」/)
+    assert.equal(getTask(db, moving.id).parentId, target.id)
+
+    // 用户只给了标题：用 parent_title 解析
+    const byTitle = await update.execute({ task_id: moving.id, parent_title: '另一个任务' })
+    assert.match(byTitle, /父任务改为「另一个任务」/)
+    assert.equal(getTask(db, moving.id).parentId, other.id)
+
+    // 移到顶层
+    const toTop = await update.execute({ task_id: moving.id, parent_id: 'none' })
+    assert.match(toTop, /父任务改为「顶层」/)
+    assert.equal(getTask(db, moving.id).parentId, null)
+
+    // 防环：目标是自己的子任务 → 返回中文错误文本（而不是抛异常），且不改库
+    const cyclic = await update.execute({ task_id: moving.id, parent_id: child.id })
+    assert.match(cyclic, /^错误：/)
+    assert.match(cyclic, /形成环/)
+    assert.equal(getTask(db, moving.id).parentId, null)
+
+    // 标题找不到 → 列出候选让 AI 回去问用户；重名 → 不替用户挑；两个参数同时给 → 明确报错
+    const missing = await update.execute({ task_id: moving.id, parent_title: '不存在的标题' })
+    assert.match(missing, /没有找到/)
+    assert.match(missing, /目标父任务/)
+    assert.equal(getTask(db, moving.id).parentId, null)
+
+    createTask(db, { title: '重名任务', typeCode: 'code_impl', priorityCode: 'p1' })
+    createTask(db, { title: '重名任务', typeCode: 'code_impl', priorityCode: 'p1' })
+    const ambiguous = await update.execute({ task_id: moving.id, parent_title: '重名任务' })
+    assert.match(ambiguous, /匹配到 2 个/)
+    assert.match(ambiguous, /parent_id/)
+    assert.equal(getTask(db, moving.id).parentId, null)
+
+    const both = await update.execute({ task_id: moving.id, parent_id: target.id, parent_title: '目标父任务' })
+    assert.match(both, /只能给一个/)
+    assert.equal(getTask(db, moving.id).parentId, null)
+
+    // 父任务 id 不存在：中文原因
+    const badId = await update.execute({ task_id: moving.id, parent_id: 'no-such-parent' })
+    assert.match(badId, /父任务 no-such-parent 不存在/)
+    assert.equal(getTask(db, moving.id).parentId, null)
     db.close()
   } finally {
     rmSync(dir, { recursive: true, force: true })

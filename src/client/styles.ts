@@ -1,26 +1,69 @@
 /**
  * 工作台全部样式（从 index.tsx 抽出，便于维护）。
- * 颜色一律走 DSH 宿主令牌 --dsw-alias-*，不引入自有配色，保证与外壳一致。
- * 结构：宿主注入钩子 → 布局 → 组件 → 弹窗/toast → 响应式。
+ *
+ * 颜色策略（v1.14.5 起）：**先映射到我们自己的 `--wb-*` 令牌层，再由它引用宿主
+ * `--dsw-alias-*`**。原先直接写 `var(--dsw-alias-xxx, <深色回退>)`，令牌拿不到时
+ * 会回退成深黑 —— 这是本插件最严重的一次视觉事故的成因，细节见
+ * `entryContract.ts` 的 `tokenLayerCss()`。
+ *
+ * 令牌层函数放在 `entryContract.ts`：那边进构建产物、能被 `node --test` 直接断言；
+ * 本文件只在打包进浏览器 bundle 时参与，测不到。
+ *
+ * 结构：令牌层 → 宿主注入钩子 → 布局 → 组件 → 弹窗/toast → 响应式。
  */
-import { ACTIVE_ATTR, ENTRY_ATTR, PENDING_ATTR, VIEW_ATTR } from './constants.js'
+import { ACTIVE_ATTR, OFFICIAL_ATTR, PENDING_ATTR, VIEW_ATTR } from './constants.js'
+import {
+  BLOCKED_ATTR, ENTRY_ATTR, ENTRY_CLASS, entryCss, panelContainerCss, toWorkbenchTokens, tokenLayerCss,
+} from './entryContract.js'
 
-export const WORKBENCH_CSS = `[data-pane='conversation'], [class*='centerCol'] { position: relative; }
+const RAW_CSS = `[data-pane='conversation'], [class*='centerCol'] { position: relative; }
 [${VIEW_ATTR}] {
   position: absolute; inset: 0; display: none; z-index: 60;
   background: var(--dsw-alias-bg-base, #111); color: var(--dsw-alias-label-primary, #eee);
   font-family: var(--dsw-font-family, system-ui); overflow: hidden;
 }
-html[${ACTIVE_ATTR}]:not([data-dsh-taskboard-active]):not([data-dsh-ssh-active]) [${VIEW_ATTR}] { display: block; }
-html[${ACTIVE_ATTR}]:not([data-dsh-taskboard-active]):not([data-dsh-ssh-active]) [data-pane='conversation'] > :not([${VIEW_ATTR}]),
-html[${ACTIVE_ATTR}]:not([data-dsh-taskboard-active]):not([data-dsh-ssh-active]) [class*='centerCol'] > :not([${VIEW_ATTR}]) { display: none !important; }
-[${ENTRY_ATTR}] { position:relative; display:flex; align-items:center; gap:8px; width:100%; height:32px; padding:0 12px; background:transparent; border:none; border-radius:8px; color:var(--dsw-alias-label-secondary); cursor:pointer; font-size:13px; white-space:nowrap; text-align:left; }
-[${ENTRY_ATTR}] svg { width:16px; height:16px; flex:none; }
-[${ENTRY_ATTR}]:hover { background: var(--dsw-specific-sidebar-nav-item-hover); color: var(--dsw-alias-label-primary); }
-[${ENTRY_ATTR}][data-active] { background: var(--dsw-specific-sidebar-nav-item-active); color: var(--dsw-alias-label-primary); font-weight:600; }
+/* ---------------------------------------------------------------------------
+   两种面板容器的可见性（v1.14.0；2026-09-12「点工作台→整片空白」事故的直接修复）
+   ---------------------------------------------------------------------------
+   规则本体在 entryContract.ts 的 panelContainerCss()：那里可被单测锁住，
+   而本文件的 CSS 只进浏览器 bundle、测不到。这里只负责拼接。
+   容器有两个：官方 main 槽位里的（迁移后的正路）与覆盖层（降级腿 + 兜底），
+   必须严格二选一 —— 两份都渲染会让两个 WorkbenchApp 互相打架（弹框重复、
+   按钮点不动、背景闪烁）；该显示的那份没渲染但门控已生效则是整片空白。
+   --------------------------------------------------------------------------- */
+${panelContainerCss({ view: VIEW_ATTR, official: OFFICIAL_ATTR, active: ACTIVE_ATTR, blocked: BLOCKED_ATTR }).join('\n')}
+${entryCss()}
+/* 面板容器（挂在**始终存在**的 shell.overlay 里）：由自己的 data-open 决定显隐。
+   为什么不用宿主给的高度链：宿主 main 容器外面套了一层 display:contents 中转节点，
+   它可能在组件挂载之后才定高，依赖 height 会偶发 0 高度（面板"挂上了却看不见"）。
+   为什么是 fixed 而不是填满格子：需要一个不依赖宿主布局的稳定容器。
+
+   ⚠️ 两条硬约束（2026-09-15 用户实测踩到）：
+   1. **不能盖住左侧导航栏**。容器本身 pointer-events:none、只有面板本体 auto，
+      点击直接穿透到 DSH 侧栏；同时从 --wb-sidebar-w（运行时量出的侧栏宽度）开始铺，
+      视觉上也不压住侧栏。改造前的覆盖层贴在会话列里，左侧栏一直是可用的。
+   2. **开合只切 display，不卸载组件** —— 草稿弹框要跨页面常驻，
+      依赖 useEffect 拉数据的区块（今日容量）也不能被反复重建。 */
+.wb-panel-host {
+  position: fixed; top: 0; right: 0; bottom: 0; left: var(--wb-sidebar-w, 0px);
+  z-index: 55; overflow: hidden; display: none;
+  background: var(--wb-bg-base);
+  pointer-events: none;
+}
+.wb-panel-host[data-open='1'] { display: block; }
+/* 面板本体恢复接收事件（容器保持穿透，保证左侧栏可点）。 */
+.wb-panel-host > .wb-app-scope { pointer-events: auto; }
+/* 样式作用域包装层：组件样式按 [data-...-view] 后代作用域书写，这里必须撑满并可见
+   （它**不能**同时是 .wb-panel-host，否则会命中 [data-...-view] 的 display:none 基线规则）。 */
+.wb-panel-host .wb-app-scope { height: 100%; min-height: 0; }
+/* 兜底：**内容为空时绝不拦点击**（v1.14.28）。
+   2026-09-13 真实事故：宿主面板状态读不到时容器被永久置为 data-open="1"，
+   一张 2280×1377 的空层盖住会话区与 task-board，用户"除左栏外什么都点不了"。
+   这条规则保证"空层"即使处于显示态也不会吃掉点击。 */
+.wb-panel-host > .wb-app-scope:empty { pointer-events: none; }
+.wb-panel-host > [${VIEW_ATTR}] { position: static; inset: auto; z-index: auto; height: 100%; }
+.wb-panel-fill { height: 100%; min-height: 0; }
 html[${PENDING_ATTR}] [${ENTRY_ATTR}]::after { content:''; position:absolute; top:6px; right:10px; width:7px; height:7px; border-radius:50%; background:#e74c3c; }
-[data-dsh-frame][data-sidebar-collapsed] [${ENTRY_ATTR}] { justify-content:center; padding:0; width:100%; }
-[data-dsh-frame][data-sidebar-collapsed] [${ENTRY_ATTR}] .wb-label { display:none; }
 .wb-app { height:100%; display:flex; flex-direction:column; }
 .wb-h { flex:none; display:flex; align-items:center; gap:12px; padding:14px 18px; border-bottom:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.22)); background:var(--dsw-alias-bg-layer-1, rgba(255,255,255,.02)); }
 .wb-title { display:flex; align-items:center; gap:8px; font-size:16px; font-weight:700; letter-spacing:.02em; white-space:nowrap; }
@@ -234,6 +277,19 @@ html[${PENDING_ATTR}] [${ENTRY_ATTR}]::after { content:''; position:absolute; to
    弹窗（Modal）：替代"内联面板挤压任务列表"的旧形态。
    签名元素 = 两栏悬浮工作台面板：左分区导航 / 右独立滚动 / 粘性底栏。
    ========================================================================== */
+/* 非模态浮卡：**不铺遮罩、不拦点击**（草稿弹框用它，避免"弹框一出什么都干不了"）。
+   容器本身 pointer-events:none，只有卡片本体接收事件 —— 点卡片外面照样能操作 DSH。 */
+.wb-dock {
+  position: fixed; right: 18px; bottom: 18px; z-index: 300;
+  pointer-events: none; display: flex; justify-content: flex-end;
+}
+.wb-dock > .wb-dialog {
+  pointer-events: auto;
+  max-height: min(70vh, 640px);
+  width: min(560px, calc(100vw - 36px));
+  box-shadow: 0 18px 48px rgba(0,0,0,.38);
+  animation: wb-dialog-in .18s cubic-bezier(.2,.9,.3,1);
+}
 .wb-overlay {
   position: fixed; inset: 0; z-index: 300;
   display: flex; align-items: center; justify-content: center; padding: 24px;
@@ -303,6 +359,19 @@ html[${PENDING_ATTR}] [${ENTRY_ATTR}]::after { content:''; position:absolute; to
 .wb-settings-pane > section + section { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.14)); }
 .wb-settings-pane h5 { margin: 0 0 10px; font-size: 13px; font-weight: 700; color: var(--dsw-alias-label-primary); }
 .wb-settings-pane .wb-hint { font-size: 12px; color: var(--dsw-alias-label-secondary); margin: 6px 0 0; line-height: 1.6; }
+/* ---------------------------------------------------------------------------
+   弹框里的提示文字（v1.14.0 修复「提示被上方输入框遮挡」）
+   ---------------------------------------------------------------------------
+   原来只有 .wb-settings-pane .wb-hint 这一条，于是弹框里的 .wb-hint
+   **完全没有样式**：字号继承、行高默认、上下无间距，紧贴着一个行内 input
+   渲染，看起来就被输入框压住了。这里补一条全局基线。
+   --------------------------------------------------------------------------- */
+.wb-hint { font-size: 12px; color: var(--dsw-alias-label-secondary); margin: 6px 0 0; line-height: 1.6; }
+/* 字段名右边的小字说明（例如「使用默认工作区」）。inline-flex + 基线对齐，避免与标题挤在一行时错位。 */
+.wb-field-note { display: inline-flex; align-items: center; margin-left: 8px; font-size: 11.5px; color: var(--dsw-alias-label-secondary); opacity: .85; }
+/* 弹框里的行内勾选项：图标与文字垂直居中，不参与 .wb-field 的列布局。 */
+.wb-inline-check { display: flex; align-items: flex-start; gap: 6px; margin: 8px 0 0; font-size: 12.5px; line-height: 1.6; color: var(--dsw-alias-label-secondary); cursor: pointer; }
+.wb-inline-check input { margin: 2px 0 0; flex: none; }
 .wb-field-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
 .wb-field { display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; color: var(--dsw-alias-label-secondary); }
 .wb-field > span { font-size: 12px; }
@@ -360,6 +429,16 @@ html[${PENDING_ATTR}] [${ENTRY_ATTR}]::after { content:''; position:absolute; to
 
 /* 弹窗内滚动区域（草稿确认等长内容） */
 .wb-scroll-area { max-height: min(46vh, 420px); overflow: auto; padding-right: 4px; }
+/* 草稿弹框的字段行（v1.14.0：补齐信息量，让用户能判断 AI 建得对不对） */
+.wb-draft-field { display: flex; gap: 8px; font-size: 12px; line-height: 1.7; margin: 2px 0; }
+.wb-draft-field-k { flex: none; min-width: 76px; color: var(--dsw-alias-label-secondary); }
+.wb-draft-field-v { flex: 1; min-width: 0; word-break: break-all; }
+/* 确认草稿时「本该创建但没创建」的告警条（绝不静默丢件的界面侧防线） */
+.wb-draft-problems {
+  margin-top: 10px; padding: 8px 10px; border-radius: 8px; font-size: 12px; line-height: 1.7;
+  border-left: 3px solid #f5b83d; background: color-mix(in srgb, #f5b83d 12%, transparent);
+}
+.wb-draft-problems h5 { margin: 0 0 4px; font-size: 12px; font-weight: 700; }
 
 /* ===========================================================================
    视觉层 v2（v1.13.0）
@@ -616,4 +695,14 @@ html[${PENDING_ATTR}] [${ENTRY_ATTR}]::after { content:''; position:absolute; to
 @media (prefers-reduced-motion: reduce) {
   .wb-overlay, .wb-dialog, .wb-toast, .wb-toast.leaving { animation: none; }
 }
-`;
+`
+
+/**
+ * 对外导出的最终样式表：**令牌层 + 令牌化后的主体**。
+ *
+ * 两步的意义：主体里所有 `--dsw-*` 引用都被换成 `--wb-*`，而 `--wb-*` 在
+ * `tokenLayerCss()` 里以 `light-dark()` 兜底 —— 这样即使宿主主题令牌
+ * 没有被继承到我们的节点（Modal portal 到 body、面板跨出主题子树），
+ * 也只会跟随明暗，而不会退化成一片深黑。
+ */
+export const WORKBENCH_CSS = `${tokenLayerCss()}\n${toWorkbenchTokens(RAW_CSS)}`

@@ -132,13 +132,60 @@ dsh plugin --profile web add link:/path/to/dsh-personal-workbench
 
 ## 兼容性与已知限制
 
-- 当前版本针对 **DSH 0.1.5-rc.1 Web 版** 开发与测试（插件 v1.13.1）。
-- 入口分两条：**会话标题栏按钮**走 DSH 官方槽位 `conversation.session.header.actions`（稳定）；
-  DSH 侧栏入口仍沿用 DOM 契约（`data-pane`、`logoRow`、`centerCol` 等 class）。
-  **DSH 升级到新的大版本时，请重新验证侧栏入口这些选择器，必要时适配。**
-- 与 `dsh-web-ui`（task-board / ssh）共存时使用其 `data-dsh-*` 互斥协议；未安装时自动失效，**不依赖 dsh-web-ui**。
+### DSH 版本支持矩阵
+
+插件对 DSH 的能力要求分三档。**降级一律是"少一个入口/少一个能力"，不是"插件加载失败"**：
+
+| 能力 | 需要的 DSH 版本 | 拿不到时的行为 |
+|---|---|---|
+| 插件本体、任务/日历/知识库/点子、AI 会话关联 | 0.1.0-rc.6+ | — |
+| 会话标题栏入口（官方槽位 `conversation.session.header.actions`） | 0.1.1-rc.1+ | 无该按钮，侧栏入口仍可用 |
+| **侧栏面板行（官方槽位 `sidebar.panellist`）+ 中央面板（官方槽位 `main`）** | **0.1.5-rc.1+** | 回落到 DOM 注入入口（见下） |
+| `layout.selectPanel`（面板选中状态由宿主单值状态管理） | 0.1.5-rc.1+ | 同上 |
+| 官方 `uiWorkspace.connectWorkspace`（AI 会话切工作区） | 0.1.5-rc.1+ | 回落 `workspaces.openPath` |
+| 团队记忆库（复盘自动沉淀） | 与 `dsh-team-memory` 无关（走它的落盘/队列格式） | 复盘只写回任务详情，不写团队库 |
+
+**实测组合**：DSH 0.1.1-rc.1（DOM 入口路径）与 0.1.5-rc.1（官方槽位路径）均可加载使用。
+
+### 侧栏入口的两条路径
+
+1. **官方槽位路径（DSH 0.1.5-rc.1+，首选）**：侧栏面板行注册到 `sidebar.panellist`、
+   面板内容注册到 `main`（`key` 与入口 `id` 同为 `personal-workbench`）。
+   行按钮、Tooltip、`aria-label`/`aria-current`、行高与折叠态圆形**全部由宿主渲染**；
+   面板互斥由宿主的 `activePanelId`（单值状态）保证，本插件不参与。
+2. **DOM 降级路径（旧宿主）**：往侧栏 DOM 注入入口行 + 覆盖式面板，依赖 `data-pane` /
+   `logoRow` / `centerCol` 等 class，并遵守社区「sidebar-entry 家族约定」
+   （`data-dsh-<pkg>-entry` / `data-dsh-plugin` / `data-dsh-part="sidebar-entry"` +
+    `dsh-panel-activate` 广播 + `data-dsh-<pkg>-active` 互斥）。
+   契约细节与回归断言见 `src/client/entryContract.ts` 与 `test/entryContract.test.mjs`。
+
+   **DSH 升级到新的大版本时，请重新验证降级路径的这些选择器；官方槽位路径不受影响。**
+
+判定走哪条路径的是纯函数 `officialSlotDecision()`
+（`slots` 服务 + `layout.selectPanel` + `sidebar.panellist` 槽位三者齐备才走官方路径），
+任一缺失即整体回落 DOM 腿 —— 宁可降级，也不能出现"面板再也打不开"。
+
+### 硬规则：可选服务一律软探测
+
+**任何 DSH 服务，只要不是所有受支持版本都有，就必须 `ctx.get('x')` 软探测，绝不放进
+`inject`、也绝不直接 `ctx.x`。** cordis 的 `inject` 语义是"缺一个就整个插件 pending"，
+把它当成"可选依赖"用会让插件在旧宿主上整体加载失败（前端表现为 `Failed to load plugins`）。
+
+这条规则来自三次真实事故：v1.10.1 的 `uiWorkspace`、v1.13.0 的 `runtime.slots`、
+v1.13.3 的再次根治；v1.13.1 的标题栏入口则是因为直接读 `ctx.slots` 而崩。
+本版本新增的 `slots` / `layout` / `teamMemory` 全部按此规则处理。
+
+### 其它
+
+- 入口分两条：**会话标题栏按钮**走 DSH 官方槽位 `conversation.session.header.actions`（稳定）。
+- 与 `dsh-web-ui`（task-board / ssh / mnemon）共存时使用其 `data-dsh-*` 互斥协议（**仅 DOM 降级路径需要**）；未安装时自动失效，**不依赖 dsh-web-ui**。
+- 互斥判定按**属性名格式**识别（`data-dsh-*-active`），不是硬编码兄弟包名清单 ——
+  家族新增成员不需要改本插件。
 - 微信提醒依赖 `@xmanrui/dsh-im`：**软探测**（`ctx.get('dshIm')`），未安装或未配置投递目标时静默降级为页内提醒 + 桌面通知，不影响其它功能。
 - 技能目录依赖宿主 `skills` 注册表：未安装时 Skill 选择器自动隐藏。
+- 团队记忆沉淀（复盘 → 团队记忆库）复用 `dsh-team-memory` 的本地 Markdown + 上传队列格式：
+  **不需要它提供任何服务**；它没装时记忆仍会落到 `~/.dsh/memory/notes/` 等它将来补传。
+  `scope` 默认 `private`（复盘可能含客户信息），可在复盘确认弹窗改成 `team`。
 - 仅支持单用户本地使用；无云同步、无多用户权限体系。
 - AI 能力依赖你在 DSH 中已配置的模型与凭证；执行/咨询等会真实消耗 token。
 
@@ -146,6 +193,10 @@ dsh plugin --profile web add link:/path/to/dsh-personal-workbench
 
 | 版本 | 要点 |
 |---|---|
+| **1.14.10** | 修复**在官方 `main` 槽位里自建独立 React root** 引发的连串问题（弹框反复重挂 → 背景一顿一顿变黑、按钮要点两次、`inactive context` 报错、同一构建下部分 App 窗口整片黑）：官方槽位里改为**直接返回 `WorkbenchApp`**、生命周期交给宿主 reconciler（与宿主自带弹框一致）；面板容器改 `position:absolute; inset:0`，不再依赖宿主高度链；新增**可见性自查**（激活时容器持续 0 尺寸就自动切覆盖层）。顺带移除上一版引入的"自愈复核"（它会在注册其实成功时撤销注册，导致侧栏出现两行入口）与 generator 形式的 `slots.inject`（本宿主的 cordis 不支持，注册不生效） |
+| **1.14.1** | 修复 1.14.0 本机验收发现的 4 个问题：① 点「工作台」导致会话区**整片空白且回不去**（`entriesOfSlot` 脱绑调用被误判成"宿主不支持" + `selectPanel` 抛错时 `open` 已被置真）—— 改为**自愈判定**：注册表与 DOM 两侧都有证据才走官方槽位，4 秒复核窗口内不成立就撤销注册并回退 DOM 腿，且入口与覆盖层始终就绪，绝不留空白；② 草稿弹框背景变黑/闪烁、点「暂存」要连点 5-8 次（`WorkbenchApp` 被挂了两份互相打架）—— 两种容器严格二选一；③ 快速录入提示文字被输入框遮挡（`.wb-hint` 只有设置页作用域样式）；④ 顶层 `type_code` 非法值被**静默改写成 personal** 而非拒绝（与工具描述、子任务校验口径不一致）—— 改为封闭枚举严格校验 + 回执回显最终落库字段 |
+| **1.14.0** | **侧栏入口与中央面板改用 DSH 官方槽位**（`sidebar.panellist` + `main`，互斥交给宿主 `activePanelId`；旧宿主保留 DOM 降级腿）；**任务支持改父任务**（含防环校验 + 变更留痕 + 表单选择项 + AI 工具，取代直接改库）；**复盘记录自动写入团队记忆库**（按教训拆条、幂等、默认 private、不可达时降级）；**快速录入/澄清支持指定工作区**（默认值与旧隐式行为逐字一致，路径不可用会明确报错而非静默换目录）；**所有草稿类型都可暂存**（白名单改为默认全开）且**草稿弹框信息量补齐**（任务草稿展示描述/截止/预估/工作区/AI 策略/子任务 + 回到会话）；**子任务 code 非法不再静默丢弃**（回传 problems 并在界面标黄，工具描述带封闭枚举）；数据库 schema 过新时**降级空转而不是拖死 DSH 启动** |
+| 1.13.4 | 修复：`uiWorkspace` 不再作为硬依赖（旧宿主上不再 `Failed to load plugins`）；数据库 schema 过新时降级而不是拒绝启动 |
 | 1.13.1 | 修复会话标题栏入口导致前端加载失败（cordis 服务读取必须用 `ctx.get`）；新增点子「文件夹」（手动建/改名/删除/合并、多对多归入与移出、整体转任务树）；新增「今日容量」条与每天可投入时长设置；UI 视觉层统一（边框/阴影/字号/间距，浅色下保持模块可辨识）；用户入口改用官方槽位 |
 | 1.12.1 | 微信草稿通知正文精简（任务标题 + 摘要首行 + 一行操作）；修复 reminder 测试在 Windows 下未关库导致临时目录删除失败 |
 | 1.12.0 | 验收「暂存」（草稿保持待确认但不再自动弹窗，可唤回）；驳回/暂存留痕并回传提交历史给 AI；草稿通知接入微信（默认只开验收与复盘） |
@@ -173,6 +224,7 @@ dsh plugin --profile web add link:/path/to/dsh-personal-workbench
 - [x] V2：验收暂存 / 驳回反馈闭环 / 草稿通知（1.12.0）
 - [x] V2：UI 视觉层重构 + 点子文件夹 + 官方槽位入口（1.13.x）
 - [x] V2：提醒状态语义修复（窗口/终态分离 + 重新武装）（1.13.2）
+- [x] V2：侧栏入口迁移到官方槽位 + 改父任务 + 复盘写入团队记忆 + 草稿暂存推广（1.14.0）
 - [ ] 待规划：客户端 `WorkbenchApp` 拆分（施工图见 `docs/design/2026-09-09-client-split-backlog.md`）
 - [ ] V2：定时自动化
 - [ ] 未来：多端同步、任务拖拽排序、数据导入导出
@@ -218,8 +270,15 @@ Then restart `dsh web` and hard-refresh the browser.
 
 ## Compatibility
 
-- Built and tested against **DeepSeek Harness 0.1.5-rc.1 Web**.
-- Does **not** depend on `dsh-web-ui`; optional coexistence protocol only.
+- Built and tested against **DeepSeek Harness 0.1.5-rc.1 Web**; also loadable on 0.1.1-rc.1
+  (the sidebar entry then falls back to the DOM-contract path).
+- Official slots are used when available: `sidebar.panellist` + `main` for the sidebar panel,
+  `conversation.session.header.actions` for the header button. Panel mutual exclusion is owned by
+  the host's single-value `activePanelId`, so this plugin no longer races sibling plugins for it.
+- **Hard rule:** every optional DSH service is soft-probed with `ctx.get(name)` and never listed in
+  `inject`. Putting a version-specific service into `inject` makes the whole plugin go `pending`
+  (`Failed to load plugins`) on older hosts — this happened three times before it became a rule.
+- Does **not** depend on `dsh-web-ui`; optional coexistence protocol only (DOM fallback path).
 - Node.js `^22.19.0 || >=24.0.0`, pnpm `>=11.7.0 <12`.
 
 ## Roadmap
@@ -229,6 +288,7 @@ Then restart `dsh web` and hard-refresh the browser.
 - [x] V2: Today plan panel long-list optimization (sticky stats / fixed-height inner scroll / expand-collapse / inline complete & defer) (1.4.0)
 - [x] V2: Custom prompt input before AI sessions (except quick intake; append user input after the default prompt) (1.5.0)
 - [x] V2: Manual editing for today/calendar plan panel (reorder, edit notes, add/remove plan items; keep AI generate + confirm + complete/defer) (1.5.0)
+- [x] V2: Official sidebar slots, task re-parenting, review-to-team-memory, defer for every draft kind (1.14.0)
 - [ ] Future: scheduled automation, multi-device sync, drag-and-drop, import/export
 
 ## License

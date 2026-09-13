@@ -80,6 +80,11 @@ export const EVENT_LABELS: Record<string, string> = {
   knowledge_added: '新增知识',
   idea_added: '新增点子',
   idea_cluster_added: '新增点子王',
+  reparented: '调整父任务',
+  draft_deferred: '草稿暂存',
+  draft_rejected: '草稿驳回',
+  completion_deferred: '验收暂存',
+  completion_rejected: '验收驳回',
 }
 export const eventLabel = (code: string): string => EVENT_LABELS[code] ?? code
 export const EVENT_ICONS: Record<string, string> = {
@@ -104,6 +109,11 @@ export const EVENT_ICONS: Record<string, string> = {
   knowledge_added: '📚',
   idea_added: '💡',
   idea_cluster_added: '👑',
+  reparented: '🌳',
+  draft_deferred: '⏸',
+  draft_rejected: '🚫',
+  completion_deferred: '⏸',
+  completion_rejected: '🚫',
 }
 export const eventIcon = (code: string): string => EVENT_ICONS[code] ?? '•'
 export const shortId = (id: string): string => id.length > 12 ? `${id.slice(0, 8)}…` : id

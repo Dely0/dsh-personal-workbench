@@ -95,6 +95,14 @@ export function makeTaskRoutes(db: DatabaseSync): WebRoute[] {
             if ('estimatedMinutes' in body) patch.estimatedMinutes = typeof body.estimatedMinutes === 'number' ? body.estimatedMinutes : null
             if (body.archived === true || body.archived === false) patch.archived = body.archived
             if ('workspacePath' in body) patch.workspacePath = typeof body.workspacePath === 'string' ? body.workspacePath : null
+            // 改父任务：string = 挂到该父任务下；null / 空串 = 移到顶层。
+            // 存在性、归档与防环校验都在仓储层（updateTask），抛出的中文原因由下面的 catch 统一转 400。
+            if ('parentId' in body) {
+              const rawParentId = body.parentId
+              if (rawParentId === null || rawParentId === undefined) patch.parentId = null
+              else if (typeof rawParentId === 'string') patch.parentId = rawParentId.trim() === '' ? null : rawParentId
+              else return writeJson(res, 400, { error: 'parentId 必须是任务 id 字符串或 null（null 表示移到顶层）' })
+            }
             if (typeof body.extra === 'object' && body.extra !== null) patch.extra = body.extra as Record<string, unknown>
             // 新语义：任意节点直接完成时，在同一事务内级联完成未完成子节点，并向上递归聚合父节点。
             const task = updateTaskWithCompletion(db, id, patch)

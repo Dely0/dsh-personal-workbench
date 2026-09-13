@@ -39,6 +39,15 @@ export function getDictionary(db: DatabaseSync, kind: string, code: string): Dic
   return listDictionaries(db, kind).find((entry) => entry.code === code)
 }
 
+/**
+ * 某个字典的**合法（启用中）code 列表**，按 sort_order 排序。
+ * 供工具返回值附带枚举，让调用方（AI）不必靠猜 type_code 拼字符串
+ * —— 猜错正是「子任务被静默丢弃」事故的触发条件之一。
+ */
+export function listActiveDictionaryCodes(db: DatabaseSync, kind: string): string[] {
+  return listDictionaries(db, kind).filter((entry) => entry.active === 1).map((entry) => entry.code)
+}
+
 export function createDictionaryEntry(db: DatabaseSync, input: { kind: string; code: string; name: string; config?: Record<string, unknown>; sortOrder?: number; builtin?: number | boolean; active?: number | boolean }, at = nowIso()): DictionaryEntry {
   const kind = input.kind.trim()
   const code = input.code.trim()

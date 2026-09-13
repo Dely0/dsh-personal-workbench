@@ -104,6 +104,53 @@ export interface DraftView {
   updatedAt: string
 }
 
+/**
+ * 确认草稿时「本该创建、但没创建」的条目。
+ *
+ * 契约意义：确认接口**不允许**静默丢件。任何一项没建出来都必须出现在 `problems` 里，
+ * 界面负责标黄列出（2026-09-12 事故：5 个子任务里 2 个因为 type_code 非法
+ * 被静默过滤，接口却返回成功）。
+ */
+export interface DraftConfirmProblemView {
+  /** 没建出来的那条的标题。 */
+  title: string
+  /** 非法字段。 */
+  field: 'typeCode' | 'priorityCode'
+  /** 调用方实际传入的值。 */
+  code: string
+  /** 给人看的中文原因。 */
+  reason: string
+}
+
+/** 确认草稿的响应：`problems` 非空时界面必须显式告警。 */
+export interface DraftConfirmResponse {
+  ok: true
+  task?: PublicTask
+  tasks?: PublicTask[]
+  /** 实际创建/入册的节点数（父任务草稿含父任务自身）。 */
+  created?: number
+  problems?: DraftConfirmProblemView[]
+  reviewId?: string
+  /** 复盘确认时写入团队记忆的结果（v1.14.0）。 */
+  memory?: ReviewMemoryResultView
+}
+
+/** 复盘 → 团队记忆库的写入结果（v1.14.0）。 */
+export interface ReviewMemoryResultView {
+  /** 用户是否选择了写入（未选则不写，且不是错误）。 */
+  enabled: boolean
+  /** 生效的可见性。 */
+  scope: 'private' | 'team'
+  /** 真正新写入的条数（幂等：重复确认时为 0）。 */
+  written: number
+  /** 因幂等被跳过的条数。 */
+  skipped: number
+  /** 记忆库不可达等降级原因；非空表示"本地已留档、等补传"或"只落了本地"。 */
+  degradedReason?: string
+  /** 落地的本地 Markdown 文件名（便于用户核对）。 */
+  files?: string[]
+}
+
 // ---------------------------------------------------------------------------
 // 提醒
 // ---------------------------------------------------------------------------
@@ -187,6 +234,14 @@ export interface WorkbenchSettings {
   desktopNotify: boolean
   /** 每天可投入时长（分钟），用于「今日容量」对比；缺省 390（6.5 小时） */
   dailyCapacityMinutes: number
+  /**
+   * 快速录入（澄清）里「最近用过的工作区」路径，最新的在前（最多 5 条）。
+   *
+   * 为什么放在设置里而不是 localStorage：工作区路径是**任务数据的属性**
+   * （任务详情、AI 会话目录都与它一致），换台机器/换个浏览器打开工作台时
+   * 仍然应该看到同一批候选；localStorage 会随浏览器消失。
+   */
+  quickWorkspaceRecent: string[]
 }
 
 // ---------------------------------------------------------------------------

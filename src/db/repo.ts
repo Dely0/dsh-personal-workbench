@@ -7,8 +7,8 @@ import type { DatabaseSync } from 'node:sqlite'
 import { nowIso, getDraft, setDraftStatus, withDraftConfirm, parseDraft, type DraftRow, type RawDraftRow } from './repo/shared.js'
 export { nowIso, getDraft, setDraftStatus, withDraftConfirm } from './repo/shared.js'
 export type { DraftRow } from './repo/shared.js'
-import { effectiveDueAtForTask, effectiveWorkspacePathForTask, parseTask, appendEvent, collectArchivedDescendants, type RawTaskRow } from './repo/task-primitives.js'
-export { effectiveDueAtForTask, effectiveWorkspacePathForTask, parseTask, appendEvent } from './repo/task-primitives.js'
+import { effectiveDueAtForTask, effectiveWorkspacePathForTask, parseTask, appendEvent, collectArchivedDescendants, isDescendantOf, type RawTaskRow } from './repo/task-primitives.js'
+export { effectiveDueAtForTask, effectiveWorkspacePathForTask, parseTask, appendEvent, isDescendantOf } from './repo/task-primitives.js'
 export type { RawTaskRow } from './repo/task-primitives.js'
 
 
@@ -64,6 +64,8 @@ export interface TaskPatch {
   estimatedMinutes?: number | null
   archived?: boolean
   workspacePath?: string | null
+  /** 改父任务：undefined = 不变；null = 移到顶层；字符串 = 挂到该父任务下（仓储层会做存在/归档/防环校验）。 */
+  parentId?: string | null
   extra?: Record<string, unknown>
   recurrenceCode?: string | null
   recurrenceRule?: Record<string, unknown>
@@ -118,6 +120,7 @@ export interface TaskSessionLinkInput {
 import { listDictionaries, getDictionary, dictionaryUsageCount } from './repo/dictionaries.js'
 export {
   listDictionaries, getDictionary, createDictionaryEntry, updateDictionaryEntry, deleteDictionaryEntry, dictionaryUsageCount,
+  listActiveDictionaryCodes,
 } from './repo/dictionaries.js'
 
 // 任务域已抽到 repo/tasks.ts
@@ -140,9 +143,11 @@ export {
   createDraft, updateDraft, getDraftBySession, confirmTaskDraft, confirmSubtaskPlanDraft,
   getLatestPendingDraft, getPendingDraftForTask, abandonDraft, toTaskInputFromDraftItem,
   getLatestActiveDraft, listDeferredDrafts, getDeferredDraftForTask, deferDraft, resumeDraft,
-  isDeferrableDraftKind, DEFERRABLE_DRAFT_KINDS,
+  isDeferrableDraftKind, DEFERRABLE_DRAFT_KINDS, NON_DEFERRABLE_DRAFT_KINDS, validateDraftTaskItem,
 } from './repo/drafts.js'
-export type { DraftTaskItem } from './repo/drafts.js'
+export type {
+  DraftTaskItem, DraftItemProblem, ConfirmTaskDraftResult, ConfirmSubtaskPlanResult,
+} from './repo/drafts.js'
 
 
 // 任务会话关联已抽到 repo/task-sessions.ts

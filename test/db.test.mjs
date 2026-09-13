@@ -14,8 +14,96 @@ import {
   createIdea, listIdeas, createIdeaCluster, getIdeaCluster, confirmIdeaClusterDraft, confirmIdeaTaskDraft,
   getDraftBySession, listTaskSessions, linkTaskSession, localDateString,
   completeTaskCascade, repairParentCompletion, addTaskMemory, getTaskMemoryContext, listTaskMemories,
-  archiveTask, restoreTask, confirmSubtaskPlanDraft,
+  archiveTask, restoreTask, confirmSubtaskPlanDraft, validateDraftTaskItem,
+  listActiveDictionaryCodes, listTaskEvents, isDescendantOf,
 } from '../lib/db/repo.js'
+
+/**
+ * 回归：子任务 type_code 非法时**不能静默丢弃**。
+ *
+ * 真实事故：提交 1 父任务 + 5 子任务，其中两项的 type_code 用了字典外的 `ops`
+ * → 用户确认后只创建出 3 个子任务，另两项凭空消失且接口返回成功。
+ * 见 docs/issues/2026-09-12-subtask-type-code-silently-dropped.md
+ */
+test('confirmTaskDraft reports invalid subtask codes instead of silently dropping them', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-personal-workbench-drop-'))
+  try {
+    const db = openWorkbenchDb({ dbPath: join(dir, 'workbench.db') })
+    seedDictionaries(db)
+
+    const draft = createDraft(db, {
+      kindCode: 'task',
+      sessionId: 's-drop',
+      payload: {
+        title: '父任务', typeCode: 'code_impl', priorityCode: 'p1',
+        subtasks: [
+          { title: '合法子任务 A', type_code: 'code_impl', priority_code: 'p1' },
+          { title: '非法类型子任务', type_code: 'ops', priority_code: 'p1' },
+          { title: '合法子任务 B', type_code: 'personal', priority_code: 'p2' },
+          // 非法父项下面的合法子项：整棵子树都不该建，且只报父项一条
+          { title: '非法优先级子任务', type_code: 'code_impl', priority_code: 'p9', children: [{ title: '孙子任务', type_code: 'code_impl', priority_code: 'p1' }] },
+        ],
+      },
+    })
+    const result = confirmTaskDraft(db, draft.id)
+    assert.equal(result.task.title, '父任务')
+    // 创建出来的只有 2 个合法子任务（孙子任务没建，因为它的父项非法）
+    assert.equal(result.childCount, 2)
+    assert.equal(listChildren(db, result.task.id).length, 2)
+    assert.deepEqual(listChildren(db, result.task.id).map((t) => t.title).sort(), ['合法子任务 A', '合法子任务 B'])
+    // 两个问题项都要被报出来，并且带原因与非法值
+    assert.equal(result.problems.length, 2)
+    const badType = result.problems.find((p) => p.field === 'typeCode')
+    assert.equal(badType.code, 'ops')
+    assert.equal(badType.title, '非法类型子任务')
+    assert.match(badType.reason, /不在字典中/)
+    const badPriority = result.problems.find((p) => p.field === 'priorityCode')
+    assert.equal(badPriority.code, 'p9')
+    assert.match(badPriority.reason, /不在字典中/)
+    // 「非法父项」不再牵连出第三条 problem（整棵子树跳过只报一条）
+    assert.equal(result.problems.some((p) => p.title === '孙子任务'), false)
+
+    // subtask_plan 路径同样不再静默丢件
+    const parent = createTask(db, { title: 'plan parent', typeCode: 'code_impl', priorityCode: 'p1' })
+    const planDraft = createDraft(db, {
+      kindCode: 'subtask_plan',
+      sessionId: 's-drop-2',
+      payload: {
+        parentTaskId: parent.id,
+        subtasks: [{ title: '好节点', type_code: 'code_impl', priority_code: 'p1' }, { title: '坏节点', type_code: 'not_a_type', priority_code: 'p1' }],
+      },
+    })
+    const planResult = confirmSubtaskPlanDraft(db, planDraft.id)
+    assert.equal(planResult.tasks.length, 1)
+    assert.equal(planResult.tasks[0].title, '好节点')
+    assert.equal(planResult.problems.length, 1)
+    assert.equal(planResult.problems[0].code, 'not_a_type')
+
+    // 全合法时 problems 为空（正常路径零噪音）
+    const okDraft = createDraft(db, {
+      kindCode: 'task', sessionId: 's-drop-3',
+      payload: { title: '全合法', typeCode: 'code_impl', priorityCode: 'p1', subtasks: [{ title: 'x', type_code: 'code_impl', priority_code: 'p1' }] },
+    })
+    const okResult = confirmTaskDraft(db, okDraft.id)
+    assert.deepEqual(okResult.problems, [])
+    assert.equal(okResult.childCount, 1)
+
+    // 只读字典枚举：让 AI 不必靠猜 code（同一事故的根因之一）
+    const typeCodes = listActiveDictionaryCodes(db, 'type')
+    assert.ok(typeCodes.includes('code_impl'))
+    assert.ok(typeCodes.includes('personal'))
+    assert.equal(typeCodes.includes('ops'), false)
+    assert.ok(listActiveDictionaryCodes(db, 'priority').includes('p2'))
+
+    // 校验器本身：非法 code 返回问题项，合法返回 undefined
+    assert.equal(validateDraftTaskItem(db, { title: 'ok', input: { typeCode: 'code_impl', priorityCode: 'p1' } }), undefined)
+    assert.equal(validateDraftTaskItem(db, { title: 'bad', input: { typeCode: 'ops', priorityCode: 'p1' } }).field, 'typeCode')
+
+    db.close()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
 
 test('db migrations, dictionaries and task tree', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-personal-workbench-db-'))
@@ -30,10 +118,10 @@ test('db migrations, dictionaries and task tree', () => {
     updateTask(db, child.id, { statusCode: 'done' })
     assert.equal(getTask(db, child.id).statusCode, 'done')
     const draft = createDraft(db, { kindCode: 'task', sessionId: 's1', payload: { title: 'from draft', typeCode: 'solution_design', priorityCode: 'p2' } })
-    const task = confirmTaskDraft(db, draft.id)
+    const task = confirmTaskDraft(db, draft.id).task
     assert.equal(task.title, 'from draft')
     const draftWithReminder = createDraft(db, { kindCode: 'task', sessionId: 's1b', payload: { title: 'with reminder', typeCode: 'code_impl', priorityCode: 'p1', dueAt: '2026-08-20T10:00:00+08:00', reminderOffsetMinutes: 15, subtasks: [{ title: 'child from draft', type_code: 'code_impl', priority_code: 'p1' }] } })
-    const taskWithReminder = confirmTaskDraft(db, draftWithReminder.id)
+    const taskWithReminder = confirmTaskDraft(db, draftWithReminder.id).task
     assert.equal(listReminders(db, taskWithReminder.id).length, 1)
     assert.equal(listReminders(db, taskWithReminder.id)[0].offsetMinutes, 15)
     assert.equal(listChildren(db, taskWithReminder.id).length, 1)
@@ -262,7 +350,7 @@ test('subtask_plan confirm is idempotent and preserves estimated_minutes', () =>
       ],
     }
     const draft = createDraft(db, { kindCode: 'subtask_plan', sessionId: 's-breakdown', payload })
-    const created = confirmSubtaskPlanDraft(db, draft.id)
+    const created = confirmSubtaskPlanDraft(db, draft.id).tasks
     assert.equal(created.length, 3)
     assert.equal(created[0].estimatedMinutes, 195)
     assert.equal(created[1].estimatedMinutes, 90)
@@ -271,7 +359,7 @@ test('subtask_plan confirm is idempotent and preserves estimated_minutes', () =>
 
     // 重复确认同一份（或同标题）提案：复用既有节点，不再重复建树
     const draft2 = createDraft(db, { kindCode: 'subtask_plan', sessionId: 's-breakdown-2', payload })
-    const again = confirmSubtaskPlanDraft(db, draft2.id)
+    const again = confirmSubtaskPlanDraft(db, draft2.id).tasks
     assert.equal(again.length, 3)
     assert.deepEqual(again.map((t) => t.id), created.map((t) => t.id))
     assert.equal(listChildren(db, parent.id).length, 2)
@@ -282,7 +370,7 @@ test('subtask_plan confirm is idempotent and preserves estimated_minutes', () =>
     updateTask(db, created[2].id, { title: 'scheduler' })
     const renamed = createTask(db, { title: 'renamed by user', typeCode: 'code_impl', priorityCode: 'p1', parentId: parent.id })
     const draft3 = createDraft(db, { kindCode: 'subtask_plan', sessionId: 's-breakdown-3', payload: { parentTaskId: parent.id, subtasks: [{ title: 'renamed by user', type_code: 'code_impl', priority_code: 'p1', estimated_minutes: 999 }] } })
-    const reused = confirmSubtaskPlanDraft(db, draft3.id)
+    const reused = confirmSubtaskPlanDraft(db, draft3.id).tasks
     assert.equal(reused[0].id, renamed.id)
     assert.equal(getTask(db, renamed.id).estimatedMinutes, null)
 
@@ -400,6 +488,111 @@ test('effective workspace path dynamically inherits nearest ancestor workspace',
 
     db.close()
   } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+/**
+ * 改父任务（re-parent）：这条路径以前不存在，只能直接改库（scripts/reparent-tasks.mjs），
+ * 既绕过事件日志也绕过任何校验。这里覆盖：真的写库、能移到顶层、四种非法移动被拒、
+ * 审计事件、以及移动后有效截止/工作区跟随新父任务。
+ */
+test('改父任务：写库 / 移到顶层 / 防环守卫 / 审计事件 / 继承跟随新父任务', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-personal-workbench-reparent-'))
+  let db
+  try {
+    db = openWorkbenchDb({ dbPath: join(dir, 'workbench.db') })
+    seedDictionaries(db)
+
+    const parentIdOf = (id) => db.prepare('SELECT parent_id FROM tasks WHERE id = ?').get(id).parent_id
+    const reparentEvents = (id) => listTaskEvents(db, id).filter((event) => event.event_code === 'reparented')
+
+    const oldParent = createTask(db, { title: '旧父任务', typeCode: 'code_impl', priorityCode: 'p1', dueAt: '2026-09-10T09:00:00+08:00', workspacePath: '/mnt/d/Code/OLD' })
+    const newParent = createTask(db, { title: '新父任务', typeCode: 'code_impl', priorityCode: 'p1', dueAt: '2026-09-30T18:00:00+08:00', workspacePath: '/mnt/d/Code/NEW' })
+    const moving = createTask(db, { title: '被移动的任务', typeCode: 'code_impl', priorityCode: 'p1', parentId: oldParent.id })
+    const child = createTask(db, { title: '它的子任务', typeCode: 'code_impl', priorityCode: 'p1', parentId: moving.id })
+    const grandchild = createTask(db, { title: '它的孙任务', typeCode: 'code_impl', priorityCode: 'p1', parentId: child.id })
+
+    // 移动前：有效截止/工作区都跟随旧父任务
+    assert.equal(getTask(db, moving.id).effectiveDueAt, oldParent.dueAt)
+    assert.equal(getTask(db, moving.id).effectiveWorkspacePath, '/mnt/d/Code/OLD')
+
+    // ① 移到另一个父任务下：parent_id 真的写进库了
+    const moved = updateTask(db, moving.id, { parentId: newParent.id })
+    assert.equal(moved.parentId, newParent.id)
+    assert.equal(parentIdOf(moving.id), newParent.id)
+    assert.equal(getTask(db, moving.id).parentId, newParent.id)
+    assert.deepEqual(listChildren(db, newParent.id).map((task) => task.id), [moving.id])
+    assert.equal(listChildren(db, oldParent.id).length, 0)
+
+    // ② 移动后 effectiveDueAt / effectiveWorkspacePath 跟随新父任务（子树一起跟）
+    assert.equal(moved.effectiveDueAt, newParent.dueAt)
+    assert.equal(moved.effectiveWorkspacePath, '/mnt/d/Code/NEW')
+    assert.equal(getTask(db, moving.id).effectiveDueAt, newParent.dueAt)
+    assert.equal(getTask(db, moving.id).effectiveWorkspacePath, '/mnt/d/Code/NEW')
+    assert.equal(getTask(db, grandchild.id).effectiveDueAt, newParent.dueAt)
+    assert.equal(getTask(db, grandchild.id).effectiveWorkspacePath, '/mnt/d/Code/NEW')
+
+    // ③ 审计：updated 快照 + 一条可读的 reparented 事件（「记录」页签直接显示 父任务：A → B）
+    const events = listTaskEvents(db, moving.id)
+    assert.ok(events.some((event) => event.event_code === 'updated'))
+    const first = reparentEvents(moving.id)
+    assert.equal(first.length, 1)
+    assert.equal(first[0].note, '父任务：旧父任务 → 新父任务')
+    assert.deepEqual(JSON.parse(first[0].before_json), { parentId: oldParent.id })
+    assert.deepEqual(JSON.parse(first[0].after_json), { parentId: newParent.id })
+
+    // ④ 移到顶层：null
+    const toTop = updateTask(db, moving.id, { parentId: null })
+    assert.equal(toTop.parentId, null)
+    assert.equal(parentIdOf(moving.id), null)
+    assert.equal(getTask(db, moving.id).effectiveDueAt, null)
+    assert.equal(getTask(db, moving.id).effectiveWorkspacePath, null)
+    const topEvents = reparentEvents(moving.id)
+    assert.equal(topEvents.length, 2)
+    assert.equal(topEvents.some((event) => event.note === '父任务：新父任务 → 顶层'), true)
+
+    // 同值重挂不算变更：不写多余事件
+    updateTask(db, moving.id, { parentId: null })
+    assert.equal(reparentEvents(moving.id).length, 2)
+    // 真的变了才算变更：从顶层挂回旧父任务会写第 3 条事件
+    updateTask(db, moving.id, { parentId: oldParent.id, title: '改名' })
+    assert.equal(parentIdOf(moving.id), oldParent.id)
+    assert.equal(reparentEvents(moving.id).length, 3)
+    assert.equal(reparentEvents(moving.id).some((event) => event.note === '父任务：顶层 → 旧父任务'), true)
+    // 不带 parentId 的普通更新（undefined = 不改变父任务）不动 parent_id，也不写事件
+    updateTask(db, moving.id, { title: '再改名' })
+    assert.equal(parentIdOf(moving.id), oldParent.id)
+    assert.equal(reparentEvents(moving.id).length, 3)
+
+    // ⑤ 四条拒绝路径：自己 / 直接子任务 / 深层后代 / 不存在的父任务（外加已归档父任务）
+    assert.throws(() => updateTask(db, moving.id, { parentId: moving.id }), /不能把任务挂到自己身上/)
+    assert.throws(() => updateTask(db, moving.id, { parentId: child.id }), /不能把任务挂到它自己的子任务下（会形成环）/)
+    assert.throws(() => updateTask(db, moving.id, { parentId: grandchild.id }), /不能把任务挂到它自己的子任务下（会形成环）/)
+    assert.throws(() => updateTask(db, moving.id, { parentId: 'no-such-parent-id' }), /父任务不存在/)
+    archiveTask(db, newParent.id)
+    assert.throws(() => updateTask(db, moving.id, { parentId: newParent.id }), /已归档/)
+    restoreTask(db, newParent.id)
+    // 被拒后库里没有任何变化，也没有多留下 reparented 事件
+    assert.equal(parentIdOf(moving.id), oldParent.id)
+    assert.equal(reparentEvents(moving.id).length, 3)
+
+    // ⑥ 共享守卫 isDescendantOf：含自身、跨树为假
+    assert.equal(isDescendantOf(db, moving.id, moving.id), true)
+    assert.equal(isDescendantOf(db, grandchild.id, moving.id), true)
+    assert.equal(isDescendantOf(db, moving.id, grandchild.id), false)
+    assert.equal(isDescendantOf(db, oldParent.id, newParent.id), false)
+    assert.equal(isDescendantOf(db, 'no-such-task', oldParent.id), false)
+
+    // ⑦ 库里已经存在环（脏数据）时，守卫必须能返回而不是死循环
+    db.prepare('UPDATE tasks SET parent_id = ? WHERE id = ?').run(grandchild.id, oldParent.id)
+    assert.equal(isDescendantOf(db, moving.id, grandchild.id), true)
+    assert.equal(isDescendantOf(db, moving.id, 'no-such-task'), false)
+    assert.throws(() => updateTask(db, moving.id, { parentId: child.id }), /会形成环/)
+    db.prepare('UPDATE tasks SET parent_id = NULL WHERE id = ?').run(oldParent.id)
+  } finally {
+    // 断言失败时也要先关库：Windows 下句柄没释放会让 rmSync 抛 EPERM，把真正的失败原因盖掉。
+    try { db?.close() } catch { /* 已经关过就算了 */ }
     rmSync(dir, { recursive: true, force: true })
   }
 })

@@ -3,7 +3,7 @@
  *
  * 覆盖三条底线：
  * 1. 暂存后草稿仍是 pending（可确认/可驳回），但不再自动弹窗；
- * 2. 只有验收类草稿可暂存；
+ * 2. 所有草稿类型都可暂存（白名单已推广为默认全开，见 NON_DEFERRABLE_DRAFT_KINDS）；
  * 3. 草稿通知只推一次、按类型开关、受静默/节流约束、通道未就绪不标记已通知。
  */
 import { test } from 'node:test'
@@ -14,8 +14,9 @@ import { join } from 'node:path'
 import { openWorkbenchDb } from '../lib/db/database.js'
 import { seedDictionaries } from '../lib/db/seed.js'
 import {
-  createDraft, createTask, deferDraft, getDeferredDraftForTask, getLatestActiveDraft, getLatestPendingDraft,
-  isDeferrableDraftKind, listDeferredDrafts, resumeDraft, updateDraft,
+  abandonDraft, createDraft, createTask, DEFERRABLE_DRAFT_KINDS, deferDraft, getDeferredDraftForTask,
+  getLatestActiveDraft, getLatestPendingDraft, isDeferrableDraftKind, listDeferredDrafts,
+  NON_DEFERRABLE_DRAFT_KINDS, resumeDraft, updateDraft,
 } from '../lib/db/repo.js'
 import { DEFAULT_REMINDER_POLICY, normalizeReminderPolicy } from '../lib/reminder/config.js'
 import {
@@ -86,13 +87,40 @@ test('暂存：completion 草稿仍是 pending，只是带上 deferredAt 与计�
   })
 })
 
-test('暂存：只有验收类草稿可暂存', async () => {
+test('暂存：**所有**草稿类型都可暂存（白名单已改为默认全开 + 黑名单）', async () => {
   await withDb(async (db) => {
-    assert.equal(isDeferrableDraftKind('completion'), true)
-    assert.equal(isDeferrableDraftKind('review'), true)
-    assert.equal(isDeferrableDraftKind('report'), false)
-    const draft = createDraft(db, { kindCode: 'report', payload: { periodCode: 'day' } })
-    assert.equal(deferDraft(db, draft.id, AT), undefined)
+    // v1.12.0 只放开了验收类；推广后 9 种类型全部可暂存。
+    const kinds = ['completion', 'review', 'task', 'subtask_plan', 'daily_plan', 'report', 'knowledge', 'idea_cluster', 'idea_tasks']
+    for (const kind of kinds) {
+      assert.equal(isDeferrableDraftKind(kind), true, `${kind} 应可暂存`)
+    }
+    assert.deepEqual(DEFERRABLE_DRAFT_KINDS, [], '白名单已废止（改为默认全开的黑名单语义）')
+    assert.deepEqual(NON_DEFERRABLE_DRAFT_KINDS, [], '当前黑名单为空')
+
+    // 非验收类草稿真的能暂存（旧实现在这里返回 undefined）
+    const task = createTask(db, { title: 't', typeCode: 'code_impl', priorityCode: 'p1' })
+    const report = createDraft(db, { kindCode: 'report', payload: { periodCode: 'day' } })
+    const deferredReport = deferDraft(db, report.id, AT)
+    assert.equal(deferredReport.statusCode, 'pending')
+    assert.equal(deferredReport.deferredAt, AT)
+    assert.equal(deferredReport.deferCount, 1)
+
+    const knowledge = createDraft(db, { kindCode: 'knowledge', payload: { title: 'k' } })
+    assert.equal(deferDraft(db, knowledge.id, AT).deferredAt, AT)
+
+    // 非 pending 的草稿仍不可暂存
+    const abandoned = createDraft(db, { kindCode: 'report', payload: { periodCode: 'day' } })
+    abandonDraft(db, abandoned.id, AT)
+    assert.equal(deferDraft(db, abandoned.id, AT), undefined)
+
+    // defer → resume 往返：唤回后重新进入自动弹窗队列，历史次数保留
+    const plan = createDraft(db, { kindCode: 'subtask_plan', payload: { parentTaskId: task.id, subtasks: [] } })
+    deferDraft(db, plan.id, AT)
+    assert.equal(listDeferredDrafts(db).some((d) => d.id === plan.id), true)
+    const resumed = resumeDraft(db, plan.id, AT)
+    assert.equal(resumed.deferredAt, null)
+    assert.equal(resumed.deferCount, 1, '唤回不清零历史次数')
+    assert.equal(listDeferredDrafts(db).some((d) => d.id === plan.id), false)
   })
 })
 

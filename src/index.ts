@@ -6,24 +6,40 @@ import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-tools'
+import type { DatabaseSync } from 'node:sqlite'
 import { makeDictionaryRoute } from './api/dictionaryRoute.js'
 import { makeLocalDirRoute } from './api/localDirRoute.js'
 import { makeOpenFileRoute } from './api/openFileRoute.js'
 import { makeRoutes } from './api/routes.js'
 import { makeSkillRoutes } from './api/routes/skills.js'
 import { probeSkills } from './api/skills.js'
-import { openWorkbenchDb, type WorkbenchDbConfig } from './db/database.js'
+import { openWorkbenchDb, SchemaTooNewError, type WorkbenchDbConfig } from './db/database.js'
 import { seedDictionaries } from './db/seed.js'
 import { countFiredRemindersSince, countQueue, enqueueReminder, listDueRemindersInWindow, listQueue, markQueueAttempt, readMeta, removeQueueEntry, skipStaleReminders } from './db/repo.js'
 import { probeDshIm, WechatChannelAdapter } from './reminder/adapter.js'
 import { readReminderPolicy, writeReminderPolicy } from './reminder/config.js'
 import { ReminderScheduler } from './reminder/scheduler.js'
 import { readWeixinInboundCount } from './reminder/weixin-status.js'
+import type { TeamMemoryService } from './review-memory.js'
 import { proposeDailyPlanTool, proposeIdeaClustersTool, proposeSubtasksTool, requestCompletionTool, saveTaskMemoryTool, submitIdeaTasksTool, submitKnowledgeTool, submitReportTool, submitReviewTool, submitTaskTool, updateTaskTool } from './tools.js'
 
 export const name = 'personal-workbench'
 
 export const inject = ['webServer', 'systemPrompt', 'tools']
+
+/**
+ * 软探测一个可选服务。
+ *
+ * **可选服务一律 `ctx.get()` 软探测，绝不放进 `inject`、绝不直接 `ctx.x`** ——
+ * 这条规则是被真实事故逼出来的：cordis 的 inject 语义是"缺一个就整个插件 pending"，
+ * 把 0.1.5 才有的服务写进去，旧宿主上直接 `Failed to load plugins`
+ * （已复发 3 次：v1.10.1 的 uiWorkspace、v1.13.0 的 runtime.slots、v1.13.3 根治）。
+ */
+function probeService<T>(ctx: unknown, name: string): T | undefined {
+  const getter = (ctx as { get?: (key: string) => unknown } | undefined)?.get
+  if (typeof getter !== 'function') return undefined
+  try { return getter.call(ctx, name) as T | undefined } catch { return undefined }
+}
 
 const WORKBENCH_GUIDANCE = [
   '本机已安装 dsh-personal-workbench 插件（个人工作台）：侧边栏「工作台」入口；',
@@ -47,9 +63,54 @@ export interface Config extends WorkbenchDbConfig {
 }
 
 export function apply(ctx: Context, config: Config = {}): void {
-  const db = openWorkbenchDb(config)
-  seedDictionaries(db)
+  let db: DatabaseSync
+  try {
+    db = openWorkbenchDb(config)
+    seedDictionaries(db)
+  } catch (error) {
+    applyDegraded(ctx, error, config)
+    return
+  }
+  applyReady(ctx, db, config)
+}
 
+/**
+ * 数据库打不开时的降级路径：**保证 DSH 仍然能起来**。
+ *
+ * 为什么必须有这条路：`apply` 抛错会让 cordis 把整个 patch 行事务组回滚，
+ * 宿主直接拒绝启动、GUI 都进不去（2026-09-12 的真实事故：工作台被 pnpm 回退到
+ * 1.12.1，读不了已迁到 schema 15 的库，整个 DSH 起不来）。
+ * 数据库比插件新属于运维常态，不该等于宿主不可用。
+ *
+ * 降级语义：不注册任何路由/工具/提醒调度（数据不可信，宁可什么都不做），
+ * 但**照常注册 systemPrompt 告警**——这样 AI 会话里能直接看到"工作台已停用 + 怎么修"，
+ * 用户不必去翻日志。
+ */
+function applyDegraded(ctx: Context, error: unknown, config: Config): void {
+  const detail = error instanceof SchemaTooNewError
+    ? `数据库 schema 版本 ${error.dbVersion} 比当前插件支持的 ${error.supportedVersion} 新`
+    : `无法打开数据库：${String(error)}`
+  const notice = `[dsh-personal-workbench] 已降级为空转：${detail}。`
+    + '插件本体已加载但未注册路由/工具/提醒，工作台功能不可用。'
+    + '修复：把 @dely0/dsh-personal-workbench 升级到与数据库 schema 匹配的版本'
+    + '（如 `dsh plugin --profile web add @dely0/dsh-personal-workbench@latest`），然后重启 dsh web。'
+    + '请勿降级数据库 schema——那会丢数据语义。'
+  ctx.logger?.error?.(notice)
+  // 控制台兜底：logger 未必被宿主接管，而这条信息决定用户能不能自救。
+  console.error(notice)
+  if ((config.announceToAgent ?? true) === false) return
+  ctx.effect(() => ctx.systemPrompt.section({
+    name: 'plugin:workbench',
+    order: SECTION_ORDER,
+    text: `本机 dsh-personal-workbench 插件当前处于**降级空转**状态，工作台功能全部不可用。`
+      + `原因：${detail}。`
+      + '请告知用户：升级该插件到与数据库 schema 匹配的版本后重启 dsh web 即可恢复；'
+      + '不要试图降级数据库，也不要调用任何 workbench_* 工具（它们未注册）。',
+  }), 'dsh-personal-workbench: degraded-prompt')
+}
+
+/** 数据库正常可用时的完整装配（原 apply 主体）。 */
+function applyReady(ctx: Context, db: DatabaseSync, config: Config): void {
   // 微信提醒通道适配层：ctx.get('dshIm') 软探测，未安装时静默降级。
   const adapter = new WechatChannelAdapter({
     db,
@@ -77,6 +138,12 @@ export function apply(ctx: Context, config: Config = {}): void {
   })
 
   const routes = makeRoutes(db, {
+    /**
+     * 团队记忆服务：**软探测**（`dsh-team-memory` 目前只注册 AI 工具、没有 provide 服务，
+     * 所以这里通常拿不到 → 走"本地 Markdown + 队列补传"的等价通道）。
+     * 绝不能把可选依赖写进 inject：那会让没装它的机器上整个插件 pending。
+     */
+    teamMemory: probeService<TeamMemoryService>(ctx, 'teamMemory') ?? probeService<TeamMemoryService>(ctx, 'dshTeamMemory'),
     channel: {
       status: () => adapter.status(),
       listOptions: () => adapter.listOptions(),
