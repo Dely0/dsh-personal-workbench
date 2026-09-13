@@ -29,13 +29,20 @@ Turn your DSH into a **calendar + task list + AI assistant workbench**.
 
 ## 截图
 
-| 主界面 | 日历 | 任务列表 |
-|---|---|---|
-| ![主界面](screenshot/%E4%B8%BB%E7%95%8C%E9%9D%A2.PNG) | ![日历](screenshot/%E6%97%A5%E5%8E%86%E9%A1%B5%E9%9D%A2.png) | ![任务列表](screenshot/%E4%BB%BB%E5%8A%A1%E5%88%97%E8%A1%A8%E7%95%8C%E9%9D%A2.png) |
+> 以下截图来自 **v1.14.58 + DSH 0.1.5-rc.1**（2026-09-13 实机拍摄）。
+> 面板走**官方槽位**路径：侧栏入口由宿主渲染，面板从侧栏右侧铺开、不覆盖左侧导航。
 
-| 知识库 | 点子 | 点子王 |
+| 今日（任务 + 今日容量） | 今日排序 | 任务列表 |
 |---|---|---|
-| ![知识库](screenshot/%E7%9F%A5%E8%AF%86%E5%BA%93%E7%95%8C%E9%9D%A2.png) | ![点子](screenshot/%E7%82%B9%E5%AD%90%E7%95%8C%E9%9D%A2.png) | ![点子王](screenshot/%E7%82%B9%E5%AD%90%E7%8E%8B.png) |
+| ![今日任务](screenshot/%E4%BB%8A%E6%97%A5%E4%BB%BB%E5%8A%A1.PNG) | ![今日排序](screenshot/%E4%BB%8A%E6%97%A5%E6%8E%92%E5%BA%8F.png) | ![任务列表](screenshot/%E4%BB%BB%E5%8A%A1%E5%88%97%E8%A1%A8.png) |
+
+| 日历 | 知识库 | 点子 |
+|---|---|---|
+| ![日历](screenshot/%E6%97%A5%E5%8E%86%E5%8A%9F%E8%83%BD.png) | ![知识库](screenshot/%E7%9F%A5%E8%AF%86%E5%BA%93.png) | ![点子](screenshot/%E7%82%B9%E5%AD%90%E5%8A%9F%E8%83%BD.png) |
+
+| 快速录入 | 微信接入 |
+|---|---|
+| ![快速录入](screenshot/%E5%BF%AB%E9%80%9F%E5%BD%95%E5%85%A5.png) | ![微信接入](screenshot/%E5%BE%AE%E4%BF%A1%E6%8E%A5%E5%85%A5.png) |
 
 ## 功能清单
 
