@@ -12,9 +12,7 @@
  * 结构：令牌层 → 宿主注入钩子 → 布局 → 组件 → 弹窗/toast → 响应式。
  */
 import { ACTIVE_ATTR, OFFICIAL_ATTR, PENDING_ATTR, VIEW_ATTR } from './constants.js'
-import {
-  BLOCKED_ATTR, ENTRY_ATTR, ENTRY_CLASS, entryCss, panelContainerCss, toWorkbenchTokens, tokenLayerCss,
-} from './entryContract.js'
+import { panelContainerCss, toWorkbenchTokens, tokenLayerCss } from './entryContract.js'
 
 const RAW_CSS = `[data-pane='conversation'], [class*='centerCol'] { position: relative; }
 [${VIEW_ATTR}] {
@@ -23,16 +21,14 @@ const RAW_CSS = `[data-pane='conversation'], [class*='centerCol'] { position: re
   font-family: var(--dsw-font-family, system-ui); overflow: hidden;
 }
 /* ---------------------------------------------------------------------------
-   两种面板容器的可见性（v1.14.0；2026-09-12「点工作台→整片空白」事故的直接修复）
+   面板容器的可见性（v1.14.0；2026-09-12「点工作台→整片空白」事故的直接修复）
    ---------------------------------------------------------------------------
    规则本体在 entryContract.ts 的 panelContainerCss()：那里可被单测锁住，
    而本文件的 CSS 只进浏览器 bundle、测不到。这里只负责拼接。
-   容器有两个：官方 main 槽位里的（迁移后的正路）与覆盖层（降级腿 + 兜底），
-   必须严格二选一 —— 两份都渲染会让两个 WorkbenchApp 互相打架（弹框重复、
-   按钮点不动、背景闪烁）；该显示的那份没渲染但门控已生效则是整片空白。
+   v1.14.53：DOM 降级腿已删除，容器只剩官方 shell.overlay 一个 ——
+   "两份容器二选一"那套门控（含 BLOCKED_ATTR）随之消失。
    --------------------------------------------------------------------------- */
-${panelContainerCss({ view: VIEW_ATTR, official: OFFICIAL_ATTR, active: ACTIVE_ATTR, blocked: BLOCKED_ATTR }).join('\n')}
-${entryCss()}
+${panelContainerCss({ view: VIEW_ATTR, official: OFFICIAL_ATTR, active: ACTIVE_ATTR }).join('\n')}
 /* 面板容器（挂在**始终存在**的 shell.overlay 里）：由自己的 data-open 决定显隐。
    为什么不用宿主给的高度链：宿主 main 容器外面套了一层 display:contents 中转节点，
    它可能在组件挂载之后才定高，依赖 height 会偶发 0 高度（面板"挂上了却看不见"）。
@@ -63,7 +59,9 @@ ${entryCss()}
 .wb-panel-host > .wb-app-scope:empty { pointer-events: none; }
 .wb-panel-host > [${VIEW_ATTR}] { position: static; inset: auto; z-index: auto; height: 100%; }
 .wb-panel-fill { height: 100%; min-height: 0; }
-html[${PENDING_ATTR}] [${ENTRY_ATTR}]::after { content:''; position:absolute; top:6px; right:10px; width:7px; height:7px; border-radius:50%; background:#e74c3c; }
+/* v1.14.53 删掉了「自建入口行上的红点」规则（html[pending] [entry]::after）：
+   DOM 降级腿删除后没有自建入口行了，待确认计数改由工作台内的「待处理」胶囊显示
+   （见 index.tsx 的 wb-pending-pill）。PENDING_ATTR 仍用于草稿浮卡的定位。 */
 .wb-app { height:100%; display:flex; flex-direction:column; }
 .wb-h { flex:none; display:flex; align-items:center; gap:12px; padding:14px 18px; border-bottom:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.22)); background:var(--dsw-alias-bg-layer-1, rgba(255,255,255,.02)); }
 .wb-title { display:flex; align-items:center; gap:8px; font-size:16px; font-weight:700; letter-spacing:.02em; white-space:nowrap; }

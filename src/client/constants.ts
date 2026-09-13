@@ -7,7 +7,15 @@ export const PANEL_NAME = 'personal-workbench'
 export const ACTIVE_ATTR = 'data-dsh-personal-workbench-active'
 export const PENDING_ATTR = 'data-dsh-personal-workbench-pending'
 export const VIEW_ATTR = 'data-dsh-personal-workbench-view'
-export const ACTIVATE_EVENT = 'dsh-panel-activate'
+
+/**
+ * v1.14.53：家族事件常量 `ACTIVATE_EVENT = 'dsh-panel-activate'` 已删除。
+ *
+ * 它是社区插件之间"我开了、你让位"的土办法（`document.dispatchEvent(new CustomEvent(...))`）。
+ * 进入官方槽位机制后，面板互斥由宿主的 `activePanelId` 保证，
+ * 我们**不再广播也不再监听它** —— 设计与归因见 README 的"面板互斥与兄弟插件冲突"一节。
+ * 留着这个常量只会让人以为我们还在参与那套协议（`test/clientInvariants.test.mjs` 会拦）。
+ */
 
 /**
  * 「官方槽位路径已就绪」标记（挂在 documentElement 上，v1.14.0）。

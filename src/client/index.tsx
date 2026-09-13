@@ -21,15 +21,11 @@ import {
 } from './taskFilterSort.js'
 import { isWslStylePath, joinPath, normalizeWindowsPathToWsl } from './workspacePath.js'
 import { WORKBENCH_CSS } from './styles.js'
-import { ACTIVATE_EVENT, ACTIVE_ATTR, OFFICIAL_ATTR, PANEL_NAME, PENDING_ATTR, REDUNDANT_ROW_ATTR, VIEW_ATTR } from './constants.js'
+import { ACTIVE_ATTR, OFFICIAL_ATTR, PANEL_NAME, PENDING_ATTR, VIEW_ATTR } from './constants.js'
 import { panelDataOpen, shouldShowPanel } from './panelState.js'
 import { checkHostCapabilities, refuseToStart, type SlotsProbe } from './capabilities.js'
 import {
-  BLOCKED_ATTR, ENTRY_ATTR, ENTRY_CLASS, ENTRY_HTML, ENTRY_PLUGIN_ATTR, ENTRY_PLUGIN_ID, ENTRY_PART_ATTR,
-  ENTRY_LABEL_TEXT, ENTRY_PART_VALUE, ENTRY_TITLE, OFFICIAL_MAIN_SLOT, OFFICIAL_OVERLAY_SLOT, OFFICIAL_PANEL_LIST_SLOT,
-  SIDEBAR_COLLAPSED_ATTR, SIDEBAR_ENTRY_SELECTOR, hostPanelRowVisible, isSiblingActiveAttribute, isSiblingPanelActive,
-  matchesCollapsedClass, officialPathConfirmed, officialSlotDecision, overlaySlotAvailable, retractSiblingPanelMarks,
-  siblingActiveFilter, siblingPanelViewMounted,
+  ENTRY_TITLE, OFFICIAL_MAIN_SLOT, OFFICIAL_OVERLAY_SLOT, OFFICIAL_PANEL_LIST_SLOT,
 } from './entryContract.js'
 import { Modal } from './components/Modal.js'
 import { SettingsModal } from './components/SettingsModal.js'
@@ -2809,19 +2805,13 @@ function ensureStyle(): void {
   style.textContent = CSS
   document.head.appendChild(style)
 }
-function sidebarRoot(): HTMLElement | undefined {
-  const column = document.querySelector<HTMLElement>('[data-pane="sidebar"], [class*="sidebarCol"]')
-  if (column === null) return undefined
-  return column.querySelector<HTMLElement>('[class*="logoRow"]')?.parentElement ?? (column.firstElementChild as HTMLElement | undefined)
-}
-function newSessionButton(root: HTMLElement): HTMLButtonElement | undefined {
-  const nested = root.querySelector<HTMLButtonElement>('button[class*="newSession"]')
-  if (nested !== null) return nested
-  return Array.from(root.children).find((child): child is HTMLButtonElement => child.tagName === 'BUTTON')
-}
-function conversationColumn(): HTMLElement | undefined {
-  return document.querySelector<HTMLElement>('[data-pane="conversation"], [class*="centerCol"]') ?? undefined
-}
+/**
+ * v1.14.53：原先这里还有 `sidebarRoot()` / `newSessionButton()` / `conversationColumn()`
+ * 三个"找宿主 DOM 挂点"的辅助函数（给 DOM 降级腿用）。DOM 腿已删除，
+ * 侧栏入口与面板容器**全部交给官方槽位**渲染，因此不再需要任何宿主 class 名选择器
+ * —— 这也正是"DSH 升级就可能失效"的那一类脆弱依赖。
+ */
+
 
 export const name = 'personal-workbench-client'
 /**
@@ -3407,34 +3397,12 @@ export function apply(ctx: unknown): () => void {
   const notifyOpenChange = (): void => { for (const listener of openListeners) { try { listener() } catch { /* 单个订阅者出错不影响其它 */ } } }
   ensureStyle()
 
-  /**
-   * 是否走官方槽位路径。
-   *
-   * **由能力探测一次性决定**（见下方 `officialDecision`），之后只可能因为
-   * `layout.selectPanel` **抛错**而降级到覆盖层。中间不再有任何"自愈复核"来回摇摆 ——
-   * 那一版曾在注册其实成功的情况下判定失败并撤销注册，导致侧栏出现两行入口
-   * （2026-09-15 真实事故，详见下方废弃说明）。
-   */
-  let officialConfirmed = false
-  /**
-   * 宿主没有 `shell.overlay` 槽位时，把面板内容挂进**自建**的常驻容器
-   * （同样不依赖键槽，避免"关面板就丢弹框"）。
-   */
-  let useSelfHostedOverlay = false
   /** 清理幂等标记：`disposePreviousInstance()` 与 cordis 都可能调用清理。 */
   let disposed = false
   const officialDisposers: Array<() => void> = []
-  /** 承载 App 的容器：**始终只有一个**（官方 main 或自建覆盖层）。 */
+  /** 承载 App 的容器：**始终只有一个**（官方 `shell.overlay` 槽位）。 */
   let activeHost: HTMLElement | undefined
-  /**
-   * 自建覆盖层（DOM 腿 + 官方路径失效时的兜底）。
-   *
-   * 这三个变量**提前声明**：`mountOverlayContent()` 在 setOpen 里就要能调用，
-   * 而它的实体在文件更下方的"DOM 降级腿"一节里创建。
-   */
-  let overlayView: HTMLDivElement | undefined
-  let overlayRoot: Root | undefined
-  let overlayMounted = false
+
 
   /**
    * 挂载官方 `main` 面板的内容（由注册给宿主的组件 ref 回调调用）。
@@ -3515,39 +3483,16 @@ export function apply(ctx: unknown): () => void {
     console.warn(`[workbench] 未取到 layout.selectPanel：${shape}`)
   }
   /**
-   * 把 `layout` 一并交给判定：**拿到 layout 却没有 `selectPanel`** = 宿主无法选中中央面板
-   * → 官方路径注定面板不显示 → 回退 DOM 腿（见 `officialSlotDecision` 的长注释）。
-   */
-  const officialDecision = officialSlotDecision(slots, layout)
-  /** 宿主的槽位能力齐备 —— 这就是"是否走官方路径"的**唯一判据**（一次性决定）。 */
-  officialConfirmed = officialDecision.useOfficial
-  /**
-   * `OFFICIAL_ATTR` 是**给 CSS 看的**：它决定"面板内容显示在官方容器里还是覆盖层里"。
-   * 删自愈逻辑时曾把它一起删掉，结果官方面板容器存在但 CSS 不放行 → 面板打开后一片空。
-   * 凡是"是否走官方路径"的状态变化，都必须同步这个属性。
-   */
-  if (officialConfirmed) {
-    document.documentElement.setAttribute(OFFICIAL_ATTR, '')
-    console.info('[workbench] 已启用官方侧栏槽位 sidebar.panellist + main')
-  } else {
-    document.documentElement.removeAttribute(OFFICIAL_ATTR)
-    console.info(`[workbench] 使用 DOM 入口（${officialDecision.reason}）`)
-  }
-
-  /**
-   * 打开面板时的家族收口：**先让兄弟插件让位，再亮自己**。
+   * `OFFICIAL_ATTR` 是**给 CSS 看的**：它决定"面板内容显示在官方容器里"。
    *
-   * 为什么官方路径也要做（v1.14.45，用户实测："taskboard 和工作台的入口的点击
-   * 没有做到互斥，两个都可以同时被选中"）：
-   * 官方路径的唯一开关是宿主 `selectPanel`，而宿主只维护自己的 `activePanelId`，
-   * 它**不认识** task-board（task-board 不走官方槽位，靠 `<html data-dsh-taskboard-active>`
-   * + 常驻视图容器）。所以"官方互斥"这件事宿主替不了我们，必须自己按家族约定做 ——
-   * 做法与 task-board 自己的 `panel-mount-core.applyActive()` 完全一致。
+   * ⚠️ 自 v1.14.52 起它**无条件**存在 —— 走不到官方路径时 `apply()` 已在能力自检处
+   * 直接返回（见 `capabilities.ts`），所以这里不再有"两条腿二选一"的状态变化。
+   * 历史坑：删自愈逻辑时曾把它一起删掉，结果官方面板容器存在但 CSS 不放行
+   * → 面板打开后一片空白。
    */
-  const takeOverFamilyPanel = (): void => {
-    const removed = retractSiblingPanelMarks(document.documentElement, isSiblingActiveAttribute, PANEL_NAME, ACTIVATE_EVENT)
-    if (removed.length > 0) console.info(`[workbench] 家族互斥：已收起兄弟插件面板标记 [${removed.join(', ')}]`)
-  }
+  document.documentElement.setAttribute(OFFICIAL_ATTR, '')
+  console.info('[workbench] 已启用官方侧栏槽位 sidebar.panellist + main')
+
   /**
    * 同步 `<html>` 上的本插件激活标记。
    *
@@ -3562,47 +3507,7 @@ export function apply(ctx: unknown): () => void {
     if (active) root.setAttribute(ACTIVE_ATTR, '')
     else root.removeAttribute(ACTIVE_ATTR)
   }
-  /**
-   * 面板显示门控：有别人的面板开着时，本插件自己的面板让位（**只在 DOM 腿上**）。
-   *
-   * 时序说明——「本插件先开、别人后开」不会触发本插件的 activate 监听（对方不广播），
-   * 也没有点击可听，只能靠属性观察；因此这里把判定结果落到 documentElement 上，
-   * 由 CSS 的 `:not([blocked])` 门控，避免样式里逐个 `:not([data-dsh-xxx-active])`
-   * 硬编码兄弟插件名（漏一个就是 issue #3 的现象 1）。
-   *
-   * ## ⚠️ 官方路径下**绝对不能**写 `BLOCKED_ATTR`（2026-09-13 实测：页面卡死）
-   *
-   * 这条 `if (officialConfirmed) return` 是原实现就有的守卫，我在 v1.14.45 的家族互斥
-   * 改造里把它去掉了（想让官方路径也让位），结果**一写这个属性页面主线程立刻被占满**：
-   * CDP 的 `Runtime.evaluate` 30 秒不返回、没有 JS 异常、没有 console 输出，
-   * 看起来像死循环但抓不到栈。
-   *
-   * 二分定位结论（`.pwtest/probe-bisect-hang2.mjs`，可复跑）：
-   *
-   * | 实验 | 结果 |
-   * |---|---|
-   * | 观察器回调改成空操作 | ✅ 存活 |
-   * | 回调里只保留"关掉自己"（去掉 `syncPanelBlocked`） | ✅ 存活 |
-   * | 回调里只保留 `syncPanelBlocked` | ❌ 卡死 |
-   * | `syncPanelBlocked` 加回 `officialConfirmed` 守卫 | ✅ 存活 |
-   *
-   * 机制：官方路径下面板的显隐由**宿主** `activePanelId` 驱动，`BLOCKED_ATTR` 又让 CSS
-   * 把同一棵子树再关一次（`html[official]:not([blocked]) …`），两套门控对同一棵子树
-   * 反复触发样式/布局重算 → 渲染主线程被占满。
-   *
-   * 语义上也说得通：**让位在官方路径下由"我们自己收起来"表达**（见 `syncSiblingMutex`，
-   * 它会走 `setOpen(false)` → 宿主的 `activePanelId` 归 null），不需要再叠一层 CSS 门控。
-   */
-  const syncPanelBlocked = (): void => {
-    const root = document.documentElement
-    if (officialConfirmed) {
-      /** 官方路径：清掉可能残留的门控标记（例如上一次 DOM 腿留下的），但绝不置上。 */
-      root.removeAttribute(BLOCKED_ATTR)
-      return
-    }
-    if (isSiblingPanelActive(root.getAttributeNames())) root.setAttribute(BLOCKED_ATTR, '')
-    else root.removeAttribute(BLOCKED_ATTR)
-  }
+
   /**
    * ⚠️ **已废弃的"自愈复核"——不要恢复它**（v1.14.7 移除，2026-09-15 实测教训）。
    *
@@ -3615,39 +3520,9 @@ export function apply(ctx: unknown): () => void {
    * 比不做自愈更糟，而且用户没法自己恢复。
    *
    * **结论：不要在不确定的检测结果上做破坏性动作。**
-   * 现在的策略是最简单、可预测的形态：
-   * 1. 能力探测（`officialSlotDecision`）决定走哪条腿，**只做一次**；
-   * 2. 走了就注册一次，**绝不基于运行时猜测去撤销注册**；
-   * 3. 只有 `layout.selectPanel` **抛异常**（宿主明确的确定失败）才临时改用覆盖层。
+   * v1.14.53 起更进一步：能力不满足就**明确不启动**（`capabilities.ts`），
+   * 所以连"降级到另一条腿"这个分支本身都不存在了。
    */
-
-  /**
-   * 把 App 挂到自建覆盖层（DOM 腿 / 兜底路径）。
-   * 只在**没有**走官方路径、且覆盖层尚未承载 App 时执行，保证全局只有一个实例。
-   */
-  const mountOverlayContent = (): void => {
-    /**
-     * 这条路径只在**没有走官方 overlay 槽位**时才用（旧宿主 / 宿主没声明该槽位）。
-     * 挂了就是常驻容器：面板显隐由 ACTIVE_ATTR 门控，同样不会因为关面板而丢弹框。
-     */
-    if (!useSelfHostedOverlay && officialConfirmed) return
-    if (overlayMounted || overlayView === undefined || overlayRoot === undefined) return
-    /**
-     * **硬保护：官方容器里已经有 App 时绝不另起一份。**
-     *
-     * 两个 App 实例同时活着会各自轮询、各自维护「待确认草稿」状态，
-     * 结果就是弹框**概率性自己消失**（谁先跑完谁说了算）+ 界面出现两套。
-     * 曾经的自动降级路径正是踩了这个坑（2026-09-15 用户实测）。
-     * 与其相信"不会再走到那条路"，不如在这里把不变量**强制**成立。
-     */
-    if (document.querySelector('.wb-panel-host .wb-app, .wb-panel-host .wb-app-scope') !== null) {
-      console.warn('[workbench] 官方容器已有内容，跳过自建容器挂载（避免双实例）')
-      return
-    }
-    overlayMounted = true
-    activeHost = overlayView
-    overlayRoot.render(<WorkbenchApp runtime={runtime} closePanel={() => setOpen(false)} />)
-  }
 
   /**
    * 面板"健康自查" —— **已彻底移除**（v1.14.21）。
@@ -3657,21 +3532,15 @@ export function apply(ctx: unknown): () => void {
    *
    * **实际代价远大于收益**（2026-09-15 用户实测）：
    * - 宿主重排期间完全可能出现**短暂的** 0 尺寸 → 被判为故障；
-   * - 一旦判定成立，`officialConfirmed` 被置假 → **自建入口行重新显示**（侧栏出现
-   *   **两个「工作台」入口**）、面板改用自建容器（**界面退化成改造前那套**）；
+   * - 一旦判定成立，面板改用自建容器（**界面退化成改造前那套**）；
    * - 而这条判定每 500ms 跑一次，用户**无法自己恢复**（刷新也会在几秒后再次触发）。
    *
    * 判据本身（读自己的几何尺寸）是确定的，但"**在不确定的时机做破坏性动作**"
-   * 这个错误和之前那版"自愈复核"是同一个：
-   * 一次误判就永久降级，而且降级后的形态更糟。
+   * 这个错误和之前那版"自愈复核"是同一个：一次误判就永久降级，而且降级后的形态更糟。
    *
-   * 现在的策略：**只保留确定的失败信号**（`layout.selectPanel` 抛异常才切覆盖层），
-   * 不再有任何"看起来不对就自动降级"的逻辑。宁可偶发一次空白（可刷新恢复），
-   * 也不要出现"两个入口 + 退回旧版界面"这种用户救不回来的状态。
+   * v1.14.53：连"切到自建容器"这条退路也随 DOM 腿一起删掉了。
+   * 能力不满足时 `apply()` 直接不启动（有可读日志），不存在运行时降级。
    */
-  const startPanelHealthCheck = (): void => {
-    // 有意留空：保留函数名以免调用点散落（见上方说明，这是被移除的能力）。
-  }
 
   const setOpen = (value: boolean): void => {
     /**
@@ -3683,67 +3552,34 @@ export function apply(ctx: unknown): () => void {
       log?.push({ at: Date.now(), value, caller: new Error().stack?.split('\n')[2]?.trim().slice(0, 90) ?? '' })
       if (log !== undefined && log.length > 50) log.shift()
     } catch { /* ignore */ }
-    if (officialConfirmed) {
-      /**
-       * 官方路径：**唯一的开关是 `layout.selectPanel`**（宿主单值状态）。
-       *
-       * **`selectPanel` 抛错是唯一的"确定失败信号"**，此时才临时切到覆盖层：
-       * 这是确定的失败（宿主明确说"这个面板没注册"），不是我们的猜测。
-       * 不做任何"撤销注册"的动作 —— 见下方 verifyOfficialPath 的废弃说明。
-       */
-    const fallbackToOverlay = (reason: string): void => {
-      console.warn('[workbench] layout.selectPanel 失败，本次改用覆盖层显示：', reason)
-      officialConfirmed = false
-      document.documentElement.removeAttribute(OFFICIAL_ATTR)
-      setOpen(value)
-    }
+    /**
+     * 官方路径：**唯一的开关是 `layout.selectPanel`**（宿主单值状态）。
+     *
+     * `selectPanel` 抛错是**确定失败信号**（宿主明确说"这个面板没注册"）。
+     * v1.14.53 起没有"换覆盖层显示"这条退路了（DOM 腿已删）：只把失败记进日志与
+     * `window.__wbDebugLog`，界面保持在宿主选中态 —— 面板打不开时是**可见的空态**，
+     * 而不是悄悄换一套容器（那会带来两套门控、双 App 实例与"再也打不开"的连环坑）。
+     */
     try {
-      /**
-       * 开之前先让兄弟插件让位（家族互斥）。
-       *
-       * 只在**开**的时候做：关的时候去摘别人的标记没有意义，还可能把
-       * "用户刚打开 task-board"这件事误伤成"两个都没开"。
-       */
-      if (value) takeOverFamilyPanel()
       selectPanel?.(value ? PANEL_NAME : null)
     } catch (error) {
-      /**
-       * 宿主明确拒绝（"main panel 未注册"）—— 这是**确定的失败信号**，
-       * 不是我们的猜测。此时临时改用覆盖层显示，并且**不再走官方路径**。
-       * 注意：这里**不撤销任何注册**，只切换"用哪个容器显示"。
-       */
-      fallbackToOverlay(String(error))
+      console.error('[workbench] layout.selectPanel 调用失败（面板可能未注册）：', String(error))
       return
     }
-      open = value
-      /**
-       * v1.14.45：官方路径下**不再**用本地 `forcedClosed` 压着显隐。
-       *
-       * 原因是它会造成一个对称的 bug：关掉面板后 `forcedClosed` 一直为真，
-       * 于是用户再点**宿主的**侧栏行（宿主把 `activePanelId` 设回我们）时，
-       * 显示条件里的 `!forcedClosed` 仍然为假 → 面板打不开（实测复现）。
-       *
-       * 现在显隐由 `WorkbenchPanelContent` 按「宿主状态优先」统一判定：
-       * `selectPanel(null)` 一成功，宿主的 `activePanelId` 就变成 null，
-       * 关这件事已经由**宿主**确认过了，不需要本地再压一层。
-       */
-      notifyOpenChange()
-      syncActiveAttribute(value)
-      return
-    }
-    // ---- DOM 腿（同时是官方路径不可用时的兜底）----
     open = value
-    forcedClosed = !value
+    /**
+     * v1.14.45：**不再**用本地 `forcedClosed` 压着显隐。
+     *
+     * 原因是它会造成一个对称的 bug：关掉面板后 `forcedClosed` 一直为真，
+     * 于是用户再点**宿主的**侧栏行（宿主把 `activePanelId` 设回我们）时，
+     * 显示条件里的 `!forcedClosed` 仍然为假 → 面板打不开（实测复现）。
+     *
+     * 现在显隐由 `WorkbenchPanelContent` 按「宿主状态优先」统一判定：
+     * `selectPanel(null)` 一成功，宿主的 `activePanelId` 就变成 null，
+     * 关这件事已经由**宿主**确认过了，不需要本地再压一层。
+     */
     notifyOpenChange()
-    if (open) {
-      takeOverFamilyPanel()
-      syncPanelBlocked()
-      syncActiveAttribute(true)
-      mountOverlayContent()
-    } else {
-      syncActiveAttribute(false)
-      document.documentElement.removeAttribute(BLOCKED_ATTR)
-    }
+    syncActiveAttribute(value)
   }
 
   // 供槽位组件使用的运行时句柄；类型上放在 runtime 的扩展位，避免污染 WorkbenchRuntime。
@@ -3833,27 +3669,20 @@ export function apply(ctx: unknown): () => void {
     return shouldShowPanel({ stateReadable: fromLayout !== undefined, hostPanelId: fromLayout ?? null, intentOpen: open })
   }
   /**
-   * 本插件的面板**当前是不是真的显示着**（家族互斥的判据）。
+   * 本插件的面板**当前是不是真的显示着**。
+   *
+   * ## 为什么历史上必须有这个函数（值得留着，别再犯）
    *
    * ⚠️ **不能用 `open` 这个本地标志**（2026-09-13 实测踩到）：
    * 用户点的是**宿主**的侧栏行，宿主直接调 `layout.selectPanel(id)` 把
    * `activePanelId` 设成我们 —— 我们自己的 `setOpen` 根本没被调用，本地 `open`
    * 依然是 `false`。此时面板是**显示着的**（`WorkbenchPanelContent` 按宿主状态渲染），
-   * 但任何 `if (open)` 的判断都会说"没开"，于是兄弟插件开起来时我们不去收起它。
+   * 但任何 `if (open)` 的判断都会说"没开"。
    *
-   * 所以判据必须与 `WorkbenchPanelContent` 的显示条件同源：宿主状态优先、本地兜底。
+   * v1.14.53：它原先的**唯一消费者**是家族互斥（兄弟插件 `*-active` 出现时让位），
+   * 那条逻辑已删除，所以函数本体也删了。判据本身没有丢 ——
+   * 面板"该不该显示"仍然只有一个答案：`shouldShowPanel()`（`panelState.ts`）。
    */
-  const isDisplayed = (): boolean => shouldShowPanel({
-    stateReadable: panelInfoHookSeen,
-    hostPanelId: hostPanelId ?? null,
-    intentOpen: !forcedClosed && open,
-  })
-  /**
-   * 互斥让位：**只关掉自己**，宿主状态随之归 null（`setOpen(false)` 会调
-   * `selectPanel(null)`）。显示条件里不再压第二道"兄弟开着就不显示"的门 ——
-   * 那样会和这条让位互相锁死（详见 `WorkbenchPanelContent` 的说明）。
-   */
-  const yieldToSiblingPanel = (): void => setOpen(false)
 
   const slotApi: WorkbenchSlotApi = {
     open: () => setOpen(true),
@@ -3917,26 +3746,21 @@ export function apply(ctx: unknown): () => void {
      * 唯一可信的信号就是那个属性：task-board 打开时写、关闭时摘
      *（`panel-mount-core.applyActive()`），官方路径与 DOM 腿都读它，语义一致。
      */
-    siblingPanelActive: () => isSiblingPanelActive(document.documentElement.getAttributeNames()),
-    takeOverFamilyPanel,
     syncActiveAttribute,
     /**
      * 宿主面板状态不可读时的安全兜底（2026-09-13 遮挡事故修复）。
      *
      * 官方满屏层（`.wb-panel-host`：`fixed; inset:0; z-index:55`）一旦承载内容
-     * 又收不起来，就会永久盖住会话区与其它插件。所以在读不到宿主状态时：
-     *   1. 官方容器里不渲染内容（见 `WorkbenchPanelContent`）；
-     *   2. 把 App 改挂到**自建常驻容器**，保证轮询 / 草稿弹框 / 待处理计数继续工作；
-     *   3. 顺手把官方路径标记撤掉，让门控样式与自建容器一致。
+     * 又收不起来，就会永久盖住会话区与其它插件。读不到宿主状态时，官方容器里**不渲染内容**
+     * （见 `WorkbenchPanelContent`）。
      *
-     * 幂等：`mountOverlayContent` 内部有 `overlayMounted` 守卫，重复调用无副作用。
+     * v1.14.53：原实现还会把 App 改挂到**自建常驻容器**；那条路随 DOM 腿一起删除了。
+     * 现在的依赖关系是：能力齐备 → 宿主状态必然可读（`usePanelInfo` 存在），
+     * 因此这条兜底在受支持宿主上不会被触发；真触发了也只剩"不渲染 + 日志"，
+     * 不会再悄悄换一套容器（那正是双 App 实例与"弹框概率性消失"的来源）。
      */
     onUnreadableHostState: () => {
-      if (useSelfHostedOverlay && overlayMounted) return
-      console.warn('[workbench] 宿主面板状态不可读：面板层不承载内容，App 改挂自建常驻容器（确保界面不被遮挡）')
-      useSelfHostedOverlay = true
-      document.documentElement.removeAttribute(OFFICIAL_ATTR)
-      mountOverlayContent()
+      console.warn('[workbench] 宿主面板状态不可读：官方面板层不承载内容（不会再切自建容器，见 v1.14.53 说明）')
     },
   }
   /**
@@ -3982,236 +3806,52 @@ export function apply(ctx: unknown): () => void {
      * "这个 id 有没有对应的 main 条目"，没有就会抛错。给个返回 null 的组件既满足校验，
      * 又不渲染任何东西（真正的内容在 overlay 里）。
      */
-    if (officialConfirmed) {
-      try {
-        const disposeList = slots.inject(OFFICIAL_PANEL_LIST_SLOT, () => slots.register(
-          { name: OFFICIAL_PANEL_LIST_SLOT, id: PANEL_NAME, order: -4, label: ENTRY_TITLE },
-          // 模块级稳定组件（理由见 WorkbenchPanelEntry）
-          WorkbenchPanelEntry as unknown as (props: Record<string, unknown>) => JSX.Element | null,
-        ))
-        if (typeof disposeList === 'function') officialDisposers.push(disposeList)
-        // main 只放空占位（让 selectPanel 校验通过）；真内容在 overlay。
-        const disposeMain = slots.inject(OFFICIAL_MAIN_SLOT, () => slots.register(
-          { name: OFFICIAL_MAIN_SLOT, id: PANEL_NAME, key: PANEL_NAME, order: -4 },
-          (() => null) as unknown as (props: Record<string, unknown>) => JSX.Element | null,
-        ))
-        if (typeof disposeMain === 'function') officialDisposers.push(disposeMain)
+    try {
+      const disposeList = slots.inject(OFFICIAL_PANEL_LIST_SLOT, () => slots.register(
+        { name: OFFICIAL_PANEL_LIST_SLOT, id: PANEL_NAME, order: -4, label: ENTRY_TITLE },
+        // 模块级稳定组件（理由见 WorkbenchPanelEntry）
+        WorkbenchPanelEntry as unknown as (props: Record<string, unknown>) => JSX.Element | null,
+      ))
+      if (typeof disposeList === 'function') officialDisposers.push(disposeList)
+      // main 只放空占位（让 selectPanel 校验通过）；真内容在 overlay。
+      const disposeMain = slots.inject(OFFICIAL_MAIN_SLOT, () => slots.register(
+        { name: OFFICIAL_MAIN_SLOT, id: PANEL_NAME, key: PANEL_NAME, order: -4 },
+        (() => null) as unknown as (props: Record<string, unknown>) => JSX.Element | null,
+      ))
+      if (typeof disposeMain === 'function') officialDisposers.push(disposeMain)
 
-        /**
-         * 面板内容：**注册到官方 `shell.overlay`**（v1.14.41 恢复官方路径）。
-         *
-         * 历史：2026-09-13 曾因
-         * `slot entry crashed in 'shell.overlay': TypeError: … reading 'subscribe'`
-         * 而放弃这个槽位、改挂自建容器。**那个崩溃的真正根因是 inject 少声明了
-         * `slots` / `layout`**（cordis 没等依赖就绪就调我们的 apply），
-         * 已由 `export const inject = [..., 'slots', 'layout']` 修掉。
-         *
-         * 现在按既定结论分层：
-         *   1. 官方槽位可用 → 入口 `sidebar.panellist` + 内容 `shell.overlay`（本分支）；
-         *   2. 官方不可用 / 宿主没有该槽位 → 退自建容器 + 自建 DOM 入口行（见下）；
-         *   `useSelfHostedOverlay` 因此改为**按需置位**，不再是"一旦注册就强制"。
-         */
-        if (overlaySlotAvailable(slots)) {
-          const disposeOverlay = slots.inject(OFFICIAL_OVERLAY_SLOT, () => slots.register(
-            { name: OFFICIAL_OVERLAY_SLOT, id: PANEL_NAME, order: -4 },
-            WorkbenchPanelContent as unknown as (props: Record<string, unknown>) => JSX.Element | null,
-          ))
-          if (typeof disposeOverlay === 'function') officialDisposers.push(disposeOverlay)
-        } else {
-          console.warn('[workbench] 宿主没有 shell.overlay 槽位，内容改挂自建常驻容器')
-          useSelfHostedOverlay = true
-          officialConfirmed = false
-          document.documentElement.removeAttribute(OFFICIAL_ATTR)
-        }
-      } catch (error) {
-        console.warn('[workbench] official slot registration failed, falling back to DOM entry:', String(error))
-      }
+      /**
+       * 面板内容：**注册到官方 `shell.overlay`**。
+       *
+       * 为什么不是不 `main`：`main` 是键槽，`activePanelId` 一变宿主就卸载整棵子树 ——
+       * 而我们这棵树里装着常驻的草稿弹框（关面板就会连弹框一起消失，用户实测
+       * "只能回到工作台页面才看得到弹框"）。`shell.overlay` 是**始终存在**的框架级浮层，
+       * 面板显隐由 `decidePanel()`（是否被宿主选中）决定。
+       *
+       * 历史：2026-09-13 曾因 `slot entry crashed in 'shell.overlay': TypeError: … reading
+       * 'subscribe'` 而放弃这个槽位。**那个崩溃的真正根因是 inject 少声明了 `slots` /
+       * `layout`**（cordis 没等依赖就绪就调我们的 apply），已由 `inject` 声明修掉，
+       * 且现在有 `test/capabilities.test.mjs` 把 inject 精确锁成 5 项。
+       */
+      const disposeOverlay = slots.inject(OFFICIAL_OVERLAY_SLOT, () => slots.register(
+        { name: OFFICIAL_OVERLAY_SLOT, id: PANEL_NAME, order: -4 },
+        WorkbenchPanelContent as unknown as (props: Record<string, unknown>) => JSX.Element | null,
+      ))
+      if (typeof disposeOverlay === 'function') officialDisposers.push(disposeOverlay)
+    } catch (error) {
+      /**
+       * 注册失败**不再降级**（v1.14.53）：DOM 腿已删除，没有第二条路可走。
+       * 这里只把失败说清楚 —— 用户看到的是"侧栏没有工作台入口"，
+       * 而 console 里能查到确切原因，不会像以前那样悄悄换一套界面。
+       */
+      console.error('[workbench] 官方槽位注册失败：侧栏不会出现工作台入口。原因：', String(error))
     }
   }
 
-  // ---------------------------------------------------------------- DOM 降级腿
   /**
-   * 旧宿主（没有官方槽位 / 布局服务）的降级路径：往侧栏 DOM 注入入口行 + 覆盖式面板。
+   * 侧栏宽度 → `--wb-sidebar-w`（面板左边界）。
    *
-   * **这条腿是正式支持的路径，不是临时兼容**：能撑起 DOM 契约的宿主（如 DSH 0.1.1-rc.1）
-   * 在社区里仍然存在，删掉它会让那些机器上的工作台直接不可用。契约与格式驱动的互斥
-   * 判定都在 `entryContract.ts`（有 11 项不变量测试锁住）。
-   */
-
-  // 家族契约（见 entryContract.ts）：行标识 + 语义属性 + 三段式结构 + aria-label/title。
-  const entry = document.createElement('button')
-  entry.type = 'button'
-  entry.className = ENTRY_CLASS
-  entry.setAttribute(ENTRY_ATTR, '')
-  entry.setAttribute(ENTRY_PLUGIN_ATTR, ENTRY_PLUGIN_ID)
-  entry.setAttribute(ENTRY_PART_ATTR, ENTRY_PART_VALUE)
-  entry.setAttribute('aria-label', ENTRY_TITLE)
-  entry.setAttribute('title', ENTRY_TITLE)
-  entry.innerHTML = ENTRY_HTML
-  entry.addEventListener('click', () => { setOpen(!open) })
-  const syncEntry = (): void => { if (open) entry.dataset.active = 'true'; else delete entry.dataset.active }
-  /**
-   * 折叠态要**跟着宿主实时变**：DSH 的折叠/展开只改 frame 上的属性（`data-sidebar-collapsed`）
-   * 与侧栏根的类名，不重建 DOM —— 只用 childList 的 placeEntry 是跟不上的
-   * （placeEntry 在 placed 时直接 return）。所以这里连 `data-sidebar-collapsed`
-   * 的属性变化一起听（该属性可能挂在 documentElement 或 frame 上，两处都在观察范围内生效）。
-   *
-   * `syncCollapsed` 用函数声明（下方定义）：声明提升让观察回调能引用它，而它自己在
-   * 被调用时才读 rootEl，因此不存在「先观察后赋值」的时序问题。
-   */
-  const entryObserver = new MutationObserver(() => { syncEntry(); syncCollapsed() })
-  entryObserver.observe(document.documentElement, { attributes: true, attributeFilter: [ACTIVE_ATTR, SIDEBAR_COLLAPSED_ATTR] })
-  entryObserver.observe(document.body, { attributes: true, subtree: true, attributeFilter: [SIDEBAR_COLLAPSED_ATTR] })
-  syncEntry()
-
-  /**
-   * 覆盖层视图节点：**永远创建、永远插进会话列**，但只有在"没确认走官方路径"时才
-   * 渲染 App 且被 CSS 放行（见 styles.ts 的 OFFICIAL_ATTR 门控）。
-   *
-   * 为什么必须常备：2026-09-12 的空白屏事故里，官方注册中途失败时原先的实现
-   * 既没有覆盖层、门控却已经生效，界面直接空白且无法恢复。
-   * 兜底那一路常备之后，最坏情况是"看起来像迁移前"，而不是"什么都看不到"。
-   */
-  const view = document.createElement('div')
-  view.setAttribute(VIEW_ATTR, '')
-  overlayView = view
-  overlayRoot = createRoot(view)
-
-  let rootEl: HTMLElement | undefined
-  let placed = false
-  let column: HTMLElement | undefined
-
-  /**
-   * 把宿主的折叠态带到本插件这一行，并标出「谁是侧栏」。
-   *
-   * 宿主把折叠标记写在 frame 元素上（`data-sidebar-collapsed`，DSH 0.1.5 的
-   * `dsh-client-ui-layout` AppFrame）；本插件的行插在侧栏列里，是 frame 的后代。
-   * 这里顺手把它标到侧栏根节点上：这样样式里的折叠态不再依赖 `[data-dsh-frame]`
-   * ——那个属性宿主根本没有，旧写法是永不命中的死代码。
-   *
-   * ## ⚠️ 这个函数曾经把浏览器卡死（v1.14.47 修复，两个错叠在一起）
-   *
-   * 现象：点「收起侧边栏」后**整个页面同步卡死** —— 没有异常、没有 React 告警，
-   * `Runtime.evaluate` 永不返回。用户看到的是"Edge 挂了，但后台正常，重开页面就好"。
-   *
-   * 实测（`.pwtest/diagnose-which-callback-spins.mjs`）：`entryObserver` 在
-   * **5 秒内被触发 537 万次**，且每一次的 `attributeName` 都是
-   * `data-sidebar-collapsed` —— 也就是本函数写下的那个属性。
-   *
-   * 两个错：
-   * 1. **无条件写**：`setAttribute` 每次都写，即便值没变 —— 而 MutationObserver 对
-   *    "写入相同值"同样会派发记录，于是"写 → 观察器 → 再写"永不收敛；
-   * 2. **自读**：`closest()` 会包含**自身**。本函数刚把标记打在 `rootEl` 上，
-   *    下一次 `closest()` 就把 `rootEl` 自己读成了"折叠的 frame" —— **自己喂自己**。
-   *
-   * 修法：只在祖先上找标记（`parentElement` 起，跳过自身），并且**值没变就不写**。
-   * 这两条缺一不可：只加幂等判据的话，"读到自己"仍会让判据在两种结果间来回跳。
-   */
-  function syncCollapsed(): void {
-    if (rootEl === undefined || !rootEl.isConnected) return
-    /** `closest()` 含自身 —— 所以从 parentElement 起步，避免读到自己刚打的标记。 */
-    const frame = rootEl.parentElement?.closest(`[${SIDEBAR_COLLAPSED_ATTR}]`)
-      ?? rootEl.parentElement?.closest('[class*="_frame"]')
-      ?? null
-    const collapsed = frame !== null
-      && (frame.hasAttribute(SIDEBAR_COLLAPSED_ATTR) || matchesCollapsedClass(Array.from(frame.classList)))
-    /** 值没变就不碰 DOM：MutationObserver 对"写入相同值"也会派发记录。 */
-    if (collapsed === rootEl.hasAttribute(SIDEBAR_COLLAPSED_ATTR)) return
-    if (collapsed) rootEl.setAttribute(SIDEBAR_COLLAPSED_ATTR, '')
-    else rootEl.removeAttribute(SIDEBAR_COLLAPSED_ATTR)
-  }
-
-  /**
-   * 把入口行放进侧栏。
-   *
-   * **不再按官方判定提前跳过**：那一跳正是空白屏事故的一环 ——
-   * 判定说"走官方"，于是这行不插；结果官方注册没成 → 入口根本不存在。
-   * 现在总是准备好这一行，仅在被**确认**走官方路径时隐藏它
-   * （见 syncEntryVisibility）。最坏也只是多一个隐藏按钮，比没有入口好得多。
-   */
-  const placeEntry = (): void => {
-    if (rootEl !== undefined && !rootEl.isConnected) { rootEl = undefined; placed = false }
-    if (placed) { if (document.body.contains(entry)) return; placed = false }
-    rootEl ??= sidebarRoot()
-    if (rootEl === undefined) return
-    const button = newSessionButton(rootEl)
-    if (button === undefined) return
-    if (entry.parentElement !== rootEl) {
-      const row = button.closest('[class*="logoRow"]')
-      const base = row !== null && row.parentElement === rootEl ? row : button
-      // 锚点固定：紧跟 logoRow（其内是 New Session 行）之后。
-      // 旧实现拿「家族入口的第一行」当锚（`insertBefore(entry, family[0])`），位置取决于
-      // 兄弟插件谁先渲染、顺序不稳；issue #3 的建议本身就是用固定锚点 + 家族统一形态。
-      const anchor = base.nextElementSibling
-      rootEl.insertBefore(entry, anchor)
-      syncCollapsed()
-    }
-    placed = true
-  }
-  /**
-   * 官方确认可用时把自建入口行藏掉，避免侧栏出现两个「工作台」入口。
-   *
-   * 反过来的情况也要处理（v1.14.36）：**走自建腿时把宿主渲染的官方行藏掉**。
-   * 实测（2026-09-13）：这台宿主 layout 不可达 → 官方行虽然渲染出来了，
-   * 但点击**切不动面板**（`layout.selectPanel` 不存在）；此时自建行才是唯一能用的入口。
-   * 两行同时可见既重复又误导（用户："侧栏出现两个工作台入口"）。
-   *
-   * 判据：官方行 = 文本恰为「工作台」的 button[aria-label]；我们的自建行文本是
-   * 「打开工作台（任务 / 日历 / 知识库 / 点子）」，两者不会混淆。打标记保证幂等。
-   */
-  /**
-   * 去重：**两行「工作台」入口只能留一行**（v1.14.43）。
-   *
-   * 判据是纯 DOM 事实，不看 `officialConfirmed`：
-   *   - 页面里同时存在「我们注入的行」与「宿主渲染的官方行」→ 藏掉**官方那行**，
-   *     因为它在这台宿主上点了**切不动面板**（`layout.selectPanel` 曾长期不可用），
-   *     而我们的行走的是已验证可用的自建腿；
-   *   - 只剩一行 → 什么都不做。
-   *
-   * 历史教训：这一函数原先开头 `if (officialConfirmed) return`，于是"官方可用"时
-   * 它从不生效，用户看到**两个工作台入口**（多次反馈）。
-   */
-  /**
-   * 入口可见性：**只按 DOM 证据**，判据只有一份实现（`entryContract.hostPanelRowVisible`）。
-   *
-   * 规则：宿主渲染的官方行可见 → 藏我们自己的；否则显示我们自己的。
-   * 这样"永远有一个能点的入口"，同时官方行正常时不会出现两行。
-   *
-   * ## 为什么原先两头都没生效（2026-09-13 实测）
-   *
-   * 旧判定查的是 `textContent === '工作台'`（`ENTRY_LABEL_TEXT`），而宿主 `PanelRow`
-   * 把注册时的 `label`（`ENTRY_TITLE` = 「打开工作台（任务 / 日历 / 知识库 / 点子）」）
-   * 写进 `textContent` —— 于是这条判定**永远为假**，我们自己的行永不隐藏，
-   * 侧栏稳定两行（截图确认：「工作台」+「打开工作台（任务 / 日历 / 知识…）」）。
-   * 同一份判定还写了两处（`entryContract.officialPanelRowRendered` 按 aria-label，
-   * 这里按 textContent），等于埋了一个必然不同步的坑。现在只留一处。
-   */
-  const syncEntryVisibility = (): void => {
-    entry.style.display = hostPanelRowVisible(document) ? 'none' : ''
-  }
-  /**
-   * 把覆盖层视图挂进会话列（DOM 腿的容器）。
-   *
-   * ## ⚠️ 必须处理"列被宿主重建"（v1.14.48 修复）
-   *
-   * 原实现是 `column ??= conversationColumn()` —— **一旦取到就永远不再刷新**。
-   * 宿主重渲染时若把会话列整棵换掉（低版本 DSH 的 AppFrame 更常这么做），
-   * 那个缓存的 `column` 就**脱离文档**了：`column.contains(view)` 为 false，
-   * 我们于是往一个已经不在页面上的节点里 append —— **面板永远不会出现**，
-   * 而且因为 `view` 有个"关掉不卸载"的常驻容器，看起来就像"点了没反应"。
-   *
-   * 这正是"WSL 低版本上工作台打不开"的成因之一：低版本没有官方槽位，
-   * 走的就是这条 DOM 腿，而它的 frame 重建比 0.1.5 频繁得多。
-   *
-   * 修法：缓存前先验证**仍在文档里**，失效就重新查一次。
-   */
-  const placeView = (): void => {
-    if (column !== undefined && !column.isConnected) column = undefined
-    column ??= conversationColumn()
-    if (column !== undefined && !column.contains(view)) column.appendChild(view)
-  }
-  /**
-   * 量出侧栏宽度写进 `--wb-sidebar-w`：面板从侧栏右侧开始铺，
+   * 量出侧栏宽度写进 CSS 变量：面板从侧栏右侧开始铺，
    * **绝不遮住 DSH 左侧导航**（用户实测反馈：改造后面板盖住了整个左侧栏）。
    *
    * 取值保守化（v1.14.21）：只接受 "明显是侧栏" 的宽度（>0 且 < 视口 40%）。
@@ -4242,120 +3882,20 @@ export function apply(ctx: unknown): () => void {
   }
   observeSidebar()
 
-  const watcher = new MutationObserver(() => {
-    placeEntry(); placeView(); syncEntryVisibility(); observeSidebar()
-  })
-  watcher.observe(document.body, { childList: true, subtree: true })
-  placeEntry(); placeView()
-
-  /**
-   * 兄弟插件广播「我开了」时让位。
-   *
-   * v1.14.45 修正：**官方路径下也要听**（原来是 `if (officialConfirmed) return`）。
-   * 官方路径的开关是宿主 `activePanelId`，而宿主**不认识** task-board ——
-   * 于是在官方路径下"对方开了、我们让位"这件事没有任何人做，两个面板会同时亮着
-   * （用户实测："两个都可以同时被选中"）。
-   */
-  const onOtherActivate = (event: Event): void => {
-    if ((event as CustomEvent).detail !== PANEL_NAME && open) setOpen(false)
-  }
-  /**
-   * 点侧栏里**别的东西**（会话行 / 新会话 / 家族入口行）时收起面板。
-   *
-   * 兄弟插件（task-board / ssh）都有同一条捕获期监听（`SIDEBAR_ROW_SELECTOR`），
-   * 家族行为要一致 —— 否则"点会话回不到会话区"就成了本插件独有的毛病。
-   * 注意这里**排除我们自己的行**：点自己那行由入口的 click 处理器负责开合，
-   * 这里再关一次会把刚打开的面板立刻关掉（自己和自己打架）。
-   */
-  const onClickSidebarRow = (event: MouseEvent): void => {
-    if (!open) return
-    const target = event.target as HTMLElement | null
-    if (target === null) return
-    if (target.closest(`[${ENTRY_ATTR}]`) !== null) return
-    // 家族入口行用同一套属性识别（原来只列 session/project/search/newSession —— 正好是
-    // dsh-mnemon 的 SIDEBAR_CONTEXT_SELECTOR 抄漏本插件属性的镜像问题）。
-    if (target.closest(`[class*="sessionRow"], [class*="projectRow"], [class*="searchResultRow"], [class*="searchResultWorkspace"], [class*="newSession"], ${SIDEBAR_ENTRY_SELECTOR}`) !== null) setOpen(false)
-  }
-  /**
-   * 别人的面板标记变化 → 家族互斥收口。
-   *
-   * 为什么必须有（v1.14.45）：对方很多实现只设自己的 `*-active`
-   * （task-board 会广播，但它自己**不认**我们，见 `panel-mount-core.onOtherActivate`
-   * 只比对 `ssh`），所以"本插件先开、对方后开"这个时序只能靠属性观察兜住。
-   *
-   * 两件事一起做，顺序不能反：
-   *   1. **关掉我们自己**（走 `setOpen(false)` → 宿主的 `activePanelId` 归 null），
-   *      这样宿主侧的状态也真的收了，而不是只有 CSS 让位（否则对方一关我们又会"复活"）；
-   *   2. 刷新 DOM 门控标记（DOM 腿下 CSS 读它）。
-   *
-   * 判据用 `isDisplayed()` 而不是本地 `open` —— 面板常常是**宿主**打开的，
-   * 那时本地 `open` 还是 false（详见 `isDisplayed` 的说明）。这一条是 2026-09-13
-   * 实测踩出来的：用了 `open` 就永远不进这个分支，现象就是"两个面板同时被选中"。
-   *
-   * 官方路径**同样要做** —— 原来的 `if (!officialConfirmed)` 守卫正是
-   * "两个面板同时被选中"的另一半原因。
-   */
-  const syncSiblingMutex = (): void => {
-    syncPanelBlocked()
-    if (!isDisplayed()) return
-    if (!isSiblingPanelActive(document.documentElement.getAttributeNames())) return
-    /**
-     * 让位：关掉自己（`setOpen(false)` → `selectPanel(null)`，宿主状态真的归 null）。
-     * **不能**只靠显示条件压一层 —— 那样会和"再点入口"互相锁死，见
-     * `WorkbenchPanelContent` 的注释（2026-09-13 实测的最后一个 bug）。
-     */
-    console.info('[workbench] 家族互斥：兄弟插件面板已激活，本插件收起')
-    yieldToSiblingPanel()
-  }
-  const siblingObserver = new MutationObserver(() => { syncSiblingMutex() })
-  siblingObserver.observe(document.documentElement, { attributes: true, attributeFilter: siblingActiveFilter() })
-  document.addEventListener(ACTIVATE_EVENT, onOtherActivate)
-  document.addEventListener('click', onClickSidebarRow, true)
-
-  /**
-   * 一次性收口：把入口可见性与兜底路径对齐。
-   *
-   * 这里**只做无害的对齐**（隐藏自建入口行 / 在没走官方路径时挂上覆盖层），
-   * 不再做任何"撤销注册"的动作 —— 缘由见上方 verifyOfficialPath 的废弃说明。
-   * 延迟到 1.2 秒是为了等宿主把槽位注册真正消化完（`inject` 回调的时序）。
-   */
-  const settleTimer = window.setTimeout(() => {
-    syncEntryVisibility()
-    /**
-     * 宿主没有 `shell.overlay` 时把内容挂进自建常驻容器（不依赖键槽，
-     * 因此同样不会"关面板就丢弹框"）。
-     */
-    if (!officialConfirmed || useSelfHostedOverlay) mountOverlayContent()
-    if (officialConfirmed) startPanelHealthCheck()
-    else startPanelHealthCheck()
-  }, 1200)
-
   const cleanup = (): void => {
     if (disposed) return
     disposed = true
     instanceAlive = false
-    watcher.disconnect(); entryObserver.disconnect(); siblingObserver.disconnect()
-    window.clearTimeout(settleTimer)
     sidebarResizeObserver?.disconnect()
-    document.removeEventListener(ACTIVATE_EVENT, onOtherActivate)
-    document.removeEventListener('click', onClickSidebarRow, true)
     for (const dispose of officialDisposers.splice(0)) {
       try { dispose() } catch { /* 卸载阶段不再纠缠 */ }
     }
-    /**
-     * 无论如何都尝试卸载两条路径的 React root。
-     *
-     * `unmount()` 对"没渲染过"的 root 是无害 no-op（React 18 只在真正卸载时告警），
-     * 但漏掉一次就会留下一个**活着**的 App 实例继续轮询、继续弹 Modal ——
-     * 那正是"背景一次比一次黑"的成因。所以这里宁可多调一次。
-     */
-    try { overlayRoot?.unmount() } catch { /* 已卸载 */ }
-    overlayMounted = false
-    entry.remove()
-    view.remove()
     const html = document.documentElement
-    html.removeAttribute(ACTIVE_ATTR); html.removeAttribute(BLOCKED_ATTR); html.removeAttribute(OFFICIAL_ATTR)
-    if (rootEl !== undefined) rootEl.removeAttribute(SIDEBAR_COLLAPSED_ATTR)
+    /**
+     * 只摘自己写过的两个属性（设计文档 I4 白名单）：ACTIVE_ATTR 与 OFFICIAL_ATTR。
+     * `--wb-sidebar-w` 是内联样式变量，留着无害（下一次 apply 会按真实宽度覆盖）。
+     */
+    html.removeAttribute(ACTIVE_ATTR); html.removeAttribute(OFFICIAL_ATTR)
     if (pluginCtx === ctx) pluginCtx = undefined
     if (workbenchHost?.closePanel === undefined ? false : workbenchHost.runtime === runtime) workbenchHost = undefined
     if (activeDisposer === cleanup) activeDisposer = undefined

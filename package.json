@@ -1,6 +1,6 @@
 {
   "name": "@dely0/dsh-personal-workbench",
-  "version": "1.14.53",
+  "version": "1.14.54",
   "description": "DSH 个人工作台：日历 + 层级任务 + AI 澄清/拆解/执行/复盘 + AI 智能排序/日报周报 + 桌面提醒",
   "type": "module",
   "main": "./lib/index.js",
@@ -63,7 +63,7 @@
     "typecheck": "tsc --noEmit",
     "check": "tsc --noEmit && node -e \"require('node:fs').rmSync('lib',{recursive:true,force:true})\" && tsc -p tsconfig.build.json && tsdown",
     "test": "pnpm build && node --test test/*.test.mjs",
-    "test:local": "node --test test/entryContract.test.mjs test/hostDegrade.test.mjs",
+    "test:local": "node --test test/panelState.test.mjs test/capabilities.test.mjs test/clientInvariants.test.mjs",
     "prepare": "pnpm build"
   },
   "dependencies": {
