@@ -180,7 +180,6 @@ dsh plugin --profile web add link:/path/to/dsh-personal-workbench
 | **`layout.selectPanel`**（面板选中状态由宿主单值状态管理） | **0.1.5-rc.1+** | 同上 |
 | 会话标题栏入口（官方槽位 `conversation.session.header.actions`） | 0.1.5-rc.1+ | 无该按钮；侧栏面板行仍可用 |
 | 官方 `uiWorkspace.connectWorkspace`（AI 会话切工作区） | 0.1.5-rc.1+ | 回落 `workspaces.openPath` |
-| 团队记忆库（复盘自动沉淀） | 与 `dsh-team-memory` **无关**（走它的落盘/队列格式） | 复盘只写回任务详情，不写团队库 |
 | 微信提醒 | 可选插件 `@xmanrui/dsh-im` | 静默降级为页内提醒 + 桌面通知 |
 | 技能选择器 | 宿主 `skills` 注册表 | 选择器自动隐藏 |
 
@@ -218,12 +217,10 @@ dsh plugin --profile web add link:/path/to/dsh-personal-workbench
 
 这条规则来自三次真实事故：v1.10.1 的 `uiWorkspace`、v1.13.0 的 `runtime.slots`、
 v1.13.3 的再次根治；v1.13.1 的标题栏入口则是因为直接读 `ctx.slots` 而崩。
-本版本新增的 `slots` / `layout` / `teamMemory` 全部按此规则处理。
 
-**边界要分清（v1.14.52 澄清）**：`slots` / `layout` 是**面板功能的前置条件**，
+**边界要分清**：`slots` / `layout` 是**面板功能的前置条件**，
 所以它们进 `inject` —— 拿不到就整块不启动（明说原因），而不是偷偷降级；
-`uiWorkspace` / `teamMemory` / `dshIm` / `skills` 是**可选增强**，
-一律软探测、缺了只是少一个能力。
+`uiWorkspace` / `dshIm` / `skills` 是**可选增强**，一律软探测、缺了只是少一个能力。
 
 ### 其它
 
@@ -239,9 +236,6 @@ v1.13.3 的再次根治；v1.13.1 的标题栏入口则是因为直接读 `ctx.s
   `<html style="--wb-sidebar-w: Npx">`；`test/clientInvariants.test.mjs` 的 I4/I5 把这两条钉住。
 - 微信提醒依赖 `@xmanrui/dsh-im`：**软探测**（`ctx.get('dshIm')`），未安装或未配置投递目标时静默降级为页内提醒 + 桌面通知，不影响其它功能。
 - 技能目录依赖宿主 `skills` 注册表：未安装时 Skill 选择器自动隐藏。
-- 团队记忆沉淀（复盘 → 团队记忆库）复用 `dsh-team-memory` 的本地 Markdown + 上传队列格式：
-  **不需要它提供任何服务**；它没装时记忆仍会落到 `~/.dsh/memory/notes/` 等它将来补传。
-  `scope` 默认 `private`（复盘可能含客户信息），可在复盘确认弹窗改成 `team`。
 - 仅支持单用户本地使用；无云同步、无多用户权限体系。
 - AI 能力依赖你在 DSH 中已配置的模型与凭证；执行/咨询等会真实消耗 token。
 
@@ -271,7 +265,7 @@ v1.13.3 的再次根治；v1.13.1 的标题栏入口则是因为直接读 `ctx.s
 | **1.14.51** | 修复「快速录入 → AI 执行 → 验收后，待处理里多出一条**同名重复任务**」：根因是 `withDraftConfirm()` 不校验草稿状态也不记录产出（同一条 task 草稿确认两次就建出两条任务），且 `confirmTaskDraft()` 没有同父同名幂等。现在确认会把产出回写草稿并支持**回放**（同一条草稿绝不会产出两个任务）；跨草稿同名**只告警不静默合并**（新增「库里已经有一条同名任务」选择框：保留两条 / 就用已有那条并归档多建的）；`workbench_submit_task` 在当前会话就是该任务关联会话时直说"几乎肯定是重复录入" |
 | **1.14.10** | 修复**在官方 `main` 槽位里自建独立 React root** 引发的连串问题（弹框反复重挂 → 背景一顿一顿变黑、按钮要点两次、`inactive context` 报错、同一构建下部分 App 窗口整片黑）：官方槽位里改为**直接返回 `WorkbenchApp`**、生命周期交给宿主 reconciler（与宿主自带弹框一致）；面板容器改 `position:absolute; inset:0`，不再依赖宿主高度链；新增**可见性自查**（激活时容器持续 0 尺寸就自动切覆盖层）。顺带移除上一版引入的"自愈复核"（它会在注册其实成功时撤销注册，导致侧栏出现两行入口）与 generator 形式的 `slots.inject`（本宿主的 cordis 不支持，注册不生效） |
 | **1.14.1** | 修复 1.14.0 本机验收发现的 4 个问题：① 点「工作台」导致会话区**整片空白且回不去**（`entriesOfSlot` 脱绑调用被误判成"宿主不支持" + `selectPanel` 抛错时 `open` 已被置真）—— 改为**自愈判定**：注册表与 DOM 两侧都有证据才走官方槽位，4 秒复核窗口内不成立就撤销注册并回退 DOM 腿，且入口与覆盖层始终就绪，绝不留空白；② 草稿弹框背景变黑/闪烁、点「暂存」要连点 5-8 次（`WorkbenchApp` 被挂了两份互相打架）—— 两种容器严格二选一；③ 快速录入提示文字被输入框遮挡（`.wb-hint` 只有设置页作用域样式）；④ 顶层 `type_code` 非法值被**静默改写成 personal** 而非拒绝（与工具描述、子任务校验口径不一致）—— 改为封闭枚举严格校验 + 回执回显最终落库字段 |
-| **1.14.0** | **侧栏入口与中央面板改用 DSH 官方槽位**（`sidebar.panellist` + `main`，互斥交给宿主 `activePanelId`；旧宿主保留 DOM 降级腿）；**任务支持改父任务**（含防环校验 + 变更留痕 + 表单选择项 + AI 工具，取代直接改库）；**复盘记录自动写入团队记忆库**（按教训拆条、幂等、默认 private、不可达时降级）；**快速录入/澄清支持指定工作区**（默认值与旧隐式行为逐字一致，路径不可用会明确报错而非静默换目录）；**所有草稿类型都可暂存**（白名单改为默认全开）且**草稿弹框信息量补齐**（任务草稿展示描述/截止/预估/工作区/AI 策略/子任务 + 回到会话）；**子任务 code 非法不再静默丢弃**（回传 problems 并在界面标黄，工具描述带封闭枚举）；数据库 schema 过新时**降级空转而不是拖死 DSH 启动** |
+| **1.14.0** | **侧栏入口与中央面板改用 DSH 官方槽位**（`sidebar.panellist` + `main`，互斥交给宿主 `activePanelId`）；**任务支持改父任务**（含防环校验 + 变更留痕 + 表单选择项 + AI 工具，取代直接改库）；**快速录入/澄清支持指定工作区**（默认值与旧隐式行为逐字一致，路径不可用会明确报错而非静默换目录）；**所有草稿类型都可暂存**（白名单改为默认全开）且**草稿弹框信息量补齐**（任务草稿展示描述/截止/预估/工作区/AI 策略/子任务 + 回到会话）；**子任务 code 非法不再静默丢弃**（回传 problems 并在界面标黄，工具描述带封闭枚举）；数据库 schema 过新时**降级空转而不是拖死 DSH 启动** |
 | 1.13.4 | 修复：`uiWorkspace` 不再作为硬依赖（旧宿主上不再 `Failed to load plugins`）；数据库 schema 过新时降级而不是拒绝启动 |
 | 1.13.1 | 修复会话标题栏入口导致前端加载失败（cordis 服务读取必须用 `ctx.get`）；新增点子「文件夹」（手动建/改名/删除/合并、多对多归入与移出、整体转任务树）；新增「今日容量」条与每天可投入时长设置；UI 视觉层统一（边框/阴影/字号/间距，浅色下保持模块可辨识）；用户入口改用官方槽位 |
 | 1.12.1 | 微信草稿通知正文精简（任务标题 + 摘要首行 + 一行操作）；修复 reminder 测试在 Windows 下未关库导致临时目录删除失败 |
@@ -300,7 +294,7 @@ v1.13.3 的再次根治；v1.13.1 的标题栏入口则是因为直接读 `ctx.s
 - [x] V2：验收暂存 / 驳回反馈闭环 / 草稿通知（1.12.0）
 - [x] V2：UI 视觉层重构 + 点子文件夹 + 官方槽位入口（1.13.x）
 - [x] V2：提醒状态语义修复（窗口/终态分离 + 重新武装）（1.13.2）
-- [x] V2：侧栏入口迁移到官方槽位 + 改父任务 + 复盘写入团队记忆 + 草稿暂存推广（1.14.0）
+- [x] V2：侧栏入口迁移到官方槽位 + 改父任务 + 草稿暂存推广（1.14.0）
 - [ ] 待规划：客户端 `WorkbenchApp` 拆分（施工图见 `docs/design/2026-09-09-client-split-backlog.md`）
 - [ ] V2：定时自动化
 - [ ] 未来：多端同步、任务拖拽排序、数据导入导出
@@ -399,7 +393,7 @@ Refusing to start with a clear log is strictly better than half-working degradat
 
 - `slots` / `layout` are **preconditions of the panel feature** → they go into `inject`,
   and a missing one means the panel block does not start (with a readable log);
-- `uiWorkspace` / `teamMemory` / `dshIm` / `skills` are **optional enhancements** →
+- `uiWorkspace` / `dshIm` / `skills` are **optional enhancements** →
   soft-probed; missing one only removes a feature.
 
 Does **not** depend on `dsh-web-ui`.
@@ -411,7 +405,7 @@ Does **not** depend on `dsh-web-ui`.
 - [x] V2: Today plan panel long-list optimization (sticky stats / fixed-height inner scroll / expand-collapse / inline complete & defer) (1.4.0)
 - [x] V2: Custom prompt input before AI sessions (except quick intake; append user input after the default prompt) (1.5.0)
 - [x] V2: Manual editing for today/calendar plan panel (reorder, edit notes, add/remove plan items; keep AI generate + confirm + complete/defer) (1.5.0)
-- [x] V2: Official sidebar slots, task re-parenting, review-to-team-memory, defer for every draft kind (1.14.0)
+- [x] V2: Official sidebar slots, task re-parenting, defer for every draft kind (1.14.0)
 - [x] Official-slots-only architecture: single source of truth for panel visibility, DOM fallback leg removed, capability gate (1.14.57)
 - [ ] Future: scheduled automation, multi-device sync, drag-and-drop, import/export
 
