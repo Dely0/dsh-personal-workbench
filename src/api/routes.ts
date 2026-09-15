@@ -18,7 +18,9 @@ import { isLoopbackRequest, readJsonBody, todayRange, writeJson } from './routes
 import { makeIdeaClusterRoutes } from './routes/idea-clusters.js'
 import { makeIdeaRoutes } from './routes/ideas.js'
 import { makeKnowledgeRoutes } from './routes/knowledge.js'
+import { makeModelModalityRoutes, type LlmModalityProbe } from './routes/model-modalities.js'
 import { makePlanRoutes } from './routes/plans.js'
+import { makeQuickAttachmentRoutes } from './routes/quick-attachments.js'
 import { makeReminderRoutes, type ReminderRouteDeps } from './routes/reminders.js'
 import { makeReportRoutes } from './routes/reports.js'
 import { makeTaskRoutes } from './routes/tasks.js'
@@ -92,10 +94,23 @@ export interface WorkbenchRouteDeps extends ReminderRouteDeps {
    * 软探测拿到时才注入；拿不到就走"本地 Markdown + 队列补传"的等价通道。
    */
   teamMemory?: TeamMemoryService
+  /**
+   * 宿主 `llm` 服务的**软探测**（v1.15.1）。
+   *
+   * 只用来回答"某个模型收不收图片"（见 `routes/model-modalities.ts`）。
+   * **绝不能写进 `inject`**：它是可选增强，缺了只是少一条提前提示，
+   * 写进去会让旧宿主上整个插件 pending（该模式在本仓已复发 3 次）。
+   */
+  llmModalities?: () => LlmModalityProbe | undefined
 }
 
 export function makeRoutes(db: DatabaseSync, deps: WorkbenchRouteDeps = {}): WebRoute[] {
   return [
+    // ------------------------------------------------------------------ quick attachments
+    // PDF/DOCX 正文抽取（护栏见 routes/quick-attachments.ts 的文件头注释）。
+    ...makeQuickAttachmentRoutes(),
+    // 模型输入能力对照表（客户端用它判断"选了不收图的模型还加了图"）。
+    ...makeModelModalityRoutes(() => deps.llmModalities?.()),
     ...makeReminderRoutes(db, {
       channel: deps.channel,
       policy: deps.policy,

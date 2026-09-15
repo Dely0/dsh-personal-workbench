@@ -1,6 +1,6 @@
 {
   "name": "@dely0/dsh-personal-workbench",
-  "version": "1.15.0",
+  "version": "1.15.1",
   "description": "DSH 个人工作台：日历 + 层级任务 + AI 澄清/拆解/执行/复盘 + AI 智能排序/日报周报 + 桌面提醒",
   "repository": {
     "type": "git",
@@ -45,6 +45,7 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-commands": "^0.1.5-rc.1",
     "@deepseek-ai/dsh-host-webserver": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-system-prompt": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-tools": "^0.1.0-rc.6"

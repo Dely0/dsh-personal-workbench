@@ -11,8 +11,55 @@ import { listDictionaries } from './dictionaries.js'
 import { nowIso, type TaskInput, type TaskPatch, type TaskRow } from '../repo.js'
 
 
+/**
+ * 预分配任务 id 的**字符白名单**。
+ *
+ * 与 `client/taskFolder.ts` 的 `sanitizeTaskId` 同属一套"可安全做 id/目录名"的字符集。
+ * 为什么要校验（2026-09-16 fresh-eyes 审查 F4）：`input.id` 原本只 `trim()`，
+ * 于是 `'../../evil'`、`'...'`、500 字符的串都能原样落进 `tasks.id` ——
+ * 而"资料夹名 ↔ 任务 id"这条唯一关联正是本次资料夹规矩的基础，
+ * 非法 id 会让它悄悄断裂（资料夹名被清洗成 `evil`，库里却是 `../../evil`）。
+ */
+const TASK_ID_RE = /^[A-Za-z0-9._-]{1,128}$/
+
+/**
+ * 检查一个**显式给出的**任务 id；空串表示"由仓储层生成"，不算错。
+ *
+ * @returns 中文原因；合法则返回 undefined。
+ */
+export function taskIdProblem(id: string): string | undefined {
+  const value = String(id ?? '').trim()
+  if (value === '') return undefined
+  if (value.includes('..')) return `任务 id 不能包含 ".."（会逃出任务资料夹）：${value}`
+  if (!TASK_ID_RE.test(value)) {
+    return `任务 id 只允许 A-Za-z0-9._- 且不超过 128 字符：${value.length > 40 ? `${value.slice(0, 40)}…` : value}`
+  }
+  return undefined
+}
+
+/**
+ * 建任务。
+ *
+ * `input.id` 由调用方预先分配时逐字使用（澄清阶段要先把资料夹建出来，
+ * 见 `TaskInput.id` 的说明）；缺省生成新的 UUID，因此老调用点行为不变。
+ *
+ * ## 两道守卫（fresh-eyes 审查 F4）
+ *
+ * 1. **格式**：显式 id 必须是 `[A-Za-z0-9._-]{1,128}` 且不含 `..`，否则抛**中文**原因；
+ * 2. **唯一性**：**先读状态再写**（本项目规范第 5 条）—— 同一 id 已存在时给中文原因，
+ *    而不是把 SQLite 的 `UNIQUE constraint failed: tasks.id` 甩给用户。
+ *    （这条路径真实可发生：两条草稿用了同一个预分配 id。）
+ */
 export function createTask(db: DatabaseSync, input: TaskInput, actor = 'user', at = nowIso()): TaskRow {
-  const id = randomUUID()
+  const explicitId = input.id !== undefined && input.id.trim() !== '' ? input.id.trim() : ''
+  if (explicitId !== '') {
+    const problem = taskIdProblem(explicitId)
+    if (problem !== undefined) throw new Error(problem)
+    if (getTask(db, explicitId) !== undefined) {
+      throw new Error(`任务 id 已存在：${explicitId}。可能这条草稿已经确认过，或另一条草稿用了同一个预分配 id；请改用新的 id。`)
+    }
+  }
+  const id = explicitId !== '' ? explicitId : randomUUID()
   const task: TaskRow = {
     id,
     parentId: input.parentId ?? null,

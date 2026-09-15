@@ -33,6 +33,17 @@ export interface DictionaryEntry {
 }
 
 export interface TaskInput {
+  /**
+   * 由调用方**预先分配**的任务 id（v1.15.1）。
+   *
+   * 为什么要留这个口：澄清阶段需要先把"任务资料夹"建出来并写进提示词，
+   * 而旧做法是拿**用户打的那句自然语言**当目录名（`folderForText(text)`）——
+   * 等于把一句话当路径，还会因为改标题变成孤儿。现在客户端先 `randomUUID()` 预留 id、
+   * 用它建资料夹，确认草稿时复用同一个 id（`confirmTaskDraft` 读 `payload.id`）。
+   *
+   * 缺省仍由仓储层 `randomUUID()`：老调用点行为不变。
+   */
+  id?: string
   title: string
   description?: string
   typeCode: string
@@ -125,7 +136,7 @@ export {
 
 // 任务域已抽到 repo/tasks.ts
 import { createTask, getTask, listTasks, listChildren, updateTask } from './repo/tasks.js'
-export { createTask, getTask, listTasks, listChildren, updateTask } from './repo/tasks.js'
+export { createTask, getTask, listTasks, listChildren, updateTask, taskIdProblem } from './repo/tasks.js'
 
 // 状态聚合与级联已抽到 repo/status.ts
 import {

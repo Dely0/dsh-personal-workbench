@@ -228,6 +228,24 @@ export function confirmTaskDraft(
       return { task: sibling, problems, childCount: listTasks(db, { parentId: sibling.id, includeArchived: true }).length, reused: true }
     }
     const task = createTask(db, {
+      /**
+       * 复用澄清阶段**预分配**的任务 id（v1.15.1）。
+       *
+       * 客户端在拉起澄清会话前先 `crypto.randomUUID()` 生成 id、用它建任务资料夹，
+       * 并把 id 写进提示词（要求 AI 调 `workbench_submit_task(task_id=…)`）。
+       * 确认时用同一个 id 落库 —— 于是"资料夹名"与"任务 id"天然一致，
+       * 不再需要"澄清资料夹"这种特殊分支，也不会出现"文件夹名取自一句话"。
+       *
+       * 三个键名都认：工具侧写 `id`，历史/别名写法可能给 `taskId` / `task_id`。
+       * 读不出来就由 `createTask` 生成新 id（老草稿行为不变）。
+       */
+      id: (() => {
+        for (const key of ['id', 'taskId', 'task_id'] as const) {
+          const value = (payload as Record<string, unknown>)[key]
+          if (typeof value === 'string' && value.trim() !== '') return value.trim()
+        }
+        return undefined
+      })(),
       title,
       description: typeof payload.description === 'string' ? payload.description : undefined,
       typeCode: String(payload.typeCode ?? ''),

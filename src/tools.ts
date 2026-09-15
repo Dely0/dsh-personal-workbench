@@ -5,7 +5,7 @@
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { DatabaseSync } from 'node:sqlite'
-import { addTaskMemory, assertValidFileLink, createDraft, getDeferredDraftForTask, getDictionary, getDraft, getIdea, getIdeaCluster, getPendingDailyPlanDraft, getPendingDraftForSession, getPendingDraftForTask, getPendingKnowledgeDraft, getPendingReportDraft, getTask, listActiveDictionaryCodes, listTaskEvents, listTaskSessions, listTasks, localDateString, updateDraft, updateTask } from './db/repo.js'
+import { addTaskMemory, assertValidFileLink, createDraft, getDeferredDraftForTask, getDictionary, getDraft, getIdea, getIdeaCluster, getPendingDailyPlanDraft, getPendingDraftForSession, getPendingDraftForTask, getPendingKnowledgeDraft, getPendingReportDraft, getTask, listActiveDictionaryCodes, listTaskEvents, listTaskSessions, listTasks, localDateString, taskIdProblem, updateDraft, updateTask } from './db/repo.js'
 import { checkWorkspacePath } from './workspace-check.js'
 
 function text(value: string): ContentBlock[] {
@@ -139,6 +139,11 @@ export function submitTaskTool(db: DatabaseSync) {
       '适用于自然语言快速录入和详细表单“启动AI澄清”两个场景。同一会话重复调用且带 draft_id 时更新同一草稿，不重复创建。',
     parameters: {
       draft_id: { type: 'string', description: '已有草稿 id；更新草稿时必传，首次提交不传' },
+      /**
+       * 预分配任务 id。**必须**使用提示词里给出的那个值：
+       * 客户端的"任务资料夹"就是按这个 id 建的，换个 id 任务与资料夹就对不上了。
+       */
+      task_id: { type: 'string', description: '本次澄清**预分配**的任务 id（提示词里给出的 reservedTaskId）；必须原样传入，不要自己生成' },
       title: { type: 'string', required: true, description: '任务标题，简洁、动词开头更好' },
       description: { type: 'string', description: 'Markdown 描述：背景/目标/验收标准/注意事项' },
       type_code: { type: 'string', required: true, description: `任务类型 code（封闭枚举，不要自造）：${enumHint(db, 'type')}` },
@@ -176,6 +181,21 @@ export function submitTaskTool(db: DatabaseSync) {
       const priorityCode = normalizeCode(db, 'priority', args.priority_code ?? 'p2', 'p2')
       const statusCode = normalizeCode(db, 'status', args.status_code ?? 'todo', 'todo')
       if (statusCode === 'done' || statusCode === 'cancelled') return '错误：澄清草稿不能直接创建为已完成/已取消任务，请使用待办类状态，完成请走执行验收流程。'
+      /**
+       * 预分配 id 的格式 / 占用校验（fresh-eyes 审查 F4）。
+       *
+       * 与 `createTask` 里那道守卫共用**同一个判据函数**（`taskIdProblem`）；
+       * 这里只是把异常换成"工具返回可读错误"——AI 看到 `错误：…` 会当场改正，
+       * 看到抛出的栈只会把原话复述给用户。
+       * 不合法就**当场拒绝、不静默改写**：资料夹名是用客户端给的 id 算出来的，
+       * 改一个字符就对不上了（这正是本项目"静默改写比静默丢弃更难发现"那条）。
+       */
+      const reservedTaskId = str(args.task_id)
+      if (reservedTaskId !== undefined) {
+        const problem = taskIdProblem(reservedTaskId)
+        if (problem !== undefined) return `错误：${problem}`
+        if (getTask(db, reservedTaskId) !== undefined) return `错误：任务 id 已存在：${reservedTaskId}。请换一个新的 id（不要复用已建过的任务的 id）。`
+      }
       const aiPolicyCode = normalizeCode(db, 'ai_policy', args.ai_policy_code ?? 'consult', 'consult')
       // V1.5：execute 已开放；澄清会话默认仍建议 consult，除非用户明确要求可执行。
       const dueAt = str(args.due_at) ?? null
@@ -194,6 +214,11 @@ export function submitTaskTool(db: DatabaseSync) {
       }
       const payload: Record<string, unknown> = {
         title,
+        /**
+         * 预分配任务 id（可选）。与 `confirmTaskDraft` 的读取口径一致：
+         * 传了就用它落库，于是任务 id 与客户端已建好的任务资料夹同名。
+         */
+        ...(reservedTaskId === undefined ? {} : { id: reservedTaskId }),
         description: str(args.description) ?? '',
         typeCode,
         priorityCode,

@@ -27,6 +27,8 @@ export function Icon({ name, size = 16 }: { name: string; size?: number }): JSX.
     case 'idea': return <svg {...common}><path d="M8 2a4 4 0 0 0-1 7.8V12h2V9.8A4 4 0 0 0 8 2z" /><path d="M6.5 14h3" /></svg>
     case 'chevron': return <svg {...common}><path d="M6 3l5 5-5 5" /></svg>
     case 'skill': return <svg {...common}><path d="M4.5 2.5h7v11h-7z" /><path d="M6.5 5.5h3M6.5 8h3M6.5 10.5h2" /></svg>
+    case 'model': return <svg {...common}><rect x="2.5" y="3" width="11" height="10" rx="2" /><path d="M5 6h6M5 8.5h4M5 11h2" /></svg>
+    case 'image': return <svg {...common}><rect x="2" y="3" width="12" height="10" rx="2" /><circle cx="6" cy="6.5" r="1.2" /><path d="M2.5 11.5l3.5-3 2.5 2 2-1.8 3 3.3" /></svg>
     default: return <svg {...common}><circle cx="8" cy="8" r="5" /></svg>
   }
 }

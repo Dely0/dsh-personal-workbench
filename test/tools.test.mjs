@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { openWorkbenchDb } from '../lib/db/database.js'
 import { seedDictionaries } from '../lib/db/seed.js'
 import { proposeDailyPlanTool, proposeIdeaClustersTool, submitIdeaTasksTool, submitKnowledgeTool, submitReportTool, submitTaskTool, updateTaskTool, requestCompletionTool, saveTaskMemoryTool } from '../lib/tools.js'
-import { createIdea, createTask, getTask, getTaskMemoryContext, getDraftBySession, getPendingDailyPlanDraft, getPendingDraftForSession, getPendingDraftForTask, getPendingReportDraft, linkTaskSession, updateTask } from '../lib/db/repo.js'
+import { createIdea, createDraft, createTask, confirmTaskDraft, getTask, getTaskMemoryContext, getDraftBySession, getPendingDailyPlanDraft, getPendingDraftForSession, getPendingDraftForTask, getPendingReportDraft, linkTaskSession, updateTask } from '../lib/db/repo.js'
 
 /**
  * 删临时目录，容忍 Windows 上刚 `close()` 时文件句柄尚未释放导致的 EPERM。
@@ -62,6 +62,70 @@ test('agent tools write pending drafts and update tasks', async () => {
 
     // 回执必须回显**最终落库**的字段，避免"静默改写"再次发生
     assert.match(training, /本次落库的字段：type=training/)
+
+    /**
+     * 预分配任务 id（v1.15.1）：客户端在澄清前先 `randomUUID()` 生成 id、用它建**任务资料夹**，
+     * 并把 id 写进提示词；确认草稿时必须复用它 —— 否则"资料夹名"与"任务 id"会对不上，
+     * 而资料夹规矩（`taskWorkspaceFolderName`）完全建立在"两者同名"之上。
+     */
+    const reservedId = '11111111-2222-4333-8444-555555555555'
+    const reservedOut = await submit.execute(
+      { title: '预分配 id 的任务', type_code: 'personal', priority_code: 'p2', task_id: reservedId },
+      { agent: { session: { id: 'sess-reserved' } } },
+    )
+    assert.match(reservedOut, /草稿已保存/)
+    const reservedDraft = getDraftBySession(db, 'sess-reserved')
+    assert.equal(reservedDraft.payload.id, reservedId, 'task_id 必须原样落到草稿 payload.id')
+    const confirmed = confirmTaskDraft(db, reservedDraft.id)
+    assert.equal(confirmed.task.id, reservedId, '确认草稿时必须复用预分配 id（资料夹名靠它对齐）')
+
+    /**
+     * 预分配 id 的**格式与占用**校验（fresh-eyes 审查 F4）。
+     *
+     * 旧行为：`input.id` 只 `trim()` → `'../../evil'`、`'...'`、500 字符都能原样落进 `tasks.id`；
+     * 两条草稿用同一个 id 时，第二条会把 `UNIQUE constraint failed: tasks.id`（英文 SQLite 原文）
+     * 甩给用户。现在两处都必须给**中文可读**原因，且**当场拒绝、不静默改写**。
+     */
+    for (const bad of ['../../evil', '...', 'x'.repeat(500), 'has space']) {
+      const out = await submit.execute(
+        { title: `非法 id ${bad.slice(0, 8)}`, type_code: 'personal', priority_code: 'p2', task_id: bad },
+        { agent: { session: { id: `sess-bad-${bad.length}-${bad.slice(0, 3)}` } } },
+      )
+      assert.match(out, /^错误：任务 id/, `非法 id ${JSON.stringify(bad.slice(0, 20))} 必须当场被拒，实际回执：${out}`)
+    }
+    // 复用已建任务的 id：也当场拒（否则要等确认草稿时才炸）
+    const reuse = await submit.execute(
+      { title: '复用 id', type_code: 'personal', priority_code: 'p2', task_id: reservedId },
+      { agent: { session: { id: 'sess-reuse-id' } } },
+    )
+    assert.match(reuse, /^错误：任务 id 已存在/)
+    // 仓储层同样守（其它调用方绕不过去）：非法 id / 重复 id 都是中文原因，不是 SQLite 原文
+    assert.throws(
+      () => createTask(db, { id: '../../evil', title: 'x', typeCode: 'personal', priorityCode: 'p3' }),
+      (error) => {
+        assert.match(String(error.message), /不能包含 "\.\."/)
+        assert.equal(/UNIQUE constraint/.test(String(error.message)), false)
+        return true
+      },
+    )
+    assert.throws(
+      () => createTask(db, { id: reservedId, title: 'x', typeCode: 'personal', priorityCode: 'p3' }),
+      /任务 id 已存在/,
+    )
+    // 两条草稿用同一个 id：第二条确认时给中文原因（而不是 UNIQUE constraint 英文）
+    const dupPayload = { id: 'dup-id-12345678', title: '重复 id 任务', typeCode: 'personal', priorityCode: 'p3' }
+    const dupDraft1 = createDraft(db, { kindCode: 'task', sessionId: 'sess-dup-1', payload: dupPayload })
+    const dupDraft2 = createDraft(db, { kindCode: 'task', sessionId: 'sess-dup-2', payload: dupPayload })
+    confirmTaskDraft(db, dupDraft1.id)
+    assert.throws(
+      () => confirmTaskDraft(db, dupDraft2.id),
+      (error) => {
+        assert.match(String(error.message), /任务 id 已存在/, `第二条必须给中文原因，实际：${error.message}`)
+        assert.equal(/UNIQUE constraint/.test(String(error.message)), false, '不许泄漏 SQLite 英文原文')
+        return true
+      },
+    )
+    assert.equal(getTask(db, 'dup-id-12345678') !== undefined, true, '第一份草稿照常落库')
 
     const update = updateTaskTool(db)
     const task = createTaskForTest(db)

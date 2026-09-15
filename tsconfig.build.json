@@ -8,5 +8,22 @@
     "outDir": "lib",
     "rootDir": "src"
   },
-  "include": ["src/index.ts", "src/client/taskFilterSort.ts", "src/client/workspacePath.ts", "src/client/skillPrompt.ts", "src/client/entryContract.ts", "src/client/panelState.ts", "src/client/capabilities.ts", "src/review-memory.ts", "src/workspace-check.ts"]
+  "include": [
+    "src/index.ts",
+    "src/api/http.ts",
+    "src/api/routes/model-modalities.ts",
+    "src/api/routes/quick-attachments.ts",
+    "src/client/taskFilterSort.ts",
+    "src/client/workspacePath.ts",
+    "src/client/skillPrompt.ts",
+    "src/client/entryContract.ts",
+    "src/client/panelState.ts",
+    "src/client/capabilities.ts",
+    "src/client/taskFolder.ts",
+    "src/client/intakeWorkspace.ts",
+    "src/client/quickAttachments.ts",
+    "src/client/modelCapability.ts",
+    "src/review-memory.ts",
+    "src/workspace-check.ts"
+  ]
 }

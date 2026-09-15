@@ -253,6 +253,27 @@ ${panelContainerCss({ view: VIEW_ATTR, official: OFFICIAL_ATTR, active: ACTIVE_A
 .wb-session-cwd { flex: none; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--dsw-alias-label-secondary); opacity: .8; }
 .wb-session-add { flex: none; font-size: 12px; font-weight: 600; color: var(--dsw-alias-state-business-primary, #4f8ef7); }
 .wb-session-option:disabled .wb-session-add { color: var(--dsw-alias-label-secondary); }
+/* ---- P3: 快速录入附件与模型选择器（v1.15.1） ---- */
+.wb-quick-attach-rail { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.wb-quick-attach-item { position: relative; display: flex; align-items: center; gap: 6px; max-width: 240px; padding: 6px 26px 6px 8px; border: 1px solid var(--wb-border, rgba(127,127,127,.18)); border-radius: 8px; background: color-mix(in srgb, var(--dsw-alias-label-primary, #888) 5%, transparent); font-size: 12px; color: var(--dsw-alias-label-primary); }
+.wb-quick-attach-item img { width: 36px; height: 36px; object-fit: cover; border-radius: 6px; flex: none; }
+.wb-quick-attach-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wb-quick-attach-remove { position: absolute; top: 2px; right: 2px; width: 18px; height: 18px; line-height: 1; border: 0; border-radius: 50%; background: transparent; color: var(--dsw-alias-label-secondary); cursor: pointer; font-size: 14px; }
+.wb-quick-attach-remove:hover { background: color-mix(in srgb, #e74c3c 22%, transparent); color: inherit; }
+.wb-quick-attach-note { margin-top: 6px; font-size: 12px; color: #e0a030; }
+.wb-quick-actions { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+.wb-quick-actions .wb-spacer { flex: 1; }
+.wb-model-menu { position: absolute; left: 0; bottom: calc(100% + 4px); z-index: 30; width: 320px; max-height: 360px; overflow-y: auto; padding: 6px; border: 1px solid var(--wb-border, rgba(127,127,127,.22)); border-radius: 10px; background: var(--dsw-alias-bg-layer-2, #1c1c1f); box-shadow: 0 12px 32px rgba(0,0,0,.45); }
+.wb-model-group-title { padding: 4px 8px; font-size: 11px; font-weight: 700; color: var(--dsw-alias-label-secondary); }
+.wb-model-option { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 9px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: inherit; font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+.wb-model-option:hover { background: color-mix(in srgb, var(--dsw-alias-label-primary, #fff) 7%, transparent); }
+.wb-model-option.selected { background: color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 14%, transparent); border-color: color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 34%, transparent); }
+.wb-model-option-main { min-width: 0; flex: 1; }
+.wb-model-option-name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wb-model-option-note { display: block; font-size: 11px; color: var(--dsw-alias-label-secondary); }
+.wb-model-option-note.warn { color: #e0a030; }
+.wb-model-menu-empty { padding: 8px 10px; font-size: 12px; color: var(--dsw-alias-label-secondary); }
+.wb-model-menu-error { padding: 8px 10px; font-size: 12px; color: #e74c3c; }
 .wb-event-group-date { display: flex; align-items: center; gap: 8px; margin: 10px 0 4px; font-size: 12px; font-weight: 700; color: var(--dsw-alias-label-secondary); }
 .wb-event-group-date::after { content: ''; flex: 1; height: 1px; background: var(--wb-border-soft, rgba(127,127,127,.16)); }
 .wb-event-row { display: flex; align-items: flex-start; gap: 8px; padding: 5px 0; font-size: 12px; color: var(--dsw-alias-label-secondary); }

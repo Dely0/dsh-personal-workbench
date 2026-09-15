@@ -1,17 +1,22 @@
 /**
- * 路由层共享工具：请求围栏、响应、路径、时间区间、任务序列化。
+ * 路由层共享工具：路径、时间区间、任务序列化。
  *
  * 从 routes.ts 原样抽出（不改行为），供按域拆分的路由模块共用。
  * 所有函数显式接收 db / req / res，便于单测与复用。
+ *
+ * ⚠️ v1.15.1：请求围栏（`isLoopbackRequest` / `writeJson` / `readJsonBody`）已迁到
+ * `src/api/http.ts`，这里**只做再导出**，让既有 `from './helpers.js'` 的调用点不必改动。
+ * 原地再写一份实现正是"同一个语义两处实现"，由 `test/httpFence.test.mjs` 扫描禁止。
  */
 import { readFile, stat } from 'node:fs/promises'
-import type { IncomingMessage, ServerResponse } from 'node:http'
 import { basename } from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
 import {
   ensureRecurringInstances, getDailyPlan, getDictionary, getTask, listTasks, localDateString,
   type ReportPeriodCode, type TaskInput,
 } from '../../db/repo.js'
+
+export { isLoopbackRequest, readJsonBody, writeJson } from '../http.js'
 
 export const TASKS_PREFIX = '/api/workbench/tasks'
 export const DRAFTS_PREFIX = '/api/workbench/drafts'
@@ -22,42 +27,6 @@ export const AI_SESSIONS_PREFIX = '/api/workbench/ai-sessions'
 export const KNOWLEDGE_PREFIX = '/api/workbench/knowledge'
 export const IDEAS_PREFIX = '/api/workbench/ideas'
 export const IDEA_CLUSTERS_PREFIX = '/api/workbench/idea-clusters'
-
-/** 只接受回环请求（同 dsh-ssh 的信任围栏）。 */
-export function isLoopbackRequest(req: IncomingMessage): boolean {
-  const address = req.socket.remoteAddress
-  if (address !== '127.0.0.1' && address !== '::1' && address !== '::ffff:127.0.0.1') return false
-  const host = req.headers.host
-  if (typeof host !== 'string') return false
-  let url: URL
-  try { url = new URL(`http://${host}`) } catch { return false }
-  if (url.hostname !== '127.0.0.1' && url.hostname !== 'localhost' && url.hostname !== '[::1]') return false
-  if (req.headers['sec-fetch-site'] === 'cross-site') return false
-  const origin = req.headers.origin
-  if (origin === undefined) return true
-  try { return new URL(origin).host === url.host } catch { return false }
-}
-
-export function writeJson(res: ServerResponse, status: number, body: unknown): void {
-  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'referrer-policy': 'no-referrer' })
-  res.end(JSON.stringify(body))
-}
-
-export async function readJsonBody(req: IncomingMessage, maxBytes = 256 * 1024): Promise<Record<string, unknown> | undefined> {
-  const chunks: Buffer[] = []
-  let size = 0
-  for await (const chunk of req) {
-    const buffer = chunk as Buffer
-    size += buffer.length
-    if (size > maxBytes) return undefined
-    chunks.push(buffer)
-  }
-  if (chunks.length === 0) return {}
-  try {
-    const parsed: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'))
-    return typeof parsed === 'object' && parsed !== null ? parsed as Record<string, unknown> : undefined
-  } catch { return undefined }
-}
 
 export const MAX_LOCAL_DOC_BYTES = 1024 * 1024
 
@@ -75,10 +44,15 @@ export function fileLinkToPath(link: string): string {
   return trimmed
 }
 
-/** 根据宿主平台把用户输入的绝对路径归一化为服务器可读路径（WSL 下 D:\Code -> /mnt/d/Code）。 */
-export function toNativePath(link: string): string {
+/**
+ * 根据宿主平台把用户输入的绝对路径归一化为服务器可读路径（WSL 下 D:\Code -> /mnt/d/Code）。
+ *
+ * @param link - `file://` URL 或绝对路径。
+ * @param platform - 宿主平台（默认 `process.platform`；显式传入便于单测）。
+ */
+export function toNativePath(link: string, platform: string = process.platform): string {
   let path = fileLinkToPath(link)
-  if (process.platform !== 'win32' && /^[A-Za-z]:[\\/]/.test(path)) {
+  if (platform !== 'win32' && /^[A-Za-z]:[\\/]/.test(path)) {
     const match = /^([A-Za-z]):[\\/]?(.*)$/.exec(path)
     if (match !== null) {
       const drive = match[1].toLowerCase()
@@ -87,6 +61,21 @@ export function toNativePath(link: string): string {
     }
   }
   return path
+}
+
+/**
+ * 把**已经拼好的**路径按宿主平台归一化（不做 `file://` 解析）。
+ *
+ * fresh-eyes 审查 F5：`/workbench` 命令侧用 `node:path.join` 拼出 `D:\DSHWorkspace\<id>-<标题>`
+ * 之后直接 `mkdirSync` 并写进提示词，而客户端那条链路算的是 `/mnt/d/DSHWorkspace/...` ——
+ * 同一台 WSL 宿主上两条入口给出**形态不同**的路径，`mkdirSync` 会在当前目录
+ * 建出一个名叫 `D:\DSHWorkspace` 的单层目录。这里复用**同一份**归一化实现（不另写一套）。
+ *
+ * @param path - 已拼好的路径。
+ * @param platform - 宿主平台（默认 `process.platform`；显式传入便于单测）。
+ */
+export function normalizeHostPath(path: string, platform: string = process.platform): string {
+  return toNativePath(path, platform)
 }
 
 export function pathSegments(url: URL, prefix: string): string[] {

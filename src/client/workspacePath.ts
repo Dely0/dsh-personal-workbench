@@ -47,3 +47,38 @@ export function joinPath(base: string, folder: string, separator: '/' | '\\' = '
 export function isWslStylePath(input: string): boolean {
   return input.startsWith('/') && !/^[A-Za-z]:[\\/]/.test(input)
 }
+
+/**
+ * 归一化一个路径用于**比较**：统一分隔符、去掉结尾分隔符、小写。
+ *
+ * 额外把 Windows 盘符形态也映射成 WSL 形态，并**两个键都参与比较**，
+ * 覆盖"宿主跑在 WSL、设置里填的是 `D:\...`"这类混写（本机真实存在）。
+ *
+ * ⚠️ 这是**路径比较的唯一实现**：工作区筛选（`intakeWorkspace.ts`）与
+ * 任务资料夹判定（`taskFolder.ts`）都必须用它，不要在各自模块里再写一套
+ * （2026-09-16 fresh-eyes 审查把两处各一份比较逻辑列为"同一个语义两处实现"）。
+ */
+export function workspacePathKeys(path: string): string[] {
+  const trimmed = String(path ?? '').trim()
+  if (trimmed === '') return []
+  const keys = new Set<string>()
+  const add = (value: string): void => {
+    const normalized = value.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+    if (normalized !== '') keys.add(normalized)
+  }
+  add(trimmed)
+  if (!isWslStylePath(trimmed) && /^[A-Za-z]:[\\/]/.test(trimmed)) add(normalizeWindowsPathToWsl(trimmed))
+  return [...keys]
+}
+
+/** `path` 是否位于 `root` 之下（含 root 自身）；`root` 为空则恒为 false。 */
+export function pathIsUnderRoot(path: string, root: string): boolean {
+  const rootKeys = workspacePathKeys(root)
+  if (rootKeys.length === 0) return false
+  for (const pathKey of workspacePathKeys(path)) {
+    for (const rootKey of rootKeys) {
+      if (pathKey === rootKey || pathKey.startsWith(`${rootKey}/`)) return true
+    }
+  }
+  return false
+}

@@ -82,7 +82,7 @@ async function withServer(fn, options = {}) {
       }
     }
     const text = await res.text()
-    return { status: res.status, body: text === '' ? null : JSON.parse(text) }
+    return { status: res.status, body: text === '' ? null : JSON.parse(text), headers: res.headers }
   }
   try {
     await fn({ db, request })
@@ -625,3 +625,105 @@ test('复盘确认传 memoryEnabled:false 时不写记忆（用户取消勾选�
     assert.equal(confirm.body.memory.enabled, false, '取消勾选时 enabled 必须是 false')
   })
 })
+
+// ---------------------------------------------------------------------------
+// v1.15.1：请求围栏的安全头 + 两个新端点（快录附件解析、模型输入能力）
+// ---------------------------------------------------------------------------
+
+test('http：所有工作台响应都带 no-store / nosniff / no-referrer', async () => {
+  await withServer(async ({ request }) => {
+    for (const [method, path] of [['GET', '/api/workbench/health'], ['GET', '/api/workbench/bootstrap']]) {
+      const res = await request(method, path)
+      assert.equal(res.status, 200)
+      assert.equal(res.headers.get('cache-control'), 'no-store', `${path} 缺 no-store（用户私有数据不能被缓存）`)
+      assert.equal(res.headers.get('x-content-type-options'), 'nosniff', `${path} 缺 nosniff`)
+      assert.equal(res.headers.get('referrer-policy'), 'no-referrer', `${path} 缺 referrer-policy`)
+    }
+    // 错误响应（4xx）也要带同一套头 —— 头是在 writeJson 里统一加的
+    const denied = await request('GET', '/api/workbench/nope')
+    assert.equal(denied.status, 404)
+  })
+})
+
+test('quick-attachments：DOCX 抽正文走 HTTP，超限返回 413 中文原因', async () => {
+  await withServer(async ({ request }) => {
+    // 直接复用被测代码的 DOCX 构造：一个只含一段文字的合法 docx
+    const { deflateRawSync } = await import('node:zlib')
+    const docx = buildMinimalDocx(deflateRawSync(Buffer.from('<w:p><w:r><w:t>HTTP 抽取</w:t></w:r></w:p>', 'utf8')))
+    const ok = await request('POST', '/api/workbench/quick-attachments/extract-text', {
+      name: 'a.docx', mediaType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      data: docx.toString('base64'),
+    })
+    assert.equal(ok.status, 200)
+    assert.equal(ok.body.ok, true)
+    assert.match(ok.body.content, /HTTP 抽取/)
+    assert.equal(ok.body.truncated, false)
+
+    // 非法 base64 → 400 + 中文原因
+    const bad = await request('POST', '/api/workbench/quick-attachments/extract-text', { name: 'a.docx', data: '!!!' })
+    assert.equal(bad.status, 400)
+    assert.match(bad.body.error, /base64/)
+
+    // 不支持的容器 → 400 + 中文原因
+    const txt = await request('POST', '/api/workbench/quick-attachments/extract-text', {
+      name: 'a.txt', mediaType: 'text/plain', data: Buffer.from('hello').toString('base64'),
+    })
+    assert.equal(txt.status, 400)
+    assert.match(txt.body.error, /仅支持 PDF 和 DOCX/)
+
+    // 路由不存在 → 404
+    const notFound = await request('POST', '/api/workbench/quick-attachments/nope', {})
+    assert.equal(notFound.status, 404)
+  })
+})
+
+test('model-modalities：拿不到 llm 时 available:false；拿得到时给出能力映射', async () => {
+  await withServer(async ({ request }) => {
+    const absent = await request('GET', '/api/workbench/model-modalities')
+    assert.equal(absent.status, 200)
+    assert.equal(absent.body.available, false, '缺 llm 服务是"增强不可用"，不是错误')
+    assert.deepEqual(absent.body.models, [])
+  })
+  await withServer(async ({ request }) => {
+    const present = await request('GET', '/api/workbench/model-modalities')
+    assert.equal(present.body.available, true)
+  }, {
+    deps: {
+      llmModalities: () => ({
+        listProviders: () => [{ id: 'deepseek-official' }],
+        listModels: async () => [
+          { id: 'deepseek-flash', inputModalities: ['text', 'image'] },
+          { id: 'deepseek-v4-flash', inputModalities: ['text'] },
+        ],
+      }),
+    },
+  })
+})
+
+/** 组装一个最小合法 DOCX（zip：本地头 + 压缩数据 + 中央目录 + EOCD）。 */
+function buildMinimalDocx(compressed) {
+  const name = Buffer.from('word/document.xml', 'utf8')
+  const head = Buffer.alloc(30)
+  head.writeUInt32LE(0x04034b50, 0)
+  head.writeUInt16LE(20, 4)
+  head.writeUInt16LE(8, 8)
+  head.writeUInt32LE(compressed.length, 18)
+  head.writeUInt16LE(name.length, 26)
+  const local = Buffer.concat([head, name, compressed])
+  const central = Buffer.alloc(46)
+  central.writeUInt32LE(0x02014b50, 0)
+  central.writeUInt16LE(20, 4)
+  central.writeUInt16LE(20, 6)
+  central.writeUInt16LE(8, 10)
+  central.writeUInt32LE(compressed.length, 20)
+  central.writeUInt32LE(compressed.length, 24)
+  central.writeUInt16LE(name.length, 28)
+  const centralDir = Buffer.concat([central, name])
+  const eocd = Buffer.alloc(22)
+  eocd.writeUInt32LE(0x06054b50, 0)
+  eocd.writeUInt16LE(1, 8)
+  eocd.writeUInt16LE(1, 10)
+  eocd.writeUInt32LE(centralDir.length, 12)
+  eocd.writeUInt32LE(local.length, 16)
+  return Buffer.concat([local, centralDir, eocd])
+}

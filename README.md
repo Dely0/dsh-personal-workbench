@@ -51,10 +51,24 @@ Turn your DSH into a **calendar + task list + AI assistant workbench**.
 - 无限层级子任务；今日 / 日历 / 列表三种视图
 - 任务页筛选/排序：关键词（标题/描述）+ 状态/优先级/类型下拉多选可组合筛选；支持截止时间/优先级/创建时间/标题升降序；筛选保留父子层级，归档列表共用
 - 任务类型、状态、优先级全部由字典表驱动，可自行扩展（设置页“字典管理”已支持新增/编辑/停用类型、状态、优先级、点子类型，默认项受保护）
+- **任务资料夹（1.15.1 起的新口径）**：任务没填工作区时，资料夹名用 **`<任务ID>-<标题片段>`** 而不是标题 ——
+  改标题不再留下孤儿目录、同名任务不再挤同一目录、标题里的特殊字符也不再直接变成目录名。
+  判定只看 **ID 前缀**；用户**手填**的工作区**永不改写**（老口径的标题型路径仍能被识别为自动路径，
+  见 `docs/releases/v1.15.1.md` 第 1 节）
 - 已完成 / 已取消任务不可再次执行
 
 ### AI
-- **快速录入澄清**：一句话 → 官方会话区进行需求澄清 → 生成待确认草稿
+- **快速录入澄清**：一句话 → 官方会话区进行需求澄清 → 生成待确认草稿。
+  可同时附带**图片（PNG/JPEG/WebP/GIF，最多 10 张）**与 **PDF / DOCX（最多 4 份、单份 ≤ 5MB，
+  正文由服务端抽取后随提示词一起交给 AI）**；也能直接**粘贴或拖入**。
+  拖入不支持的文件、超过大小/份数上限时**逐条给出中文原因**，不会静默丢弃
+- **模型选择器（快速录入内）**：为本次澄清会话选模型（含 reasoning effort）。
+  宿主目录里**没有**模型的"收不收图"信息，所以由工作台补一张能力对照表：
+  选中**未声明 image** 的模型还带了图，会在**发送前**给出可读中文拒绝
+  （否则宿主会把图片悄悄换成一行占位文字，AI 根本看不到图）
+- **`/workbench` 斜杠命令**：在官方输入框打 `/` 就能看到 **workbench**（走宿主原生命令注册，
+  因此**进原生 `/` 菜单**）；执行后当前会话直接进入澄清流程。
+  命令侧会先按 `<任务ID>-<标题片段>` 建好任务资料夹，并把同一个 id 写进提示词
 - **AI 咨询**：对任务提问、要建议（不执行）
 - **AI 拆解**：生成子任务提案树，确认后落库
 - **AI 执行**：任意节点（含父任务）且 AI 策略为“可执行”时均可执行；AI 完成后提交验收申请，用户验收后才算完成；父任务验收通过时未完成子任务会级联完成
@@ -81,6 +95,12 @@ Turn your DSH into a **calendar + task list + AI assistant workbench**.
 ### 数据与安全
 - SQLite（`~/.dsh/workbench/workbench.db`）+ 每日 JSON 备份规划
 - 所有工作台 API 均挂载在 `/api/workbench/*` 且仅允许 loopback 访问
+- **请求围栏只有一份实现**（`src/api/http.ts`：loopback 判定 + 响应 + 体积上限在流式读取途中拦截），
+  并有源码扫描测试证明"不存在第二处实现"（原先四份逐字相同的副本，改一处就会漏掉另外三处）
+- 所有工作台响应带 `cache-control: no-store` 与 `x-content-type-options: nosniff`
+  （返回的是用户私有数据，不该被缓存；也不该让浏览器按内容猜 MIME）
+- 附件解析带**解压炸弹护栏**：解压前按声明值拦、解压时 `maxOutputLength`、解压后复核实际长度；
+  base64 走 canonical 校验（宽松解码会静默丢弃非法字符）
 - 不读取、不上传 DSH 之外的任何数据
 
 ## 安装
@@ -246,9 +266,16 @@ dsh plugin --profile web add link:/path/to/dsh-personal-workbench
 这条规则来自三次真实事故：v1.10.1 的 `uiWorkspace`、v1.13.0 的 `runtime.slots`、
 v1.13.3 的再次根治；v1.13.1 的标题栏入口则是因为直接读 `ctx.slots` 而崩。
 
-**边界要分清**：`slots` / `layout` 是**面板功能的前置条件**，
+**边界要分清**：`slots` / `layout` / `commands` 是**前置条件**，
 所以它们进 `inject` —— 拿不到就整块不启动（明说原因），而不是偷偷降级；
-`uiWorkspace` / `dshIm` / `skills` 是**可选增强**，一律软探测、缺了只是少一个能力。
+`uiWorkspace` / `dshIm` / `skills` / `modelDirectories` / `llm` 是**可选增强**，一律软探测、缺了只是少一个能力。
+
+> ⚠️ 一个容易搞反的点：`ctx.get('x')` 的确**不需要**把 `x` 写进 `inject`（cordis 的 `get` 文档原话是
+> "without the inject requirement"；会抛 `cannot get property "x" without inject` 的是**代理属性访问**那条路）。
+> 但**服务端与客户端同一个 `get` 语义下，只有当提供方 fiber 处于活动态时才拿得到** ——
+> 所以"要不要进 inject"仍应按上面这两级来分：缺了功能就不成立的进，
+> 只是锦上添花的软探测（`modelDirectories` 就是后者：写进 `inject` 会让没装
+> `dsh-client-ui-model-selection` 的机器上**整个面板 pending**，丢整块换一个下拉框）。
 
 ### 其它
 
@@ -279,16 +306,23 @@ v1.13.3 的再次根治；v1.13.1 的标题栏入口则是因为直接读 `ctx.s
    仍断言那些已删除的行为，**跑起来会失败但那是假失败**，别当成回归。
    `verify-acceptance.mjs` 里示范了正确做法（反转判据 + 写清原因）。
 2. **客户端改动必须重启 `dsh web` 才生效** —— 不是"刷新页面即可"。
-   `dsh-client-modules` 的 `bundleResource()` 只从宿主**启动时**建好的内存 Map 取 bundle，
-   所以改完要走：改版本号 → `pnpm build` → `pnpm pack` → `dsh plugin add <新 tgz>` → 重启。
+   `dsh-client-modules` 的 `bundleResource()` 只从宿主**启动时**建好的内存 Map 取 bundle。
+   本地迭代走 `node scripts/dev-install.mjs --apply`（构建 → 打包到**带构建戳的新路径** →
+   装盘 → 三道门禁），**不要再改 `package.json` 的 version**（版本号只在发布时增长）；
+   装完重启 `dsh web` 并硬刷新浏览器。
+   ⚠️ 装盘产物是否真的刷新，**只信** `node scripts/check-installed-fingerprint.mjs`（逐文件 SHA256）：
+   实测**同一 `file:` 路径**下 pnpm 会复用已解包的文件（锁文件 integrity 变了、`lib/` 还是旧的），
+   所以每次装盘都要落到一个没装过的新路径。
 
 ## 版本历史
 
-> 详细发行说明（含依赖/支持边界、验收证据、踩坑记录）：**[`docs/releases/v1.14.57.md`](docs/releases/v1.14.57.md)**；
+> 详细发行说明（含依赖/支持边界、验收证据、踩坑记录）：**[`docs/releases/v1.15.1.md`](docs/releases/v1.15.1.md)**；
 > 更早的见 [`docs/releases/`](docs/releases/)。
 
 | 版本 | 要点 |
 |---|---|
+| **1.15.1** | **任务资料夹改用 `<任务ID>-<标题片段>`**（旧口径按标题：改标题成孤儿、同名挤一个目录、特殊字符变目录名），澄清阶段**先预留任务 ID** 并复用它落库；**不再为每个任务注册 AI 工作区**（会话用当前工作区 + 提示词声明资料夹，避免宿主工作区列表被任务撑爆）；**老路径兼容**判据必须带"位于默认根目录之下"这条旁证（否则手填目录会被当成自动路径改写，且本机 3 条标题型老路径会永远不再迁移）。新增：快速录入**图片（走宿主原生多模态）与 PDF/DOCX 附件**（不收的文件逐条给原因）、**模型选择器**（未声明 image 的模型在**发送前**给可读拒绝，而不是让宿主静默把图换成占位文字）、**`/workbench` 斜杠命令**（进原生 `/` 菜单，执行后当前会话进入澄清流程）。修：**任务没填路径时会话挂到无关工作区**（原 `ws.items[0]`，最坏会把文件建进别的任务目录）、**PDF 文本抽取的 O(n²) 灾难性回溯**（3 KB 恶意 pdf 可让整个 dsh web 无响应，由独立审查发现）、解压超限回 zlib 英文原文、预分配任务 id 不校验（非法 id 落库 / 重复 id 抛英文 SQL）、`/workbench` 侧未做 WSL 路径归一化。四份重复的请求围栏合并成一份并加 `no-store` / `nosniff`。用例 168 → 240。 |
+| **1.15.0** | 让 dsh-market 能装上、能统计（补 `repository` 字段，市场靠它把 npm 包映射回仓库）；本地迭代**不再消耗公开版本号**（身份交给带构建戳的包路径，新增 `scripts/dev-install.mjs`）；修 CI 长期红（两条测试依赖开发机环境）与 `check-installed-version.mjs` 的 `file:` 形态空转 |
 | **1.14.57** | **架构重构三阶段完成，只支持 DSH 新版（最低 `0.1.5-rc.1`）**：① 抽出 `panelState.ts` —— 面板可见性的**唯一权威源**（原先把同一语义写了 5 遍、读的输入还不同，bug 2/6/9 都出在这里），决策表 5 行穷举并有表驱动单测 + 源码级断言"不许再内联判定"；② **删除 DOM 降级腿与家族互斥**（不再往宿主侧栏注入入口行、不再自建覆盖层容器、不再读写兄弟插件的 `data-dsh-*`、不再广播 `dsh-panel-activate`）——`entryContract.ts` 652→145 行、`index.tsx` 4109→3795 行，新增 I4/I5/I6 源码扫描测试；③ 新增 `capabilities.ts` 能力门槛（`inject` 精确 5 项、缺能力时**明确不启动并打可读日志**，不再"半死不活地降级"），README 写清最低版本与冲突政策。另修：点「回到会话」后弹框要等 5 秒轮询才消失（改为同一帧收掉）。出口判据：`verify-acceptance` 17/17、`verify-final-2` 9/9、`verify-sidebar-collapse` 6/6、`verify-duplicate-task` 11/11 |
 | **1.14.51** | 修复「快速录入 → AI 执行 → 验收后，待处理里多出一条**同名重复任务**」：根因是 `withDraftConfirm()` 不校验草稿状态也不记录产出（同一条 task 草稿确认两次就建出两条任务），且 `confirmTaskDraft()` 没有同父同名幂等。现在确认会把产出回写草稿并支持**回放**（同一条草稿绝不会产出两个任务）；跨草稿同名**只告警不静默合并**（新增「库里已经有一条同名任务」选择框：保留两条 / 就用已有那条并归档多建的）；`workbench_submit_task` 在当前会话就是该任务关联会话时直说"几乎肯定是重复录入" |
 | **1.14.10** | 修复**在官方 `main` 槽位里自建独立 React root** 引发的连串问题（弹框反复重挂 → 背景一顿一顿变黑、按钮要点两次、`inactive context` 报错、同一构建下部分 App 窗口整片黑）：官方槽位里改为**直接返回 `WorkbenchApp`**、生命周期交给宿主 reconciler（与宿主自带弹框一致）；面板容器改 `position:absolute; inset:0`，不再依赖宿主高度链；新增**可见性自查**（激活时容器持续 0 尺寸就自动切覆盖层）。顺带移除上一版引入的"自愈复核"（它会在注册其实成功时撤销注册，导致侧栏出现两行入口）与 generator 形式的 `slots.inject`（本宿主的 cordis 不支持，注册不生效） |
@@ -323,6 +357,7 @@ v1.13.3 的再次根治；v1.13.1 的标题栏入口则是因为直接读 `ctx.s
 - [x] V2：UI 视觉层重构 + 点子文件夹 + 官方槽位入口（1.13.x）
 - [x] V2：提醒状态语义修复（窗口/终态分离 + 重新武装）（1.13.2）
 - [x] V2：侧栏入口迁移到官方槽位 + 改父任务 + 草稿暂存推广（1.14.0）
+- [x] V2：**任务资料夹改口径（`<任务ID>-<标题片段>`）+ 快录附件（图片 / PDF / DOCX）+ 模型选择器 + `/workbench` 命令**（1.15.1）
 - [ ] 待规划：客户端 `WorkbenchApp` 拆分（施工图见 `docs/design/2026-09-09-client-split-backlog.md`）
 - [ ] V2：定时自动化
 - [ ] 未来：多端同步、任务拖拽排序、数据导入导出
@@ -346,10 +381,16 @@ v1.13.3 的再次根治；v1.13.1 的标题栏入口则是因为直接读 `ctx.s
 ## What is this
 
 `dsh-personal-workbench` is a personal workbench plugin for DeepSeek Harness Web:
-calendar + hierarchical task list, natural-language task intake with AI clarification,
-multiple AI sessions per task (clarify / consult / break down / execute / review),
-execution with user acceptance, AI prioritization for any date, daily/weekly reports,
-desktop notifications, per-task AI workspaces, reminders, archives, and Markdown reviews.
+calendar + hierarchical task list, natural-language task intake with AI clarification
+(text plus **image / PDF / DOCX attachments**, an optional **model picker**, and a native
+**`/workbench`** slash command), multiple AI sessions per task (clarify / consult / break
+down / execute / review), execution with user acceptance, AI prioritization for any date,
+daily/weekly reports, desktop notifications, per-task task folders, reminders, archives,
+and Markdown reviews.
+
+Task folders are named `<task-id>-<title-snippet>` (the ID is the stable part), so renaming a
+task never orphans its folder and two tasks with the same title never share one. Folders you
+type by hand are never rewritten.
 
 All task data is stored locally under `~/.dsh/workbench`.
 

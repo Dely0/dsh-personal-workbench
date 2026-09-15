@@ -5,7 +5,7 @@
  *  - AI 澄清/咨询/拆解统一跳官方会话区；工作台侧边栏显示待确认草稿红点
  */
 import { createRoot, type Root } from 'react-dom/client'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import {
   buildTaskTree,
   countTaskTreeBy,
@@ -47,15 +47,277 @@ import { Icon } from './components/Icon.js'
 import { Badge, MultiSelectDropdown, TaskTreeRows, countTaskTree } from './components/TaskList.js'
 import { PlanPanel } from './components/PlanPanel.js'
 import {
-  clientFileLinkToPath, draftKindLabel, eventIcon, eventLabel, fmtTime, folderForText, localDateString,
+  clientFileLinkToPath, draftKindLabel, eventIcon, eventLabel, fmtTime, localDateString,
   roleLabel, sameDay, shortId, startOfDay, startOfWeek, toLocalInput,
 } from './format.js'
 import type {
   Bootstrap, DailyPlanItemView, DailyPlanView, Dict, DshSessionListState, DshSessionSummary, Idea, IdeaClusterView,
-  KnowledgeEntry, SessionDriver, Task, TaskDetail, TaskReportView, WorkbenchRuntime,
+  KnowledgeEntry, ModelDirectoryRuntime, ModelDirectoryState, ModelProviderGroup, PromptContentPart, QuickModelSelection,
+  SessionDriver, Task, TaskDetail, TaskReportView, WorkbenchRuntime,
 } from './viewTypes.js'
+import {
+  buildQuickIntakePrompt, isQuickImageDraft, MAX_QUICK_DOCUMENTS, MAX_QUICK_IMAGES,
+  partitionQuickFiles, type QuickAttachmentDraft, type QuickDocumentDraft, type QuickImageDraft,
+  type QuickImageMediaType,
+} from './quickAttachments.js'
+import {
+  classifyTaskWorkspacePath, isAutoTaskWorkspacePath, taskWorkspaceFolderName,
+} from './taskFolder.js'
+import { pickIntakeWorkspace } from './intakeWorkspace.js'
+import {
+  effectiveSelection, evaluateImageSupport, gateModelPicker, indexModalities, type ModelModalityRecord,
+} from './modelCapability.js'
 
 const CSS = WORKBENCH_CSS
+
+/** 快速录入模型选择的 localStorage 键（本仓自己的前缀，不与 fork 混用）。 */
+const QUICK_MODEL_STORAGE_KEY = 'dsh-personal-workbench.quickModelSelection'
+
+/** 目录还没加载出来时的空快照（`useSyncExternalStore` 的服务端/初始值）。 */
+const EMPTY_MODEL_DIRECTORY_STATE: ModelDirectoryState = { current: null, groups: [], failures: [], status: 'idle', error: null }
+
+/**
+ * 生成一个任务 id。
+ *
+ * 澄清阶段要**提前**拿到 id（用它建任务资料夹、写进提示词），
+ * 所以不能等仓储层生成。优先 `crypto.randomUUID()`（与库里的形态一致），
+ * 老浏览器/非安全上下文退回时间戳+随机串。
+ */
+function newTaskId(): string {
+  const cryptoObj = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto
+  if (typeof cryptoObj?.randomUUID === 'function') return cryptoObj.randomUUID()
+  return `task-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+}
+
+/** 读回上次选的模型（脏值一律当"没选过"，不让一个坏字符串把快速录入打挂）。 */
+function readQuickModelSelection(): QuickModelSelection | null {
+  try {
+    const raw = localStorage.getItem(QUICK_MODEL_STORAGE_KEY)
+    if (raw === null) return null
+    const value = JSON.parse(raw) as Partial<QuickModelSelection>
+    if (typeof value.provider !== 'string' || value.provider === '') return null
+    if (typeof value.model !== 'string' || value.model === '') return null
+    return {
+      provider: value.provider,
+      model: value.model,
+      label: typeof value.label === 'string' && value.label !== '' ? value.label : `${value.provider}/${value.model}`,
+      ...(typeof value.reasoningEffort === 'string' && value.reasoningEffort !== '' ? { reasoningEffort: value.reasoningEffort } : {}),
+      ...(typeof value.effortLabel === 'string' && value.effortLabel !== '' ? { effortLabel: value.effortLabel } : {}),
+    }
+  } catch { return null }
+}
+
+function writeQuickModelSelection(selection: QuickModelSelection | null): void {
+  try {
+    if (selection === null) localStorage.removeItem(QUICK_MODEL_STORAGE_KEY)
+    else localStorage.setItem(QUICK_MODEL_STORAGE_KEY, JSON.stringify(selection))
+  } catch { /* localStorage 不可用（隐私模式）时静默降级：选择只在本次会话内有效 */ }
+}
+
+/**
+ * 取某个会话的模型目录。
+ *
+ * ⚠️ `modelDirectories` 走 **`ctx.get` 软探测**（见 `viewTypes.ts` 里那段决策说明），
+ * 绝不写进 `inject`：它是另一个客户端插件提供的可选增强，缺了只是少一个下拉框，
+ * 写进 `inject` 会让那种机器上**整个工作台面板 pending**。
+ *
+ * 拿不到/抛错一律返回 undefined，由调用点决定"是提示还是放行"。
+ */
+function resolveModelDirectory(runtime: WorkbenchRuntime, sessionId: string): ModelDirectoryRuntime | undefined {
+  if (sessionId === '') return undefined
+  const service = optionalService<{ directoryFor?: (id: string) => ModelDirectoryRuntime }>(pluginCtx, 'modelDirectories')
+    ?? (() => { try { return runtime.modelDirectories } catch { return undefined } })()
+  if (service === undefined || service === null || typeof service.directoryFor !== 'function') return undefined
+  try { return service.directoryFor(sessionId) } catch { return undefined }
+}
+
+/** 拉一次"模型 → 输入能力"对照表；失败返回空表（不拦，交给宿主原生兜底）。 */
+async function loadModelModalityTable(): Promise<ReadonlyMap<string, readonly string[] | null>> {
+  try {
+    const res = await api<{ ok: boolean; models?: ModelModalityRecord[] }>('/api/workbench/model-modalities')
+    return indexModalities(res.models ?? [])
+  } catch { return new Map() }
+}
+
+/** 图片文件 → 宿主 `PromptContentPart`（base64 不带 data URL 前缀）。 */
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      const result = typeof reader.result === 'string' ? reader.result : ''
+      const comma = result.indexOf(',')
+      if (comma < 0) reject(new Error('图片读取失败'))
+      else resolve(result.slice(comma + 1))
+    }
+    reader.onerror = () => reject(reader.error ?? new Error('图片读取失败'))
+    reader.readAsDataURL(file)
+  })
+}
+
+async function quickImageToPromptPart(image: QuickImageDraft): Promise<PromptContentPart> {
+  const mediaType = (['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(image.file.type)
+    ? image.file.type
+    : 'image/png') as QuickImageMediaType
+  return {
+    type: 'image',
+    mediaType,
+    data: await fileToBase64(image.file),
+    ...(image.file.name === '' ? {} : { name: image.file.name }),
+  }
+}
+
+/**
+ * 快速录入的模型选择器（v1.15.1）。
+ *
+ * ## 设计要点（相对 fork 那份的三处修正）
+ *
+ * 1. **列表与选中来自同一个 authority**：列表读 `modelDirectories.directoryFor(会话)` 的
+ *    快照，选中也走**同一个** directory 的 `select()`；
+ * 2. 选中值存 localStorage 时带 **reasoning effort**（取 `model.reasoning.defaultEffort`）；
+ * 3. 目录里**没有** `inputModalities`，所以"这个模型收不收图"由 `modalityTable`
+ *    （宿主 `/model-modalities`）标注出来 —— 用户的痛点正是"选到不收图的模型，图片白传"。
+ *
+ * ⚠️ 目录服务缺失时**不静默降级**：按钮照常显示，点击给出可读原因
+ * （"当前 DSH 未提供模型选择接口"），而不是变成一个点了没反应的控件。
+ */
+function QuickModelPicker({ runtime, value, onChange, modalityTable, disabled, onError, onLoaded }: {
+  runtime: WorkbenchRuntime
+  value: QuickModelSelection | null
+  onChange: (selection: QuickModelSelection | null) => void
+  modalityTable: ReadonlyMap<string, readonly string[] | null>
+  disabled?: boolean
+  onError: (message: string) => void
+  onLoaded: () => void
+}): JSX.Element {
+  const [open, setOpen] = useState(false)
+  const [loading, setLoading] = useState(false)
+  const sessionsState = safeService<WorkbenchRuntime['sessions']>(runtime, 'sessions')?.list?.getSnapshot?.()
+  const directorySessionId = sessionsState?.current ?? sessionsState?.ids?.[0] ?? ''
+  /**
+   * ⚠️ **不许用 `open ? resolveModelDirectory(...) : undefined` 做惰性解析**（v1.15.2 修的真 bug）。
+   *
+   * `openPicker()` 用 `directory === undefined` 判定"宿主没提供这个服务"，
+   * 而它**同时**负责把 `open` 置真 —— 于是第一次点击时 `open` 还是 `false`、
+   * `directory` 必然是 `undefined`，**必然**走进"未提供模型选择接口"分支：
+   * 一个自我实现的假失败，宿主有没有这个服务都一样。
+   *
+   * 教训（写进规矩）：**可用性判定不许依赖它自己要控制的状态**。
+   * 这里也**不需要**惰性：`directoryFor()` 只是宿主内部 Map 的一次查询，
+   * 且本组件只存在于「快速录入」弹窗里（弹窗关闭时根本不渲染）。
+   */
+  const directory = useMemo(
+    () => resolveModelDirectory(runtime, directorySessionId),
+    [runtime, directorySessionId],
+  )
+  const subscribe = useCallback(
+    (listener: () => void) => (directory === undefined ? () => undefined : directory.store.subscribe(listener)),
+    [directory],
+  )
+  const getSnapshot = useCallback(
+    () => (directory === undefined ? EMPTY_MODEL_DIRECTORY_STATE : directory.store.getSnapshot()),
+    [directory],
+  )
+  const state = useSyncExternalStore(subscribe, getSnapshot, () => EMPTY_MODEL_DIRECTORY_STATE)
+  const selectedLabel = useMemo(() => {
+    if (value === null) return '跟随 DSH 默认模型'
+    for (const group of state.groups) {
+      if (group.id !== value.provider) continue
+      const model = group.models.find((item) => item.id === value.model)
+      if (model !== undefined) {
+        const effort = model.reasoning?.efforts.find((item) => item.id === value.reasoningEffort)
+        return effort === undefined ? model.name : `${model.name} · ${effort.name}`
+      }
+    }
+    return value.effortLabel === undefined ? value.label : `${value.label} · ${value.effortLabel}`
+  }, [state.groups, value])
+  const openPicker = (): void => {
+    if (open) { setOpen(false); return }
+    const gate = gateModelPicker({ hasDirectory: directory !== undefined, sessionId: directorySessionId })
+    if (!gate.ok) {
+      const message = `${gate.reason}；本次会话将跟随 DSH 默认模型。`
+      // 控制台也留一条（用户截图看不到 console，但排查时这一步能直接定位）
+      console.warn(`[workbench] 模型选择器不可用：${message}`)
+      onError(message)
+      return
+    }
+    if (directory === undefined) return
+    setOpen(true)
+    setLoading(true)
+    void directory.load()
+      .then(() => { onLoaded() })
+      .catch((error: unknown) => onError(error instanceof Error ? error.message : String(error)))
+      .finally(() => setLoading(false))
+  }
+  const choose = (group: ModelProviderGroup, model: ModelProviderGroup['models'][number]): void => {
+    const effortId = model.reasoning?.defaultEffort
+    const effort = model.reasoning?.efforts.find((item) => item.id === effortId)
+    onChange({
+      provider: group.id,
+      model: model.id,
+      label: model.name,
+      ...(effortId === undefined || effortId === '' ? {} : { reasoningEffort: effortId }),
+      ...(effort === undefined ? {} : { effortLabel: effort.name }),
+    })
+    setOpen(false)
+  }
+  /** 该模型是否收图（`undefined` = 对照表里没有，不做判断）。 */
+  const imageSupport = (provider: string, model: string): boolean | undefined => {
+    const key = `${provider}/${model}`
+    if (!modalityTable.has(key)) return undefined
+    const modalities = modalityTable.get(key) ?? null
+    return modalities === null ? undefined : modalities.includes('image')
+  }
+  return (
+    <div style={{ position: 'relative' }}>
+      <button type="button" className="wb-btn" disabled={disabled === true} onClick={openPicker} title="选择本次澄清会话使用的模型">
+        <Icon name="model" />{selectedLabel}<span style={{ flex: 'none' }}>{open ? '▲' : '▼'}</span>
+      </button>
+      {open && (
+        <>
+          <div style={{ position: 'fixed', inset: 0, zIndex: 20 }} onClick={() => setOpen(false)} />
+          <div className="wb-model-menu" role="listbox" aria-label="选择模型">
+            <button type="button" className={`wb-model-option${value === null ? ' selected' : ''}`} onClick={() => { onChange(null); setOpen(false) }}>
+              <span className="wb-model-option-main">跟随 DSH 默认模型</span>
+              {value === null && <Icon name="check" size={14} />}
+            </button>
+            {(loading || state.status === 'loading') && <div className="wb-model-menu-empty">正在读取模型列表…</div>}
+            {state.error !== null && <div className="wb-model-menu-error">{state.error}</div>}
+            {state.groups.map((group) => (
+              <div key={group.id}>
+                <div className="wb-model-group-title">{group.name}</div>
+                {group.models.map((model) => {
+                  const isSelected = value?.provider === group.id && value.model === model.id
+                  const effort = model.reasoning?.efforts.find((item) => item.id === model.reasoning?.defaultEffort)
+                  const supportsImage = imageSupport(group.id, model.id)
+                  return (
+                    <button key={model.id} type="button" className={`wb-model-option${isSelected ? ' selected' : ''}`} onClick={() => choose(group, model)}>
+                      <span className="wb-model-option-main">
+                        <span className="wb-model-option-name">{model.name}</span>
+                        {(effort !== undefined || supportsImage === false) && (
+                          <span className={`wb-model-option-note${supportsImage === false ? ' warn' : ''}`}>
+                            {effort === undefined ? '' : effort.name}
+                            {supportsImage === false ? `${effort === undefined ? '' : ' · '}不支持图片输入` : ''}
+                          </span>
+                        )}
+                      </span>
+                      {isSelected && <Icon name="check" size={14} />}
+                    </button>
+                  )
+                })}
+              </div>
+            ))}
+            {state.groups.length === 0 && !loading && state.status !== 'loading' && state.error === null && (
+              <div className="wb-model-menu-empty">暂无可用模型</div>
+            )}
+            {state.failures.length > 0 && (
+              <div className="wb-model-menu-empty">{state.failures.length} 个模型来源读取失败（其余仍可选）</div>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
 
 
 function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; closePanel: () => void }): JSX.Element {
@@ -78,11 +340,57 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
    * 快速录入的工作区选择（v1.14.0）。
    * - `quickWorkspace`：用户最终采用的工作区路径（空 = 交给既有隐式逻辑）。
    * - `quickWorkspaceTouched`：用户是否动过它 —— 决定来源提示显示"默认值"还是"手动指定"。
-   * - `quickFollowFolder`：勾选时按任务标题在所选工作区下建子文件夹（复刻旧默认行为）。
+   * - `quickFollowFolder`：勾选时在所选工作区下建**任务资料夹**（`<任务ID>-<标题片段>`）。
+   *   v1.15.1 起不再按标题命名（改标题会留孤儿目录、同名任务会挤同一目录）。
    */
   const [quickWorkspace, setQuickWorkspace] = useState('')
   const [quickWorkspaceTouched, setQuickWorkspaceTouched] = useState(false)
   const [quickFollowFolder, setQuickFollowFolder] = useState(false)
+  /**
+   * 快速录入的附件（v1.15.1）：图片走宿主原生多模态管线，PDF/DOCX 先由服务端抽成文本。
+   *
+   * 一次性放在一个数组里，是因为"张数上限"要**按类型分别算**
+   * （图片 10 张、文档 4 份）—— 拆成两个 state 会让上限判定分散到两处。
+   */
+  const [quickAttachments, setQuickAttachments] = useState<QuickAttachmentDraft[]>([])
+  const [quickAttachmentNotice, setQuickAttachmentNotice] = useState<string | null>(null)
+  const quickImageInputRef = useRef<HTMLInputElement>(null)
+  /**
+   * 附件列表的**写穿镜像 ref**：只给"读当前列表"用（上限判定、卸载清理）。
+   *
+   * 为什么不能直接在卸载清理里 `setQuickAttachments(...)`：那是在已卸载的组件上写状态。
+   *
+   * ⚠️ 一致性靠**构造**保证，不靠约定：下面三个写入点（`writeQuickAttachments` 唯一出口）
+   * 用**同一个数组**同时赋值 ref 与 state，所以两者不可能分叉；
+   * 也因此不需要"effect 里再同步一次"这种第二处实现。
+   */
+  const quickAttachmentsRef = useRef<QuickAttachmentDraft[]>([])
+  const writeQuickAttachments = (next: QuickAttachmentDraft[]): void => {
+    quickAttachmentsRef.current = next
+    setQuickAttachments(next)
+  }
+  const appendQuickAttachments = (drafts: QuickAttachmentDraft[]): void => {
+    writeQuickAttachments([...quickAttachmentsRef.current, ...drafts])
+  }
+  /**
+   * 快速录入澄清会话使用的模型（v1.15.1）。
+   *
+   * 选择值随会话一起应用（`directory.select`），**不写进任务字段** ——
+   * 模型是"这次会话怎么跑"，不是任务属性。
+   */
+  const [quickModelSelection, setQuickModelSelectionState] = useState<QuickModelSelection | null>(() => readQuickModelSelection())
+  const setQuickModelSelection = (selection: QuickModelSelection | null): void => {
+    setQuickModelSelectionState(selection)
+    writeQuickModelSelection(selection)
+  }
+  /**
+   * 模型 → 输入能力对照表（v1.15.1）。
+   *
+   * 浏览器侧的模型目录**没有** `inputModalities`（宿主没暴露），
+   * 所以从 `/api/workbench/model-modalities` 拉一份**只含能力**的对照表，
+   * 用来在发送前判断"选了不收图的模型还加了图"。拉不到就是空表 → 不拦（fail open）。
+   */
+  const [modelModalityTable, setModelModalityTable] = useState<ReadonlyMap<string, readonly string[] | null>>(() => new Map())
   const [pendingDraft, setPendingDraft] = useState<DraftView | null>(null)
   // 已暂存的待确认草稿：不自动弹窗，只在「待处理」弹窗里等你唤回
   const [deferredDrafts, setDeferredDrafts] = useState<DraftView[]>([])
@@ -544,9 +852,14 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
    * 之前用户在录入那一刻无法指定工作区，只能接受"父任务继承 → 否则默认工作区 +
    * 按标题建子文件夹"这套隐式规则。传了覆盖值就**逐字使用**它（含不建子文件夹），
    * 不传则行为与改动前完全一致（零回归）。
+   *
+   * `clarifyOptions`（v1.15.1）只服务于澄清流程：
+   * 图片/文档附件，以及"用户选了目录、还勾了建任务资料夹"这一种组合 ——
+   * 资料夹名由 `startAISession` 用**预留的任务 ID** 现算（调用方拿不到那个 ID）。
    */
-  const startAISession = async (mode: 'clarify' | 'consult' | 'breakdown' | 'execute' | 'review' | 'plan' | 'report' | 'idea_association' | 'idea_brainstorm' | 'knowledge_doc', task: Task | null, text: string, previousSessions: Array<Record<string, unknown>> = [], docContext?: { fileLink: string; content: string; name?: string; truncated?: boolean }, workspaceOverride?: string): Promise<void> => {
-    if (mode === 'clarify' && text.trim() === '') return
+  const startAISession = async (mode: 'clarify' | 'consult' | 'breakdown' | 'execute' | 'review' | 'plan' | 'report' | 'idea_association' | 'idea_brainstorm' | 'knowledge_doc', task: Task | null, text: string, previousSessions: Array<Record<string, unknown>> = [], docContext?: { fileLink: string; content: string; name?: string; truncated?: boolean }, workspaceOverride?: string, clarifyOptions: { attachments?: readonly QuickAttachmentDraft[]; followFolder?: boolean } = {}): Promise<void> => {
+    const attachments = clarifyOptions.attachments ?? []
+    if (mode === 'clarify' && text.trim() === '' && attachments.length === 0) return
     // 澄清会话由自然语言快速录入直接触发，不弹提示词弹窗，也不参与技能选择（保持原流程）。
     const promptInput = mode === 'clarify' ? { text: '', skills: [] as string[] } : await askUserPrompt(AI_PROMPT_LABELS[mode] ?? 'AI 会话')
     if (promptInput === null) return
@@ -591,7 +904,6 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
         }
       }
       const ws = safeService<WorkbenchRuntime['workspaces']>(runtime, 'workspaces')?.list?.getSnapshot?.() ?? { items: [] }
-      let workspaceId = ws.items[0]?.workspaceId
       /**
        * ⚠️ 与 `detectWslHost` 同一个坑（v1.14.50 一起修）：
        * `?.generation.getSnapshot()` 只保护了外层，`generation` 在低版本宿主上不存在 →
@@ -603,44 +915,128 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
         ? isWslStylePath(hostHome)
         : ws.items.some((item) => typeof item.path === 'string' && isWslStylePath(item.path))
       const pathSep = isWsl ? '/' : '\\'
-      let desired = ''
       const explicitWorkspace = workspaceOverride?.trim() ?? ''
-      if (explicitWorkspace !== '') {
-        // 用户在录入弹窗里显式选了工作区：逐字使用，不走下面任何隐式推导
-        // （也不按标题建子文件夹 —— 用户选的是"就在这个目录里做"）。
-        desired = explicitWorkspace
-      } else if (task !== null) {
-        // 有效工作区 = 自身 workspacePath，未设置时继承最近祖先的设置（与 effectiveDueAt 同构）。
-        // 继承到值就直接用，不再按任务标题建子文件夹——否则子任务会各自散到新目录里。
-        desired = task.effectiveWorkspacePath ?? ''
-        if (desired === '' && settings.defaultWorkspace !== '' && settings.autoCreateTypeFolders) {
-          desired = joinPath(settings.defaultWorkspace, folderForText(task.title), pathSep)
+
+      /**
+       * ============================================================
+       * 任务资料夹（v1.15.1，吸收 fork 的 3.1 节）
+       * ============================================================
+       *
+       * 口径变了三件事：
+       *
+       * 1. **文件夹名 = `<任务ID>-<标题片段>`**（旧口径是"按标题"）—— 改标题不再产生孤儿目录、
+       *    同名任务不再挤同一目录，判定只看 ID 前缀；
+       * 2. **澄清阶段先预留任务 ID**，用它建资料夹并写进提示词，
+       *    确认草稿时复用同一个 id（`submitTaskTool` 的 `task_id`）——
+       *    于是彻底删掉"按用户原话建文件夹"这条分支（`folderForText(text)` 等于把一句话当目录名）；
+       * 3. **不再为每个任务注册 AI 工作区**（任务一多，宿主的**工作区列表会被撑爆**）。
+       *    会话用**当前工作区**，任务资料夹只在提示词里声明。
+       *
+       * `classifyTaskWorkspacePath` 是"这条路径算不算自动生成"的**唯一权威判定**
+       * （见 `taskFolder.ts`）：只有自动路径允许被回写/迁移，用户手填的**永不触碰**。
+       */
+      const reservedTaskId = mode === 'clarify' ? newTaskId() : (task?.id ?? '')
+      const clarifyText = text.trim()
+      let taskFolderPath = ''
+      let taskFolderRelative = ''
+      if (mode === 'clarify') {
+        // 用户显式选了目录且勾了"建任务资料夹"时用所选目录，否则用默认根目录。
+        const root = explicitWorkspace !== ''
+          ? (clarifyOptions.followFolder === true ? explicitWorkspace : '')
+          : (settings.defaultWorkspace !== '' && settings.autoCreateTypeFolders ? settings.defaultWorkspace : '')
+        if (root !== '' && reservedTaskId !== '') {
+          taskFolderRelative = taskWorkspaceFolderName(reservedTaskId, clarifyText)
+          const raw = joinPath(root, taskFolderRelative, pathSep)
+          taskFolderPath = isWsl ? normalizeWindowsPathToWsl(raw) : raw
         }
-      } else if (mode === 'clarify' && settings.defaultWorkspace !== '' && settings.autoCreateTypeFolders) {
-        desired = joinPath(settings.defaultWorkspace, folderForText(text || '需求澄清'), pathSep)
-      }
-      // WSL 下把 Windows 盘符路径（D:\Code）统一归一化为真实路径（/mnt/d/Code）。
-      // 相对路径和已是 /mnt/... 的路径不会被转换；原生 Windows 上不做转换。
-      const normalizedDesired = desired === '' ? '' : isWsl ? normalizeWindowsPathToWsl(desired) : desired
-      if (normalizedDesired !== '') {
-        try {
-          await api('/api/workbench/workspaces/ensure', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ path: normalizedDesired }) })
-          const created = await safeService<WorkbenchRuntime['workspaces']>(runtime, 'workspaces')?.create?.({ path: normalizedDesired })
-          if (typeof created?.workspaceId === 'string' && created.workspaceId !== '') workspaceId = created.workspaceId
-          // 任务自身和祖先都没有工作区时，把解析出的任务文件夹回写，保证后续会话都进同一文件夹
-          if (task !== null && task.workspacePath === null && task.effectiveWorkspacePath === null && normalizedDesired !== '') {
-            void api(`/api/workbench/tasks/${task.id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ workspacePath: normalizedDesired }) }).catch(() => undefined)
+      } else if (task !== null) {
+        /**
+         * ⚠️ 判定必须带上 `tasksRoot`（fresh-eyes 审查 F2）：
+         * "标题型"老路径与"用户手填了一个叫 `<任务标题>` 的目录"在字符串上无法区分，
+         * 只有"位于默认根目录之下"这条位置旁证能把两者分开。不带根目录 → 一律 manual（fail-safe）。
+         */
+        const manual = (task.effectiveWorkspacePath ?? '') !== ''
+          && classifyTaskWorkspacePath(task.effectiveWorkspacePath ?? '', task.id, task.title, { tasksRoot: settings.defaultWorkspace }) === 'manual'
+        if (manual) {
+          // 用户手填的真实项目目录：**这里就是**任务的工作目录，不再往里套一层资料夹。
+          taskFolderPath = task.effectiveWorkspacePath ?? ''
+        } else {
+          const own = task.workspacePath ?? ''
+          if (own !== '' && isAutoTaskWorkspacePath(own, task.id, task.title, { tasksRoot: settings.defaultWorkspace })) {
+            // 已经是自动生成的任务资料夹（ID 型或老标题型）：沿用它，不另建。
+            taskFolderPath = own
+          } else if (own === '' && settings.defaultWorkspace !== '' && settings.autoCreateTypeFolders) {
+            const relative = taskWorkspaceFolderName(task.id, task.title)
+            const raw = joinPath(task.effectiveWorkspacePath ?? settings.defaultWorkspace, relative, pathSep)
+            taskFolderPath = isWsl ? normalizeWindowsPathToWsl(raw) : raw
+            taskFolderRelative = relative
           }
+        }
+      }
+      // 资料夹先建出来（`/workspaces/ensure` 实际只做 mkdir），否则草稿确认时的
+      // `checkWorkspacePath` 会因为"目录不存在"把整条链路拦掉。
+      if (taskFolderPath !== '') {
+        try {
+          await api('/api/workbench/workspaces/ensure', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ path: taskFolderPath }) })
+          // 任务自身和祖先都没有工作区时把解析出的资料夹回写，后续会话都进同一目录。
+          if (task !== null && task.workspacePath === null && task.effectiveWorkspacePath === null) {
+            void api(`/api/workbench/tasks/${task.id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ workspacePath: taskFolderPath }) }).catch(() => undefined)
+          }
+        } catch { /* 资料夹建不出来不阻断会话：提示词里仍会声明它，AI 可自行创建 */ }
+      }
+
+      /**
+       * ============================================================
+       * 会话挂在哪个工作区（修 `ws.items[0]` 那个真 bug）
+       * ============================================================
+       *
+       * 原写法 `let workspaceId = ws.items[0]?.workspaceId` 是"**随手取第一个工作区**"：
+       * 当任务没路径、默认工作区也为空时，会话会挂到一个与用户当前连接**完全无关**的工作区上
+       * （最坏情况是另一个任务自动生成的资料夹，于是本次的文件全落进了别人的任务目录）。
+       *
+       * 现在的判据（`pickIntakeWorkspace`，纯函数、有单测）：
+       *
+       * 1. 用户**显式**选的工作区 → 用它（建不出来必须报错，不能静默换一个）；
+       * 2. 任务有**手填**的真实项目目录 → 连到那儿（"AI 执行"必须在项目里才有意义）；
+       * 3. 否则 → 当前会话 cwd 命中的工作区 / 唯一的候选 / **明确拒绝**（绝不猜）。
+       *
+       * **自动生成的任务资料夹不再注册成 AI 工作区** —— 这正是"工作区列表被任务撑爆"的根源。
+       */
+      const manualTaskWorkspace = mode !== 'clarify' && task !== null
+        && (task.effectiveWorkspacePath ?? '') !== ''
+        && classifyTaskWorkspacePath(task.effectiveWorkspacePath ?? '', task.id, task.title, { tasksRoot: settings.defaultWorkspace }) === 'manual'
+        ? (task.effectiveWorkspacePath ?? '')
+        : ''
+      const connectTarget = explicitWorkspace !== '' ? explicitWorkspace : manualTaskWorkspace
+      let workspaceId: string | undefined
+      if (connectTarget !== '') {
+        const normalizedTarget = isWsl ? normalizeWindowsPathToWsl(connectTarget) : connectTarget
+        try {
+          await api('/api/workbench/workspaces/ensure', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ path: normalizedTarget }) })
+          const created = await safeService<WorkbenchRuntime['workspaces']>(runtime, 'workspaces')?.create?.({ path: normalizedTarget })
+          if (typeof created?.workspaceId === 'string' && created.workspaceId !== '') workspaceId = created.workspaceId
         } catch (workspaceError) {
-          // 用户**显式**选的工作区建不出来时必须报错，不能静默回落默认工作区
+          // 用户**显式**选的工作区建不出来时必须报错，不能静默回落其它工作区
           // ——否则用户以为自己选好了，会话却开在别的目录里（v1.14.0 验收标准之一）。
           if (explicitWorkspace !== '') {
-            throw new Error(`工作区「${normalizedDesired}」不可用（${workspaceError instanceof Error ? workspaceError.message : String(workspaceError)}）。请检查路径是否存在、是否可写，或改回默认工作区。`)
+            throw new Error(`工作区「${normalizedTarget}」不可用（${workspaceError instanceof Error ? workspaceError.message : String(workspaceError)}）。请检查路径是否存在、是否可写，或改回默认工作区。`)
           }
-          /* 隐式推导失败则回退当前工作区（与改动前一致） */
         }
       }
-      if (workspaceId === undefined) throw new Error('没有可用工作区，请先在 DSH 中打开一个工作区')
+      if (workspaceId === undefined) {
+        const sessionsState = safeService<WorkbenchRuntime['sessions']>(runtime, 'sessions')?.list?.getSnapshot?.()
+        const currentSessionId = sessionsState?.current
+        const currentSession = currentSessionId !== undefined && currentSessionId !== ''
+          ? sessionsState?.byId?.[currentSessionId]
+          : undefined
+        const verdict = pickIntakeWorkspace({
+          items: ws.items,
+          currentCwd: typeof currentSession?.cwd === 'string' ? currentSession.cwd : '',
+          tasksRoot: settings.defaultWorkspace,
+        })
+        if (!verdict.ok) throw new Error(verdict.reason)
+        workspaceId = verdict.workspaceId
+      }
       const id = await connectWorkspace(workspaceId)
       // 死上下文防护：`connectWorkspace` 里有 await，期间插件可能已被卸载/重载，
       // 此时读 sessions 会抛 "inactive context"（用户控制台实测的主要报错来源）。
@@ -648,7 +1044,46 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
       const sessions = safeService<WorkbenchRuntime['sessions']>(runtime, 'sessions')
       const binding = sessions?.binding(id)
       if (binding === undefined) throw new Error('会话绑定未就绪，请稍后重试')
-      await binding.session.rename(mode === 'idea_association' ? '点子关联' : mode === 'idea_brainstorm' ? '点子头脑风暴' : mode === 'knowledge_doc' ? `知识总结：${docContext?.name ?? '本地文档'}` : mode === 'report' ? `${text.startsWith('week:') ? '周报' : '日报'}：${text.split(':')[1] ?? ''}` : mode === 'plan' ? `AI 计划：${planAnchor.slice(5)}` : mode === 'clarify' ? `澄清：${text.slice(0, 24)}` : mode === 'consult' ? `协助：${task?.title.slice(0, 24)}` : mode === 'breakdown' ? `拆解：${task?.title.slice(0, 24)}` : mode === 'review' ? `复盘：${task?.title.slice(0, 24)}` : `执行：${task?.title.slice(0, 24)}`).catch(() => undefined)
+      /**
+       * 澄清会话先把用户选的模型应用上去（**必须在 prompt 之前**）：
+       * `select()` 走宿主持久投影，下一次请求就是它。
+       * 应用失败**不静默吞掉** —— 用户以为换了模型、实际没换是最难发现的一类偏差。
+       */
+      if (mode === 'clarify' && quickModelSelection !== null) {
+        const directory = resolveModelDirectory(runtime, id)
+        if (directory === undefined) {
+          throw new Error('当前 DSH 未提供模型选择接口（modelDirectories），无法为快速录入切换模型。请升级 DSH 或改回“跟随 DSH 默认模型”。')
+        }
+        await directory.load()
+        await directory.select({
+          provider: quickModelSelection.provider,
+          model: quickModelSelection.model,
+          ...(quickModelSelection.reasoningEffort === undefined ? {} : { reasoningEffort: quickModelSelection.reasoningEffort }),
+        })
+      }
+      /**
+       * 附件里的图片：先判断"选中的模型收不收图"。
+       *
+       * 宿主在模型声明了 `inputModalities` 且不含 `image` 时，会把图片块**静默**换成
+       * 一行 `[image omitted because this model accepts text only; …]` ——
+       * 用户看到的是"我传了截图，AI 却说没看到"。所以这里在**发送前**给可读提示
+       * （`evaluateImageSupport` 的判据与宿主逐条对齐，判不出来时不拦）。
+       */
+      const imageDrafts = attachments.filter(isQuickImageDraft)
+      if (mode === 'clarify' && imageDrafts.length > 0) {
+        const directory = resolveModelDirectory(runtime, id)
+        /**
+         * 每次带图发送都**现拉一次**对照表：它只有几十行、来自宿主内存里的配置，
+         * 而缓存住会让"用户在设置里换了模型目录"之后判断长期失准。
+         */
+        const chosen = effectiveSelection(quickModelSelection, directory?.store.getSnapshot().current)
+        const verdict = evaluateImageSupport(await loadModelModalityTable(), chosen?.provider ?? '', chosen?.model ?? '')
+        if (verdict.kind === 'rejected') throw new Error(verdict.reason)
+      }
+      const imageParts: PromptContentPart[] = mode === 'clarify' && imageDrafts.length > 0
+        ? await Promise.all(imageDrafts.map(quickImageToPromptPart))
+        : []
+      await binding.session.rename(mode === 'idea_association' ? '点子关联' : mode === 'idea_brainstorm' ? '点子头脑风暴' : mode === 'knowledge_doc' ? `知识总结：${docContext?.name ?? '本地文档'}` : mode === 'report' ? `${text.startsWith('week:') ? '周报' : '日报'}：${text.split(':')[1] ?? ''}` : mode === 'plan' ? `AI 计划：${planAnchor.slice(5)}` : mode === 'clarify' ? `澄清：${clarifyText === '' ? '附件任务' : clarifyText.slice(0, 24)}` : mode === 'consult' ? `协助：${task?.title.slice(0, 24)}` : mode === 'breakdown' ? `拆解：${task?.title.slice(0, 24)}` : mode === 'review' ? `复盘：${task?.title.slice(0, 24)}` : `执行：${task?.title.slice(0, 24)}`).catch(() => undefined)
       let reportContextText = ''
       if (mode === 'report') {
         const [periodCode, periodStart] = text.split(':')
@@ -709,7 +1144,19 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
         : mode === 'plan'
         ? planPrompt
         : mode === 'clarify'
-        ? `你是“个人工作台”的任务澄清助手。请按 workbench-intake 规范执行。\n\n用户想创建的任务是：\n「${text}」\n\n当前时间：${new Date().toISOString()}\n默认 AI 工作区：${settings.defaultWorkspace || '未设置'}\n\n请先澄清必要信息（一次一个主题，最多5轮）。如果用户对该任务的 AI 会话有指定工作区，请询问具体路径，并在调用 workbench_submit_task 时传入 workspace_path；否则留空使用默认工作区。信息足够后调用 workbench_submit_task 提交结构化任务草稿。不要执行任务本身。`
+        ? buildQuickIntakePrompt({
+          taskText: clarifyText,
+          attachments,
+          documentTexts: attachments.filter((item): item is QuickDocumentDraft => !isQuickImageDraft(item)).map((doc) => ({ name: doc.name, content: doc.content, truncated: doc.truncated })),
+          nowIso: new Date().toISOString(),
+          workspaceRootLabel: ws.items.find((item) => item.workspaceId === workspaceId)?.path ?? '当前连接工作区',
+          reservedTaskId,
+          taskFolderPath,
+          taskFolderRelative: taskFolderRelative === '' ? '' : `./${taskFolderRelative}/`,
+          modelLabel: quickModelSelection === null
+            ? '跟随 DSH 默认模型'
+            : quickModelSelection.effortLabel === undefined ? quickModelSelection.label : `${quickModelSelection.label} · ${quickModelSelection.effortLabel}`,
+        })
         : mode === 'consult'
           ? `你是“个人工作台”的任务协助助手。请针对下面这个任务提供咨询、拆解或复盘建议（咨询模式不执行）。\n\n任务 id：${task?.id}\n任务标题：${task?.title}\n任务描述：${task?.description || '（无）'}\n类型：${task?.typeCode} 优先级：${task?.priorityCode} 状态：${task?.statusCode}\n截止：${task?.effectiveDueAt ?? task?.dueAt ?? '无'}\n${memoryContext !== '' ? `\n任务共享记忆（同一任务/子树）：\n${memoryContext}` : ''}\n\n请先理解任务，再给出建议；如果信息不足，可以一次问一个问题。\n\n重要：如果用户要求把结论/补充信息保存回任务，请调用 workbench_update_task(task_id="${task?.id ?? ''}", description="...") 更新原任务；绝对不要调用 workbench_submit_task 新建任务。`
           : mode === 'breakdown'
@@ -726,8 +1173,13 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
       const basePrompt = customPrompt.trim() === '' ? prompt : `${prompt}\n\n用户补充要求：\n${customPrompt.trim()}`
       // 选中的技能以"加载指令"形式前置（不内联技能正文）；未选技能时逐字等于原提示词。
       const finalPrompt = withSkillPromptBlock(basePrompt, skillNames)
-      const result = await binding.session.prompt([{ type: 'text', text: finalPrompt }], 'queue')
+      /**
+       * 图片**前置**在文本之前（与宿主 `PromptContentPart` 的惯例一致），
+       * 走的是宿主原生多模态管线；未声明 image 的模型已在上面拦下并给出可读原因。
+       */
+      const result = await binding.session.prompt([...imageParts, { type: 'text', text: finalPrompt }], 'queue')
       if (result.ok === false) throw new Error(result.error !== undefined ? String(result.error) : '发送失败')
+      if (mode === 'clarify') clearQuickAttachments()
       if (mode === 'plan') {
         await api('/api/workbench/ai-sessions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ scopeCode: 'daily_plan', anchor: planAnchor, sessionId: id, workspace: workspaceId }) })
       }
@@ -1334,6 +1786,84 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
       setSettings(res.settings)
     } catch { /* 记不住就算了，不影响主流程 */ }
   }
+
+  /**
+   * ============================================================
+   * 快速录入附件（v1.15.1）
+   * ============================================================
+   *
+   * 三条规矩：
+   *
+   * 1. **不收的文件要说清原因**（`partitionQuickFiles` 返回 `rejected`），
+   *    绝不静默丢弃 —— "拖了 3 个文件只进去 1 个、剩下两个一声不响"是用户最难查的类别；
+   * 2. 图片用 `URL.createObjectURL` 做缩略图，移除时**必须 `revokeObjectURL`**（否则内存泄漏）；
+   * 3. 文档不在客户端解析：POST 给 `/quick-attachments/extract-text` 抽正文，
+   *    失败（超限/损坏/不支持）当场用中文原因回显，并**不把这份文档塞进附件列表**。
+   */
+  const addQuickAttachments = (files: readonly File[]): void => {
+    // 上限判定读 ref（同一 tick 里连续拖两次也要算准），ref 由下面的写入点同步维护。
+    const partition = partitionQuickFiles(files, quickAttachmentsRef.current)
+    const rejectedText = partition.rejected.map((item) => `${item.name}：${item.reason}`).join('；')
+    setQuickAttachmentNotice(rejectedText === '' ? null : rejectedText)
+    if (partition.images.length > 0) {
+      const drafts: QuickImageDraft[] = partition.images.map((file) => ({
+        id: newTaskId(),
+        file: file as File,
+        previewUrl: URL.createObjectURL(file as File),
+      }))
+      appendQuickAttachments(drafts)
+    }
+    if (partition.documents.length > 0) {
+      void (async () => {
+        for (const file of partition.documents) {
+          try {
+            const base64 = await fileToBase64(file as File)
+            const res = await api<{ ok: boolean; content: string; truncated: boolean; name: string; mediaType: string; size: number }>(
+              '/api/workbench/quick-attachments/extract-text',
+              {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ name: file.name, mediaType: file.type, data: base64 }),
+              },
+            )
+            const draft: QuickDocumentDraft = {
+              id: newTaskId(),
+              name: res.name ?? file.name,
+              mediaType: res.mediaType ?? file.type,
+              size: res.size ?? file.size ?? 0,
+              content: res.content,
+              truncated: res.truncated,
+            }
+            appendQuickAttachments([draft])
+          } catch (error) {
+            setQuickAttachmentNotice(`${file.name}：${error instanceof Error ? error.message : String(error)}`)
+          }
+        }
+      })()
+    }
+  }
+
+  /** 移除一份附件；图片要连带释放 object URL。 */
+  const removeQuickAttachment = (id: string): void => {
+    const target = quickAttachmentsRef.current.find((item) => item.id === id)
+    if (target !== undefined && isQuickImageDraft(target)) URL.revokeObjectURL(target.previewUrl)
+    writeQuickAttachments(quickAttachmentsRef.current.filter((item) => item.id !== id))
+    setQuickAttachmentNotice(null)
+  }
+
+  /** 发送成功后清空附件（同样释放 object URL）。 */
+  const clearQuickAttachments = (): void => {
+    for (const item of quickAttachmentsRef.current) if (isQuickImageDraft(item)) URL.revokeObjectURL(item.previewUrl)
+    writeQuickAttachments([])
+    setQuickAttachmentNotice(null)
+  }
+
+  /** 卸载时释放还没发送的图片 URL（否则每次开关快速录入都会漏一份）。 */
+  useEffect(() => () => {
+    for (const item of quickAttachmentsRef.current) if (isQuickImageDraft(item)) URL.revokeObjectURL(item.previewUrl)
+    quickAttachmentsRef.current = []
+  }, [])
+
   /** 收起一条草稿横幅：记屏蔽，并**记下它当时是不是暂存态**（供"暂存→唤回"识别）。 */
   const dismissDraft = (draft: DraftView): void => {
     dismissedDraftIdsRef.current.add(draft.id)
@@ -2600,20 +3130,24 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
           footer={(
             <>
               <span className="wb-foot-note">会跳转到官方会话区，由 AI 澄清后生成任务草稿</span>
-              <button className="wb-btn" onClick={() => setShowQuick(false)}>取消</button>
+              <button className="wb-btn" onClick={() => { clearQuickAttachments(); setShowQuick(false) }}>取消</button>
               <button
                 className="wb-btn primary"
-                disabled={busy || quickText.trim() === ''}
+                disabled={busy || (quickText.trim() === '' && quickAttachments.length === 0)}
                 onClick={() => {
-                  // 工作区选择随会话一起带下去：勾了"按标题建子文件夹"就在所选目录下拼一层，
-                  // 否则逐字使用所选目录（用户选的是"就在这个目录里做"）。
-                  const isWsl = detectWslHost(runtime)
+                  /**
+                   * 工作区选择随会话一起带下去。
+                   *
+                   * ⚠️ v1.15.1 起**不再在这里拼文件夹名**：资料夹名是
+                   * `<任务ID>-<标题片段>`，而任务 ID 由 `startAISession` 在澄清前预留
+                   * （这里拿不到）。所以只传"用户选的目录"与"要不要在里面建任务资料夹"。
+                   */
                   const chosen = quickWorkspace.trim()
-                  const effective = chosen !== '' && quickFollowFolder
-                    ? joinPath(chosen, folderForText(quickText || '需求澄清'), isWsl ? '/' : '\\')
-                    : chosen
                   if (chosen !== '') void rememberQuickWorkspace(chosen)
-                  void startAISession('clarify', null, quickText, [], undefined, effective)
+                  void startAISession('clarify', null, quickText, [], undefined, chosen, {
+                    attachments: quickAttachments,
+                    followFolder: quickFollowFolder,
+                  })
                 }}
               >
                 创建澄清会话
@@ -2628,9 +3162,78 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
               rows={3}
               value={quickText}
               onChange={(e) => setQuickText(e.target.value)}
-              placeholder="例如：周五 10:30 接待重要客户"
+              onPaste={(e) => {
+                const files = Array.from(e.clipboardData.files)
+                if (files.length > 0) {
+                  e.preventDefault()
+                  addQuickAttachments(files)
+                }
+              }}
+              placeholder="一句话描述任务，例如：周五 10:30 接待重要客户；也可以粘贴或拖入图片、PDF、DOCX"
             />
           </label>
+
+          {/* ---------------- 附件（v1.15.1） ----------------
+              拖入/粘贴/选择三种入口都走 addQuickAttachments；
+              不收的文件会在下面用 `wb-quick-attach-note` 给出**逐条中文原因**（不静默丢弃）。 */}
+          <div
+            className="wb-field"
+            onDragOver={(e) => { if (Array.from(e.dataTransfer.types).includes('Files')) e.preventDefault() }}
+            onDrop={(e) => {
+              const files = Array.from(e.dataTransfer.files)
+              if (files.length === 0) return
+              e.preventDefault()
+              addQuickAttachments(files)
+            }}
+          >
+            <span>
+              附件
+              <span className="wb-field-note">
+                图片最多 {MAX_QUICK_IMAGES} 张 · PDF/DOCX 最多 {MAX_QUICK_DOCUMENTS} 份 · 单份 ≤ 5MB
+              </span>
+            </span>
+            {quickAttachments.length > 0 && (
+              <div className="wb-quick-attach-rail" aria-label="快速录入附件">
+                {quickAttachments.map((item) => (
+                  <div className="wb-quick-attach-item" key={item.id} title={isQuickImageDraft(item) ? (item.file.name || '图片') : item.name}>
+                    {isQuickImageDraft(item)
+                      ? <img src={item.previewUrl} alt={item.file.name || '图片'} />
+                      : <Icon name="file" size={18} />}
+                    <span className="wb-quick-attach-name">
+                      {isQuickImageDraft(item) ? (item.file.name || '图片') : `${item.name}${item.truncated ? '（已截断）' : ''}`}
+                    </span>
+                    <button type="button" className="wb-quick-attach-remove" onClick={() => removeQuickAttachment(item.id)} aria-label="移除附件">×</button>
+                  </div>
+                ))}
+              </div>
+            )}
+            {quickAttachmentNotice !== null && <div className="wb-quick-attach-note">{quickAttachmentNotice}</div>}
+            <div className="wb-quick-actions">
+              <input
+                ref={quickImageInputRef}
+                type="file"
+                accept="image/png,image/jpeg,image/webp,image/gif,application/pdf,.docx"
+                multiple
+                hidden
+                onChange={(e) => {
+                  if (e.currentTarget.files !== null) addQuickAttachments(Array.from(e.currentTarget.files))
+                  e.currentTarget.value = ''
+                }}
+              />
+              <button type="button" className="wb-btn" disabled={busy} onClick={() => quickImageInputRef.current?.click()}>
+                <Icon name="image" />添加附件
+              </button>
+              <QuickModelPicker
+                runtime={runtime}
+                value={quickModelSelection}
+                onChange={setQuickModelSelection}
+                modalityTable={modelModalityTable}
+                disabled={busy}
+                onError={setError}
+                onLoaded={() => { void loadModelModalityTable().then(setModelModalityTable) }}
+              />
+            </div>
+          </div>
 
           {/* ---------------- 工作区选择（v1.14.0） ----------------
               说明文字一律用 <div className="wb-hint"> 而不是 <p>/<label>：
@@ -2672,7 +3275,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                 checked={quickFollowFolder}
                 onChange={(e) => setQuickFollowFolder(e.target.checked)}
               />
-              <span>在该工作区下按标题建子文件夹（不勾 = 直接用它本身）</span>
+              <span>在该工作区下建任务资料夹（`&lt;任务ID&gt;-&lt;标题片段&gt;`；不勾 = 直接用它本身）</span>
             </label>
           )}
           <div className="wb-hint">
