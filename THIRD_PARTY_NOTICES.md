@@ -54,3 +54,25 @@ Adapted material: the tsdown build configuration pattern that emits the DSH
 `window.__ModuleLoader__.load` client bundle wrapper. The build config has been
 rewritten for this plugin, but the wrapper approach derives from dsh-genui.
 MIT license text is available at the repository link above.
+
+## Guojing6/dsh-workbench (fork of this project)
+
+- Repository: https://github.com/Guojing6/dsh-workbench
+- Upstream: a fork of Dely0/dsh-personal-workbench
+- License: MIT (same as this project)
+
+Adapted material: the design and implementation approach for **task folders keyed by task id**
+(including pre-allocating the task id at clarification time so the folder name and the task id
+are the same thing), **quick-intake attachments** (PDF/DOCX text extraction, and images through
+the host's multimodal `PromptContentPart` pipeline), the **quick-intake model picker**, the
+**`/workbench` slash command**, and **consolidating the duplicated request-fence helpers**
+(loopback check / JSON response / body reader). Also credited for locating two real bugs this
+project had been carrying: `ws.items[0]` picking an unrelated workspace when a task had no path,
+and building the clarification folder name out of the user's raw sentence.
+
+Nothing was copied verbatim: that branch is based on v1.10.1, and this repository has since
+been restructured (`src/api/routes.ts` → `src/api/routes/*`, `src/db/repo.ts` → `src/db/repo/*`,
+client split into `src/client/components/*`), so every item was re-implemented against the
+current modules — with deliberate differences, e.g. an added legacy-path compatibility rule
+for task folders, and a rewritten decompression guard in the attachment parser.
+

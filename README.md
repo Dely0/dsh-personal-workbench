@@ -362,6 +362,19 @@ v1.13.3 的再次根治；v1.13.1 的标题栏入口则是因为直接读 `ctx.s
 - [ ] V2：定时自动化
 - [ ] 未来：多端同步、任务拖拽排序、数据导入导出
 
+## 致谢
+
+- **[@Guojing6](https://github.com/Guojing6)** —— v1.15.1 的多项能力源自其 fork
+  [`Guojing6/dsh-workbench`](https://github.com/Guojing6/dsh-workbench)：任务资料夹改用任务 ID
+  （含"澄清阶段先预留任务 ID"这一关键设计）、快录附件（PDF/DOCX 抽正文、图片走宿主原生多模态）、
+  模型选择器、`/workbench` 斜杠命令、请求围栏加固；并定位了两个我们一直带着的真 bug
+  （任务没填路径时会话挂到无关工作区、澄清阶段按用户原话建文件夹）。
+  本仓按当前模块结构重做（其分支基于 v1.10.1），逐项来源见
+  [`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md)。
+- [@tujunwenjie](https://github.com/tujunwenjie) —— issue #3 的诊断报告与本地修复分支，
+  帮我们看清了"用 DOM 注入参与非官方家族约定"这条路的根因（v1.14.53 据此整条腿删除）。
+- [@lhmhz](https://github.com/lhmhz) —— issue #1（关联对话显示对话名 / 添加已有对话到任务）。
+
 ## 免责声明
 
 本插件为社区项目，与 DeepSeek 官方无关，不提供任何担保。安装即表示你信任该代码会以你的 DSH 用户权限在本机运行。执行类 AI 操作可能修改工作区文件、消耗 API 额度，请先阅读代码并谨慎使用。
@@ -476,7 +489,21 @@ Does **not** depend on `dsh-web-ui`.
 - [x] V2: Manual editing for today/calendar plan panel (reorder, edit notes, add/remove plan items; keep AI generate + confirm + complete/defer) (1.5.0)
 - [x] V2: Official sidebar slots, task re-parenting, defer for every draft kind (1.14.0)
 - [x] Official-slots-only architecture: single source of truth for panel visibility, DOM fallback leg removed, capability gate (1.14.57)
+- [x] Task folders keyed by task id, quick-intake attachments (image / PDF / DOCX), model picker, `/workbench` command (1.15.1)
 - [ ] Future: scheduled automation, multi-device sync, drag-and-drop, import/export
+
+## Credits
+
+- **[@Guojing6](https://github.com/Guojing6)** — several 1.15.1 features originate from their fork
+  [`Guojing6/dsh-workbench`](https://github.com/Guojing6/dsh-workbench): task folders keyed by task id
+  (including pre-allocating the id at clarification time), quick-intake attachments (PDF/DOCX text
+  extraction and images through the host's multimodal pipeline), the model picker, the `/workbench`
+  slash command, and consolidating the duplicated request-fence helpers — plus locating two real
+  bugs this project had been carrying. Re-implemented against this repository's current modules
+  (their branch is based on v1.10.1); see [`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md).
+- [@tujunwenjie](https://github.com/tujunwenjie) — the diagnosis and fix branch in issue #3 that
+  showed the root cause of participating in a non-official sidebar family via DOM injection.
+- [@lhmhz](https://github.com/lhmhz) — issue #1.
 
 ## License
 
