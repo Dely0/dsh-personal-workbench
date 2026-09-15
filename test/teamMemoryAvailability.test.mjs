@@ -22,16 +22,34 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { memoryHome, teamMemoryAvailable } from '../lib/review-memory.js'
 
-test('默认路径：本机装了内部记忆服务时判定为可用', () => {
-  // 本机（开发机）确实有 ~/.dsh/memory，所以这里应当为 true。
-  // 若哪天这条失败，说明"内部机器上被误判为不可用"——那会把真功能藏掉，是更糟的方向。
-  assert.equal(teamMemoryAvailable(), true, '本机应判定为可用（存在 ~/.dsh/memory）')
-  assert.match(memoryHome(), /[\\/]\.dsh[\\/]memory$/)
+test('默认路径：判定与「默认目录是否真的存在」一致（开发机与干净机都成立）', () => {
+  /**
+   * 这条**曾经断言"本机必须有 ~/.dsh/memory"**（`assert.equal(teamMemoryAvailable(), true)`）——
+   * 那测的是开发机，不是代码：GitHub Actions 的 runner 上没有这个内网目录，
+   * 于是 CI 每一次 push 都红（2026-09-15 在 UTC + 干净 HOME 的 Linux 上定位）。
+   *
+   * 政策本身照样锁得住，而且锁得更准：
+   * - 默认路径的形状：用**空 env** 问 `memoryHome({})`，不受显式环境变量干扰；
+   * - 可用性必须**正好**等于"显式声明了，或默认目录真的存在"——
+   *   内部机器上"存在却判不可用"会红（原来那条要防的方向），
+   *   干净机上"不存在却判可用"同样会红（原来漏掉的方向）。
+   */
+  assert.match(memoryHome({}), /[\\/]\.dsh[\\/]memory$/, '默认路径必须是 <主目录>/.dsh/memory')
+
+  const declared = Boolean(
+    (process.env.DSH_MEMORY_HOME ?? '').trim() !== '' || (process.env.TEAM_MEMORY_HOME ?? '').trim() !== '',
+  )
+  const home = memoryHome()
+  assert.equal(
+    teamMemoryAvailable(),
+    declared || existsSync(home),
+    `可用性必须与默认路径的实际存在性一致（home=${home}，declared=${declared}）`,
+  )
 })
 
 test('记忆库目录不存在 → 判定为不可用（开源用户的形态）', () => {

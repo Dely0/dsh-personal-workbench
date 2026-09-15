@@ -33,6 +33,12 @@ if (tgz === undefined) {
 }
 const expectedVersion = process.argv[3]
 
+/**
+ * 本仓库的 GitHub 身份。dsh-market 认这个 npm 包的唯一依据就是包内
+ * `repository` 能不能指回它（见下面 ①b 的说明）。
+ */
+const EXPECTED_REPO = 'Dely0/dsh-personal-workbench'
+
 /** 把 gzip 流解成 Buffer（tar 是顺序格式，整份读进来最简单）。 */
 async function gunzip(file) {
   const chunks = []
@@ -89,6 +95,22 @@ if (pkgEntry === undefined) {
     console.log(`✅ package.json 可解析：${pkg.name}@${pkg.version}`)
     if (expectedVersion !== undefined && pkg.version !== expectedVersion) {
       problems.push(`版本不符：包内 ${pkg.version} ≠ 期望 ${expectedVersion}`)
+    }
+    /**
+     * ①b dsh-market 认这个 npm 包的唯一依据（2026-09-15 事故）：包内 package.json 的
+     * `repository` 必须指回同一个 GitHub 仓库，否则上游 `probe-npm.mjs` 判定为
+     * "不是这个仓库的包" → 市场退回 `github:owner/repo` 源码安装（pnpm 解析成
+     * `git+ssh://…`，没配 GitHub SSH 的用户直接 `Host key verification failed`），
+     * 且 `downloads` 恒为 null（它的下载量普查只覆盖已映射到 npm 的条目）。
+     */
+    const repoField = typeof pkg.repository === 'string' ? pkg.repository : pkg.repository?.url ?? ''
+    if (!repoField.toLowerCase().includes(EXPECTED_REPO.toLowerCase())) {
+      problems.push(
+        `repository 缺失或没指回 ${EXPECTED_REPO}（当前：${repoField === '' ? '(空)' : repoField}）`
+        + ' —— dsh-market 会认不出这个 npm 包：退回 github: 源码安装、且不统计下载量',
+      )
+    } else {
+      console.log(`✅ repository 指回 ${EXPECTED_REPO}（市场能把这个包映射到仓库）`)
     }
   } catch (error) {
     problems.push(`package.json 解析失败：${String(error)}`)

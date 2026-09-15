@@ -4,14 +4,23 @@ lib/
 .pwtest/
 test-results/
 
+# ── 本地开发装盘包（scripts/dev-install.mjs 产出）─────────────────────────────
+# 每次构建落一个带构建戳的新 tgz：profile 依赖的身份就是它的**路径**，
+# 所以本地迭代不再需要动 package.json 的 version（那正是 patch 号吃到 14.59 的原因）。
+# 这类包只是本机迭代用的临时物，历史版本请归到 _local-archive/。
+_local-build/
+
 # ── 本机运行产物：不要进仓库 ────────────────────────────────────────────────
 # 【统一归档目录】本机的版本存档 / 历史 tgz / 验收截图全部放这里（2026-09-13 整理）。
 # 为什么收进一个目录：本机曾把 6 个 `_wsl-backup-*`（共 ~394 MB）与 8 个 `_archive-*`
 # 直接堆在仓库根，连"这个仓库到底多大"都判断不了。约定与回退方式见
 # `_local-archive/README.md`。
-# ⚠️ 例外：**当前装盘 pin 的那个 tgz 留在仓库根** —— profile 的 package.json 用绝对路径
-# 指着它（`file:D:/Code/Linksight/dsh-workbench/dely0-...-<版本>.tgz`），挪走会让
-# `dsh plugin add` 与回退流程找不到包。
+# ⚠️ 装盘 pin 的位置（2026-09-15 变更）：**Windows 侧 profile web** 现在指向
+# `_local-build/` 里带构建戳的开发包（身份是路径 → 本地迭代不必再改 version，
+# 见 scripts/dev-install.mjs）。脚本会**永不删除 profile 正指着的那一个**，
+# 并留一份 `_local-build/current.tgz` 作回退。
+# **但别以为仓库根的 tgz 就没用了**：别的宿主/机器（例如 WSL 侧 profile）可能仍用
+# 绝对路径 pin 着它们 —— 迁移某个 pin 之前，先在那台机器上确认它指着什么。
 _local-archive/
 
 # 版本存档（`node scripts/make-archive.mjs` 的产物）现在生成在 `_local-archive/` 下；

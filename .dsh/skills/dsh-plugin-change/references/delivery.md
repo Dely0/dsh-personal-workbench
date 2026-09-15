@@ -23,8 +23,10 @@
 cp <profile>/package.json   <profile>/package.json.bak-<用途>-<stamp>
 cp <profile>/pnpm-lock.yaml <profile>/pnpm-lock.yaml.bak-<用途>-<stamp>
 
-# ② 装
-dsh plugin add <绝对路径>/<pkg>-<新版本>.tgz --profile web
+# ② 装（日常迭代用脚本：构建 → 打包到带构建戳的新路径 → add → 备份/diff/BOM/门禁一条龙）
+node scripts/dev-install.mjs --apply
+#   等价的裸命令（脚本内部就是它）：
+#   dsh plugin add file:<绝对路径>/_local-build/<pkg>-dev-<短hash>-<时间戳>.tgz --profile web
 
 # ③ 立刻核对：只有目标插件一处变化
 diff <profile>/package.json.bak-… <profile>/package.json
@@ -41,10 +43,19 @@ dsh --profile web --dump-config >/dev/null    # 插件树能组装（0、无 pen
 **`check-installed-version.mjs` 必须在重启前跑** —— 它是唯一能在"GUI 已经起不来"之前抓住回退的东西；
 一旦重启失败，你没有界面可以自救。
 
-**同版本号 tgz 会被 pnpm 缓存复用**：pnpm store 按「包名 + 版本号」内容寻址，
-同名同版本的 tarball 即使内容变了也复用旧副本（`--force` 无效；Windows 解包保留 mtime，
-看时间戳判断不出来）→ **换了构建产物必须换版本号**。
-判断"装的到底是不是新代码"只认 `check-installed-fingerprint.mjs`。
+**"装的是不是新代码"只认 `check-installed-fingerprint.mjs`，版本号从来不是判据。**
+2026-09-15 实测（pnpm 11.7.0，与 profile 同配置的 `node-linker=hoisted`）纠正了老结论
+「换了构建产物必须换版本号」：
+
+| 做法 | 结果 |
+|---|---|
+| 覆盖同名同版本 tarball 后 `pnpm install` / `--frozen-lockfile` | **不会**刷新 ❌ |
+| 覆盖同名同版本 tarball 后 `dsh plugin add file:…`（= `pnpm add`） | **会**刷新 ✅ |
+| 换到**新路径**（构建戳文件名）后 `dsh plugin add file:…` | **必然**刷新 ✅（不依赖 pnpm 是否重新 hash） |
+
+老结论其实把两件事并成了一件：`pnpm install` 顶替 `dsh plugin add` 这个坑，加上**客户端 bundle 的
+rev 缓存**（宿主启动时才建 Map，不重启就在验旧代码）。代价是 patch 号被本地迭代吃掉 80+ 个
+（`_local-archive/` 里 84 个 tgz）。现在的约定：**本地迭代用构建戳路径区分，`version` 只在发布时改**。
 
 **schema 只单向前进**：插件读不了更新的库时 **升级插件，绝不降级数据库**。
 
@@ -52,9 +63,10 @@ dsh --profile web --dump-config >/dev/null    # 插件树能组装（0、无 pen
 
 ```bash
 pnpm typecheck && pnpm test   # 单测（不需要宿主）
-pnpm build && pnpm pack       # 产出 lib/client.js（单文件 bundle）+ lib/*.js（宿主半边）
-# → 装盘 → 指纹核对 → 重启 → 硬刷新 → 验收
+node scripts/dev-install.mjs --apply   # 构建 + 打包（构建戳路径）+ 装盘 + 备份/diff/BOM/门禁
+# → 指纹核对（脚本已跑）→ 重启 → 硬刷新 → 验收
 ```
+**本地迭代不要再动 `package.json` 的 `version`** —— 身份由 tarball 路径承载（见第 2 节）。
 
 ## 4. 重启宿主：这是用户的操作
 
@@ -97,6 +109,8 @@ pnpm build && pnpm pack       # 产出 lib/client.js（单文件 bundle）+ lib/
 
 ## 7. 发布
 
+- **版本号只在发布时改**（2026-09-15 起）。本地迭代靠构建戳路径区分，不再吃 patch 号 ——
+  历史上"每次本地装盘 +1"把 patch 吃到了 14.59。下一个发布版本：**1.15.0**。
 - `pnpm typecheck` + `pnpm test` 全绿，且**用例数不少于上一版**（少了说明有用例被删/跳过）。
 - **先本机验证，再发布**：v1.13.0 因"发布早于验证"翻过车（npm 已是最新、本机没验，
   用户升级后前端直接 `Failed to load plugins`）。

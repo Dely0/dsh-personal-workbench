@@ -70,12 +70,42 @@ if (declared === undefined) {
 
 // 3) 锁文件里的版本（pnpm 实际会对齐到它）
 const lockPath = join(profileDir, 'pnpm-lock.yaml')
+
+/**
+ * 从锁文件里取出本插件的解析版本。
+ *
+ * 两种键形态，**都要认**（2026-09-15 补）：
+ * - 注册表来源：`'@scope/name@1.2.3':` → 版本直接写在键里；
+ * - 本地来源：`'@scope/name@file:...':` → 键里是**路径**，版本在同一块内的 `version: x.y.z` 行。
+ *
+ * 旧实现只有前一条正则，于是走 `file:...tgz` 装盘时（本项目开发机的常态）
+ * `locked` 恒为 undefined，第 5 步那条"装盘 vs 锁文件"一致性检查**一直在空转** ——
+ * 静默失效比误报更危险，所以这里显式返回 undefined 时第 5 步要能说出来。
+ */
+function lockedVersionOf(lockText, plugin) {
+  const escaped = plugin.replace('/', '\\/')
+  const keyMatch = lockText.match(new RegExp(`'?${escaped}@(\\d+\\.\\d+\\.\\d+)'?:`))
+  if (keyMatch !== null) return { version: keyMatch[1], form: 'registry' }
+  const lines = lockText.split(/\r?\n/)
+  const keyRe = new RegExp(`^\\s*'?${escaped}@(?:file|link):`)
+  for (let index = 0; index < lines.length; index += 1) {
+    if (!keyRe.test(lines[index])) continue
+    for (let inner = index + 1; inner < Math.min(index + 25, lines.length); inner += 1) {
+      const versionMatch = /^\s+version:\s*(\d+\.\d+\.\d+)\s*$/.exec(lines[inner])
+      if (versionMatch !== null) return { version: versionMatch[1], form: 'local' }
+      if (/^\S/.test(lines[inner])) break // 出了这个条目
+    }
+  }
+  return undefined
+}
+
 let locked
+let lockedForm = '未知'
 if (existsSync(lockPath)) {
-  const lock = readFileSync(lockPath, 'utf8')
-  const match = lock.match(new RegExp(`'?${PLUGIN.replace('/', '\\/')}@(\\d+\\.\\d+\\.\\d+)'?:`))
-  locked = match?.[1]
-  notes.push(`锁文件解析为  : ${locked ?? '(未找到)'}`)
+  const resolved = lockedVersionOf(readFileSync(lockPath, 'utf8'), PLUGIN)
+  locked = resolved?.version
+  lockedForm = resolved?.form ?? '未匹配到任何键形态'
+  notes.push(`锁文件解析为  : ${locked ?? '(未找到)'}${locked === undefined ? `（${lockedForm}）` : ''}`)
 }
 
 // 4) 数据库 schema 与插件支持的 schema

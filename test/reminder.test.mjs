@@ -104,11 +104,14 @@ test('quiet hours: cross-midnight window and P0 bypass', () => {
   assert.equal(isQuietTime(policy, new Date('2026-09-09T08:00:00')), false)
   assert.equal(isQuietTime(policy, new Date('2026-09-09T21:59:00')), false)
 
+  // 静默窗口按**本地墙钟**判定（`isQuietTime` 读 getHours），故触发时刻与"现在"都按本地构造：
+  // 原先用 UTC 字符串，在美洲时区落不进 22:00–08:00 而假红（CI 跑 UTC 才没暴露）。
+  const at2330 = new Date(2026, 8, 9, 23, 30, 0).toISOString()
   const candidate = (priorityCode) => ({
     reminderId: 'r1', taskId: 't1', rootTaskId: 't1', title: '开会',
-    priorityCode, dueAt: '2026-09-09T23:30:00.000Z', fireAt: '2026-09-09T23:30:00.000Z',
+    priorityCode, dueAt: at2330, fireAt: at2330,
   })
-  const nowMs = Date.parse('2026-09-09T23:31:00.000Z')
+  const nowMs = new Date(2026, 8, 9, 23, 31, 0).getTime()
   const state = { sentLastHour: 0, sentToday: 0, circuitOpenUntil: null }
   // P0 穿透静默
   assert.deepEqual(decideReminder(policy, candidate('p0'), state, nowMs), { action: 'send', reason: 'quiet-bypass' })

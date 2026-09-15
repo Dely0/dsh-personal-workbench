@@ -5,14 +5,17 @@
  *
  * 2026-09-12 我连续踩了两次同一个坑：`pnpm build && pnpm pack && dsh plugin add <tgz>`
  * 之后，profile 的 `node_modules` 里**仍是旧代码**，于是"修完再验"验的一直是旧包，
- * 白白多花了几轮。原因：
+ * 白白多花了几轮。当时的结论是「改代码后必须换版本号」——**2026-09-15 实测纠正**：
  *
- * 1. pnpm 的 store 按**包名+版本号**做内容寻址。同名同版本的 tarball 即使内容变了，
- *    也可能直接复用 store 里的旧副本（实测 `--force` 也无效）；
- * 2. Windows 上解包会保留 mtime，所以**看文件时间戳完全判断不出来**。
+ * 1. 真正会复用旧副本的是 **`pnpm install`**（含 `--frozen-lockfile`）：覆盖同名同版本的
+ *    tarball 之后它不刷新。而 `dsh plugin add file:…`（DSH 只是 pnpm 的原样转发器）
+ *    **会**重新解包 —— 所以"刷新"从来不需要换版本号，只需要走 `plugin add`；
+ * 2. 另一个独立陷阱是**客户端 bundle 的 rev 缓存**（宿主启动时才建 Map，不重启就是在验旧代码）；
+ * 3. Windows 上解包保留 mtime，所以**看文件时间戳完全判断不出来**。
  *
- * 结论：**改代码后必须换版本号**，并且用内容指纹确认装盘成功。
- * 这个脚本把第 2 步做成一条命令，避免再靠肉眼。
+ * 结论：**只认内容指纹，版本号不是判据**。日常装盘走 `node scripts/dev-install.mjs --apply`
+ * （构建戳路径 + 本脚本 + 版本一致性 + BOM 复检一条龙）。
+ * 这个脚本把"验"做成一条命令，避免再靠肉眼。
  *
  * 用法：
  *   node scripts/check-installed-fingerprint.mjs
@@ -84,8 +87,8 @@ if (json) {
   if (report.extra.length > 0) console.log(`  ℹ️ 装盘多出    : ${report.extra.join(', ')}`)
   if (consistent) console.log('  ✅ 装盘产物与当前构建**逐文件一致**')
   else {
-    console.log('  ❌ 装盘产物不是当前构建 —— 很可能是「同版本号 tarball 被 pnpm 复用」')
-    console.log('     修法：改 package.json 版本号 → pnpm build → pnpm pack → dsh plugin add <新 tgz>')
+    console.log('  ❌ 装盘产物不是当前构建 —— 多半是走了 `pnpm install` 而不是 `dsh plugin add`，或压根没重新装盘')
+    console.log('     修法：node scripts/dev-install.mjs --apply（构建戳路径 → 必然重新解包；不必改版本号）')
   }
 }
 

@@ -89,11 +89,17 @@ test('countTaskTreeBy only counts nodes matching keep, not parent context', () =
 })
 
 test('isTaskDueOnDay excludes cancelled tasks from calendar markers', () => {
-  const day = new Date('2024-01-01T00:00:00.000Z')
-  const due = task('a', { effectiveDueAt: '2024-01-01T10:00:00.000Z' })
-  const cancelled = task('b', { effectiveDueAt: '2024-01-01T10:00:00.000Z', statusCode: 'cancelled' })
-  const done = task('c', { effectiveDueAt: '2024-01-01T10:00:00.000Z', statusCode: 'done' })
-  const otherDay = task('d', { effectiveDueAt: '2024-01-02T10:00:00.000Z' })
+  /**
+   * `isTaskDueOnDay` 比的是**本地日历日**（`toDateString()`，见 src/client/taskFilterSort.ts），
+   * 所以"哪一天"与"截止时刻"都必须按本地时刻构造：原先用 UTC 字符串，
+   * 在美洲时区会算成前一天而假红（CI 跑 UTC 才没暴露）。
+   */
+  const day = new Date(2024, 0, 1)
+  const dueLocal = new Date(2024, 0, 1, 10, 0, 0).toISOString()
+  const due = task('a', { effectiveDueAt: dueLocal })
+  const cancelled = task('b', { effectiveDueAt: dueLocal, statusCode: 'cancelled' })
+  const done = task('c', { effectiveDueAt: dueLocal, statusCode: 'done' })
+  const otherDay = task('d', { effectiveDueAt: new Date(2024, 0, 2, 10, 0, 0).toISOString() })
   const noDue = task('e', { effectiveDueAt: null })
 
   assert.equal(isTaskDueOnDay(due, day), true)

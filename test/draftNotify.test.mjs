@@ -316,11 +316,19 @@ test('队列释放：发送失败保留队列并退避', async () => {
 
 test('静默/汇总时间计算', () => {
   const p = policy({ quietHours: { start: '22:00', end: '08:00' }, digestAt: '09:00' })
-  const inQuiet = new Date('2026-09-09T15:00:00.000Z') // +08 = 23:00
+  /**
+   * 判据全走**本地墙钟**（`getHours()` / `setHours()`），所以输入也必须按本地时刻构造。
+   *
+   * 这里原本写成 UTC 字符串（`'2026-09-09T15:00:00.000Z'`，注释"+08 = 23:00"）——
+   * 那其实是在断言"跑测试的机器时区必须是 +08"，于是 GitHub Actions（UTC）上
+   * `15 !== 8` 从 2026-09-09 起红了每一次 push。要锁的是"本地 23:00 落在静默里"
+   * 这条政策，不是这台机器的时区。
+   */
+  const inQuiet = new Date(2026, 8, 9, 23, 0, 0) // 本地 2026-09-09 23:00
   const end = nextQuietEnd(p, inQuiet)
   assert.equal(end.getHours(), 8)
   assert.equal(end.getDate() > inQuiet.getDate() || end.getMonth() > inQuiet.getMonth(), true)
-  const beforeDigest = new Date('2026-09-10T00:30:00.000Z') // +08 = 08:30
+  const beforeDigest = new Date(2026, 8, 10, 8, 30, 0) // 本地 2026-09-10 08:30
   const digest = nextDigestAt(p, beforeDigest)
   assert.equal(digest.getHours(), 9)
   assert.equal(digest.getDate(), beforeDigest.getDate())

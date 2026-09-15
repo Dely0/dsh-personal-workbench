@@ -30,22 +30,29 @@ pnpm test               # 构建 + node --test test/*.test.mjs，0 fail
 ## 2. 本机安装验证（**先本机，后发布**）
 
 ```sh
-# 打包装到本机 profile（profile 声明用的是 file:.../<tgz> 依赖）
-pnpm build
-pnpm pack                                    # 产出 dely0-dsh-personal-workbench-<ver>.tgz
-dsh plugin --profile web add file:<绝对路径>/dely0-dsh-personal-workbench-<ver>.tgz
+# 日常迭代：构建 → 打包到"带构建戳"的开发包 → 装盘 → 跑门禁
+node scripts/dev-install.mjs            # 默认 dry-run：只构建+打包+校验，打印将执行的命令
+node scripts/dev-install.mjs --apply    # 真装：自动备份 + 零增量 diff + BOM 复检 + 三道门禁
 ```
 
+- [ ] **本地迭代不动 `package.json` 的 `version`**。profile 依赖的身份是 tarball **路径**，
+      所以每次打包落到新路径（`_local-build/…-dev-<短hash>-<时间戳>.tgz`）就必然重新解包；
+      公开版本号只在**发布**时增长（下一个发布版本：**1.15.0**）。
+- [ ] ⚠️ **绝不能用 `pnpm install` 代替 `dsh plugin add`**。实测口径（pnpm 11.7.0，
+      与 profile 同配置的 `node-linker=hoisted`，2026-09-15）：覆盖同名同版本的 tarball 之后，
+      `pnpm install` 与 `pnpm install --frozen-lockfile` **都不会刷新**装盘产物；
+      而 `dsh plugin add file:…`（= `pnpm add`，DSH 只是 pnpm 的原样转发器）**会**。
+      老结论「换了构建产物就必须换版本号」把两件事归成了一件：这条 `install` 的坑，
+      加上**客户端 bundle 的 rev 缓存**（宿主启动时才建 Map —— 不重启就是在验旧代码）。
+      它让 patch 号一路吃到 14.59（`_local-archive/` 里 84 个 tgz = 84 次本地迭代）。
 - [ ] **改 profile 之前先备份** `package.json` 与 `pnpm-lock.yaml`
-      （命名惯例：`package.json.bak-<用途>-<yyyyMMdd-HHmmss>`）。
+      （脚本用 `<file>.bak-devinstall-<yyyyMMdd-HHmmss>`，命名惯例不变）。
 - [ ] 装完与备份逐行 diff：**只有目标插件那一处变化**，其余插件零改动、锁文件无额外条目增删。
-- [ ] ⚠️ **换了构建产物就必须换版本号**。pnpm 的 store 按「包名 + 版本号」内容寻址：
-      同名同版本的 tarball 即使内容变了也会复用旧副本（`--force` 也无效；
-      Windows 解包保留 mtime，所以看时间戳根本判断不出来）。
-      2026-09-12 我因此白验了两轮 —— "修完还是老行为"，其实是跑的根本不是新包。
+- [ ] 写盘后复检 **BOM**：`package.json` 头 3 字节不得是 `EF BB BF`
+      （带 BOM 时 Node 的 `JSON.parse` 直接抛错 → DSH 进程起不来、GUI 也进不去）。脚本已内建这一步。
 - [ ] `node scripts/check-installed-fingerprint.mjs` 退出码 0
       （**逐文件 SHA256** 比对开发树 `lib/` 与 profile `node_modules`，并核对版本号）。
-      这是"装盘产物 == 当前构建"的唯一可信判据。
+      这是"装盘产物 == 当前构建"的唯一可信判据 —— **版本号从来不是**。
 - [ ] `node scripts/check-installed-version.mjs` 退出码 0
       （比对装盘版本 / profile 声明 / 锁文件 / 数据库 schema / 插件支持 schema）。
       注意它只看**版本号声明**，管不住"同版本号内容不同"，所以上面那条指纹校验不能省。
