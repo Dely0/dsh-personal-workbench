@@ -5,7 +5,8 @@
  *  - AI 澄清/咨询/拆解统一跳官方会话区；工作台侧边栏显示待确认草稿红点
  */
 import { createRoot, type Root } from 'react-dom/client'
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { createPortal } from 'react-dom'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import {
   buildTaskTree,
   countTaskTreeBy,
@@ -67,11 +68,26 @@ import { pickIntakeWorkspace } from './intakeWorkspace.js'
 import {
   effectiveSelection, evaluateImageSupport, gateModelPicker, indexModalities, type ModelModalityRecord,
 } from './modelCapability.js'
+import {
+  placePopover, samePlacement, stepIndex, type PopoverPlacement,
+} from './popoverPlacement.js'
 
 const CSS = WORKBENCH_CSS
 
 /** 快速录入模型选择的 localStorage 键（本仓自己的前缀，不与 fork 混用）。 */
 const QUICK_MODEL_STORAGE_KEY = 'dsh-personal-workbench.quickModelSelection'
+
+/**
+ * 模型浮层的期望宽度 —— 与 `.wb-model-menu` 的 CSS 保持一致。
+ *
+ * 为什么是常量而不是量出来的：浮层宽度由我们定、内容自适应；拿 `offsetWidth` 当输入
+ * 会读到"上一次摆放写进去的宽度"，那是把**投影当权威源**（本项目第 1 条规矩禁止）。
+ * 视口比它还窄时由 `placePopover()` 收窄。
+ */
+const MODEL_MENU_WIDTH = 320
+
+/** 浮层高度兜底（`placePopover()` 还没量出来时用），与 CSS 里的 `max-height` 同值。 */
+const MODEL_MENU_FALLBACK_HEIGHT = 360
 
 /** 目录还没加载出来时的空快照（`useSyncExternalStore` 的服务端/初始值）。 */
 const EMPTY_MODEL_DIRECTORY_STATE: ModelDirectoryState = { current: null, groups: [], failures: [], status: 'idle', error: null }
@@ -167,15 +183,24 @@ async function quickImageToPromptPart(image: QuickImageDraft): Promise<PromptCon
 }
 
 /**
- * 快速录入的模型选择器（v1.15.1）。
+ * 快速录入的模型选择器（v1.15.1；v1.15.2 修「浮层被遮挡」）。
  *
- * ## 设计要点（相对 fork 那份的三处修正）
+ * ## 设计要点
  *
  * 1. **列表与选中来自同一个 authority**：列表读 `modelDirectories.directoryFor(会话)` 的
  *    快照，选中也走**同一个** directory 的 `select()`；
  * 2. 选中值存 localStorage 时带 **reasoning effort**（取 `model.reasoning.defaultEffort`）；
  * 3. 目录里**没有** `inputModalities`，所以"这个模型收不收图"由 `modalityTable`
- *    （宿主 `/model-modalities`）标注出来 —— 用户的痛点正是"选到不收图的模型，图片白传"。
+ *    （宿主 `/model-modalities`）标注出来 —— 用户的痛点正是"选到不收图的模型，图片白传"；
+ * 4. **浮层 portal 到 `document.body` + `fixed` + `placePopover()` 摆放**（v1.15.2）：
+ *    原来那份是 `position: absolute; bottom: calc(100% + 4px)`，挂在触发按钮的
+ *    `position: relative` 包装盒里，而包装盒在 `.wb-dialog-body { overflow: auto }`
+ *    **里面** —— 于是浮层只会朝上开、不看还有多少可用空间，多出来的部分被滚动容器裁掉
+ *    （2026-09-15 用户截图；实测常见窗口下只有 48% 可见，
+ *    「跟随 DSH 默认模型」与前几个模型正好在被裁掉的那一段，窗口小一点时甚至画到视口外）。
+ *    z-index/层叠上下文**不是**成因，光调 `bottom`/`max-height` 也治不了根：
+ *    只要还挂在滚动容器里，容器就会继续裁它、滚动时浮层还会跟内容错位。
+ *    事故说明与判定表见 `popoverPlacement.ts` 顶部，回归见 `test/popoverPlacement.test.mjs`。
  *
  * ⚠️ 目录服务缺失时**不静默降级**：按钮照常显示，点击给出可读原因
  * （"当前 DSH 未提供模型选择接口"），而不是变成一个点了没反应的控件。
@@ -191,6 +216,15 @@ function QuickModelPicker({ runtime, value, onChange, modalityTable, disabled, o
 }): JSX.Element {
   const [open, setOpen] = useState(false)
   const [loading, setLoading] = useState(false)
+  /**
+   * 浮层摆放结果。`null` = 还没量到（首帧先 `visibility: hidden` 渲染，量完再显示，
+   * 免得先画在视口左上角再跳过去）。
+   */
+  const [placement, setPlacement] = useState<PopoverPlacement | null>(null)
+  const triggerRef = useRef<HTMLButtonElement | null>(null)
+  const menuRef = useRef<HTMLDivElement | null>(null)
+  /** 用方向键打开时，等选项挂上 DOM 之后要把焦点交给第一项 / 最后一项。 */
+  const pendingFocusRef = useRef<'first' | 'last' | null>(null)
   const sessionsState = safeService<WorkbenchRuntime['sessions']>(runtime, 'sessions')?.list?.getSnapshot?.()
   const directorySessionId = sessionsState?.current ?? sessionsState?.ids?.[0] ?? ''
   /**
@@ -230,14 +264,28 @@ function QuickModelPicker({ runtime, value, onChange, modalityTable, disabled, o
     }
     return value.effortLabel === undefined ? value.label : `${value.label} · ${value.effortLabel}`
   }, [state.groups, value])
+  /**
+   * 关掉浮层，并把焦点还给触发按钮。
+   *
+   * 验收标准里的「关闭后焦点归还到触发元素」就落在这一处 ——
+   * 选完一项、点浮层外面、按 Esc、按 Tab 都走它（键盘用户不会迷失位置）。
+   */
+  const closePicker = useCallback((refocus = true): void => {
+    setOpen(false)
+    setPlacement(null)
+    if (refocus) triggerRef.current?.focus()
+  }, [])
+
   const openPicker = (): void => {
-    if (open) { setOpen(false); return }
     const gate = gateModelPicker({ hasDirectory: directory !== undefined, sessionId: directorySessionId })
     if (!gate.ok) {
       const message = `${gate.reason}；本次会话将跟随 DSH 默认模型。`
       // 控制台也留一条（用户截图看不到 console，但排查时这一步能直接定位）
       console.warn(`[workbench] 模型选择器不可用：${message}`)
       onError(message)
+      // 方向键路径会先记下"打开后焦点给谁"；这里没打开，就得把意图清掉，
+      // 否则下一次（比如鼠标）打开时焦点会莫名跳到第一项
+      pendingFocusRef.current = null
       return
     }
     if (directory === undefined) return
@@ -247,6 +295,110 @@ function QuickModelPicker({ runtime, value, onChange, modalityTable, disabled, o
       .then(() => { onLoaded() })
       .catch((error: unknown) => onError(error instanceof Error ? error.message : String(error)))
       .finally(() => setLoading(false))
+  }
+
+  /** 触发按钮是**开关**：开着再点是关（关闭路径统一走 closePicker，焦点才会还回去）。 */
+  const togglePicker = (): void => {
+    if (open) { closePicker(); return }
+    openPicker()
+  }
+
+  /** 方向键在选项间移动焦点（选项本身就是 button，Enter/Space 原生可用）。 */
+  const focusOption = useCallback((delta: number): void => {
+    const menu = menuRef.current
+    if (menu === null) return
+    const options = Array.from(menu.querySelectorAll<HTMLElement>('[role="option"]'))
+    const target = options[stepIndex(options.indexOf(document.activeElement as HTMLElement), delta, options.length)]
+    target?.focus()
+  }, [])
+
+  /**
+   * 摆放浮层：portal 到 body 之后，位置只能**量**（触发按钮 vs 视口），
+   * 所以放在 layout effect 里，并在滚动 / 改尺寸时重算。
+   *
+   * ⚠️ `scroll` 事件不冒泡，但**捕获阶段**会经过 window —— 必须传 `true` 才收得到
+   * `.wb-dialog-body` 的滚动。这一条正对应验收标准里的「弹窗滚动时不遮挡」：
+   * 弹窗内部一滚，触发按钮就动了，浮层必须跟着走，不能停在原地。
+   * ⚠️ `setPlacement` 里做相等判断：否则"量 → 写状态 → 再渲染 → 再量"会自激
+   * （本项目第 6 条规矩：写入相同值也会让回路不收敛）。
+   */
+  useLayoutEffect(() => {
+    if (!open) return
+    const update = (): void => {
+      const trigger = triggerRef.current
+      const menu = menuRef.current
+      if (trigger === null || menu === null) return
+      const anchor = trigger.getBoundingClientRect()
+      /**
+       * 自然高度 = `scrollHeight`（内容 + padding）**加回边框**：
+       * `placePopover()` 返回的 `max-height` 是"整块菜单的高度"，
+       * 而 `.wb-model-menu` 是 `box-sizing: border-box` —— 漏掉这 2px 边框
+       * 就会让菜单比可用空间高出 2px，在矮窗口里正好表现为"又被裁了一点"。
+       */
+      const border = window.getComputedStyle(menu)
+      const borderY = (Number.parseFloat(border.borderTopWidth) || 0) + (Number.parseFloat(border.borderBottomWidth) || 0)
+      const next = placePopover({
+        anchor: { top: anchor.top, bottom: anchor.bottom, left: anchor.left, right: anchor.right },
+        menu: { width: MODEL_MENU_WIDTH, height: menu.scrollHeight + borderY },
+        viewport: { width: window.innerWidth, height: window.innerHeight },
+      })
+      setPlacement((previous) => (previous !== null && samePlacement(previous, next) ? previous : next))
+    }
+    update()
+    const pending = pendingFocusRef.current
+    if (pending !== null) {
+      pendingFocusRef.current = null
+      focusOption(pending === 'first' ? 1 : -1)
+    }
+    window.addEventListener('scroll', update, true)
+    window.addEventListener('resize', update)
+    return () => {
+      window.removeEventListener('scroll', update, true)
+      window.removeEventListener('resize', update)
+    }
+  }, [open, focusOption])
+
+  /**
+   * Esc **只关浮层**，不关整个「快速录入」弹窗。
+   *
+   * 为什么挂在 `window` 的**捕获**阶段：`Modal` 也监听 Esc（挂在 `document` 捕获上），
+   * 同一目标、同一阶段按**注册顺序**执行 —— 后注册的我们永远抢不到，于是按 Esc
+   * 会把整个弹窗连同已输入的内容一起关掉。window 在捕获路径上早于 document，
+   * 在这里 `stopPropagation()` 就能把这次 Esc 收在自己手里。
+   */
+  useEffect(() => {
+    if (!open) return
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key !== 'Escape') return
+      event.stopPropagation()
+      event.preventDefault()
+      closePicker()
+    }
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => window.removeEventListener('keydown', onKeyDown, true)
+  }, [open, closePicker])
+
+  const onTriggerKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>): void => {
+    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
+    event.preventDefault()
+    if (!open) {
+      // 选项要等这一帧渲染完才存在，所以只记意图，由上面的 layout effect 落实焦点
+      pendingFocusRef.current = event.key === 'ArrowDown' ? 'first' : 'last'
+      openPicker()
+      return
+    }
+    focusOption(event.key === 'ArrowDown' ? 1 : -1)
+  }
+
+  const onMenuKeyDown = (event: React.KeyboardEvent<HTMLDivElement>): void => {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault(); focusOption(1)
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault(); focusOption(-1)
+    } else if (event.key === 'Tab') {
+      // Tab 不该被困在浮层里：先把焦点还给触发按钮，再让浏览器从它继续往后走
+      closePicker()
+    }
   }
   const choose = (group: ModelProviderGroup, model: ModelProviderGroup['models'][number]): void => {
     const effortId = model.reasoning?.defaultEffort
@@ -258,7 +410,7 @@ function QuickModelPicker({ runtime, value, onChange, modalityTable, disabled, o
       ...(effortId === undefined || effortId === '' ? {} : { reasoningEffort: effortId }),
       ...(effort === undefined ? {} : { effortLabel: effort.name }),
     })
-    setOpen(false)
+    closePicker()
   }
   /** 该模型是否收图（`undefined` = 对照表里没有，不做判断）。 */
   const imageSupport = (provider: string, model: string): boolean | undefined => {
@@ -268,15 +420,46 @@ function QuickModelPicker({ runtime, value, onChange, modalityTable, disabled, o
     return modalities === null ? undefined : modalities.includes('image')
   }
   return (
-    <div style={{ position: 'relative' }}>
-      <button type="button" className="wb-btn" disabled={disabled === true} onClick={openPicker} title="选择本次澄清会话使用的模型">
+    <div style={{ display: 'flex' }}>
+      <button
+        ref={triggerRef}
+        type="button"
+        className="wb-btn"
+        disabled={disabled === true}
+        onClick={togglePicker}
+        onKeyDown={onTriggerKeyDown}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        title="选择本次澄清会话使用的模型"
+      >
         <Icon name="model" />{selectedLabel}<span style={{ flex: 'none' }}>{open ? '▲' : '▼'}</span>
       </button>
-      {open && (
+      {/*
+        浮层 **portal 到 document.body**（不是就地渲染）：
+        `.wb-dialog` 有 `overflow: hidden`、`.wb-dialog-body` 有 `overflow: auto`、
+        `.wb-overlay` 有 `backdrop-filter`（会变成 fixed 后代的包含块）——
+        留在原地就一定被裁。它与触发按钮的祖先关系因此断开了，
+        所以"跟着按钮走"必须靠 `placePopover()` 在滚动/改尺寸时重算。
+      */}
+      {open && createPortal(
         <>
-          <div style={{ position: 'fixed', inset: 0, zIndex: 20 }} onClick={() => setOpen(false)} />
-          <div className="wb-model-menu" role="listbox" aria-label="选择模型">
-            <button type="button" className={`wb-model-option${value === null ? ' selected' : ''}`} onClick={() => { onChange(null); setOpen(false) }}>
+          <div className="wb-model-scrim" onClick={() => closePicker()} />
+          <div
+            ref={menuRef}
+            className="wb-model-menu"
+            role="listbox"
+            aria-label="选择模型"
+            style={{
+              left: placement === null ? 0 : placement.left,
+              top: placement === null ? 0 : placement.top,
+              width: placement === null ? MODEL_MENU_WIDTH : placement.width,
+              maxHeight: placement === null ? MODEL_MENU_FALLBACK_HEIGHT : placement.maxHeight,
+              // 还没量出来就别给人看见（否则会先闪一下左上角）
+              visibility: placement === null ? 'hidden' : 'visible',
+            }}
+            onKeyDown={onMenuKeyDown}
+          >
+            <button type="button" role="option" aria-selected={value === null} className={`wb-model-option${value === null ? ' selected' : ''}`} onClick={() => { onChange(null); closePicker() }}>
               <span className="wb-model-option-main">跟随 DSH 默认模型</span>
               {value === null && <Icon name="check" size={14} />}
             </button>
@@ -290,7 +473,7 @@ function QuickModelPicker({ runtime, value, onChange, modalityTable, disabled, o
                   const effort = model.reasoning?.efforts.find((item) => item.id === model.reasoning?.defaultEffort)
                   const supportsImage = imageSupport(group.id, model.id)
                   return (
-                    <button key={model.id} type="button" className={`wb-model-option${isSelected ? ' selected' : ''}`} onClick={() => choose(group, model)}>
+                    <button key={model.id} type="button" role="option" aria-selected={isSelected} className={`wb-model-option${isSelected ? ' selected' : ''}`} onClick={() => choose(group, model)}>
                       <span className="wb-model-option-main">
                         <span className="wb-model-option-name">{model.name}</span>
                         {(effort !== undefined || supportsImage === false) && (
@@ -313,7 +496,8 @@ function QuickModelPicker({ runtime, value, onChange, modalityTable, disabled, o
               <div className="wb-model-menu-empty">{state.failures.length} 个模型来源读取失败（其余仍可选）</div>
             )}
           </div>
-        </>
+        </>,
+        document.body,
       )}
     </div>
   )

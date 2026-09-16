@@ -263,7 +263,26 @@ ${panelContainerCss({ view: VIEW_ATTR, official: OFFICIAL_ATTR, active: ACTIVE_A
 .wb-quick-attach-note { margin-top: 6px; font-size: 12px; color: #e0a030; }
 .wb-quick-actions { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
 .wb-quick-actions .wb-spacer { flex: 1; }
-.wb-model-menu { position: absolute; left: 0; bottom: calc(100% + 4px); z-index: 30; width: 320px; max-height: 360px; overflow-y: auto; padding: 6px; border: 1px solid var(--wb-border, rgba(127,127,127,.22)); border-radius: 10px; background: var(--dsw-alias-bg-layer-2, #1c1c1f); box-shadow: 0 12px 32px rgba(0,0,0,.45); }
+/* ---------------------------------------------------------------------------
+   模型选择浮层（v1.15.2 修「被遮挡」）
+   ---------------------------------------------------------------------------
+   ⚠️ 必须 position: fixed + **由 JS portal 到 document.body**：
+   浮层原来用 position:absolute + bottom: calc(100% + 4px) 挂在触发按钮的
+   position:relative 包装盒里，而那个盒子在 .wb-dialog-body（overflow: auto）
+   **里面** —— 于是只会朝上开、不看可用空间，多出来的部分被滚动容器裁掉
+   （实测常见窗口下只有 48% 可见，「跟随 DSH 默认模型」和前几个模型正好在被裁掉的那一段），
+   窗口小一点时甚至画到视口外面。
+   left/top/width/max-height 由 popoverPlacement.ts 的 placePopover() 算好写 inline style；
+   这里的值是"拿不到量取结果"时的兜底（见该项目规范第 9 条：兜底值要选最坏情况可接受的）。
+   ⚠️ box-sizing 必须是 border-box：placePopover() 把 max-height 当"整块菜单的高度"用，
+   默认的 content-box 会让 border+padding（这里共 14px）额外顶出去 ——
+   实测 1000x400 就因此有 3% 被挤出视口（这正是本次要修的"被裁"）。
+   层叠：.wb-overlay 是 300，浮层要压住它；--wb-* 令牌由令牌层提供。
+   ⚠️ 本段在模板字符串里，**不能出现反引号**。
+   --------------------------------------------------------------------------- */
+.wb-model-menu { position: fixed; z-index: 330; box-sizing: border-box; width: 320px; max-height: min(60vh, 360px); overflow-y: auto; padding: 6px; border: 1px solid var(--wb-border, rgba(127,127,127,.22)); border-radius: 10px; background: var(--dsw-alias-bg-layer-2, #1c1c1f); box-shadow: 0 12px 32px rgba(0,0,0,.45); overscroll-behavior: contain; scrollbar-width: thin; }
+/* 浮层打开时的"点外面关掉"层：必须**在弹窗之上**（300）才能接住落在弹窗任意位置的第一次点击 */
+.wb-model-scrim { position: fixed; inset: 0; z-index: 329; }
 .wb-model-group-title { padding: 4px 8px; font-size: 11px; font-weight: 700; color: var(--dsw-alias-label-secondary); }
 .wb-model-option { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 9px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: inherit; font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
 .wb-model-option:hover { background: color-mix(in srgb, var(--dsw-alias-label-primary, #fff) 7%, transparent); }

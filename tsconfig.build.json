@@ -23,6 +23,7 @@
     "src/client/intakeWorkspace.ts",
     "src/client/quickAttachments.ts",
     "src/client/modelCapability.ts",
+    "src/client/popoverPlacement.ts",
     "src/review-memory.ts",
     "src/workspace-check.ts"
   ]
