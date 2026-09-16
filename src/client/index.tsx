@@ -2043,10 +2043,15 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
    * 为什么必须有（审查 F1）：这个列表是默认值的**唯一来源**，删不掉就意味着
    * "用户在设置里改了默认工作区也永远回不去"。删除后立刻用**服务端回传的权威设置**重算预填，
    * 走的还是同一个 `decideQuickWorkspaceDefault()`，不另写一套。
+   *
+   * ⚠️ 基准取**服务端当前值**而不是本地快照（fresh-eyes 复审 N1）：服务端是整表替换语义，
+   * 拿"弹窗打开那一刻"的旧快照算整表，会把期间别的窗口刚记下的条目一起抹掉。
+   * 这一步只把竞争窗口从"弹窗存活期间"缩到"这一两次请求之间"，**不是**并发安全的证明。
    */
   const forgetQuickWorkspace = async (path: string): Promise<void> => {
-    const next = forgetRecentWorkspace(settings.quickWorkspaceRecent, path)
     try {
+      const snapshot = await api<{ settings: WorkbenchSettings }>('/api/workbench/settings')
+      const next = forgetRecentWorkspace(snapshot.settings.quickWorkspaceRecent, path)
       const res = await api<{ settings: WorkbenchSettings }>('/api/workbench/settings', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ quickWorkspaceRecent: next }),
@@ -2058,6 +2063,8 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
        * 为什么值得写：这条链跨了服务端（旧版本是"合并"语义，会把删掉的又并回来），
        * 而"提交成功但记录还在"是**静默失败** —— 用户以为已经不再记住，下次打开它又回来了。
        * 换成可读错误至少能说清"重启 DSH 后生效"。
+       *
+       * 它证明的只是"我提交的表被照单落库"，**不覆盖**并发覆盖（那是 false negative 的边界，见复审 N1）。
        */
       if (!sameRecentWorkspaces(res.settings.quickWorkspaceRecent, next)) {
         setError('服务端没有按提交的列表落库：「最近手动选择」里那条记录仍在。宿主若还是旧版本，重启 DSH 后生效。')

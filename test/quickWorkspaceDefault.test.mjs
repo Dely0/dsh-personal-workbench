@@ -165,13 +165,37 @@ test('接线 v1.15.2：把工作区记进「最近手动选择」必须先过 to
   const settingsWriters = stripped.match(/quickWorkspaceRecent:/g) ?? []
   assert.ok(settingsWriters.length >= 1, 'rememberQuickWorkspace 仍要写 quickWorkspaceRecent')
   // 设置弹窗不得整表回传这个列表（服务端是整表替换语义，陈旧快照会把并发记下的顶掉）
-  assert.match(stripped, /const \{ quickWorkspaceRecent: _ignored, \.\.\.editable \} = settings/,
-    'saveSettings 必须把 quickWorkspaceRecent 摘掉再提交')
+  const saveBody = functionBody(stripped, 'saveSettings')
+  assert.ok(saveBody !== null, '没找到 saveSettings（改名了就要同步这条断言）')
+  assert.match(saveBody, /const \{ quickWorkspaceRecent: _ignored, \.\.\.editable \} = settings/,
+    'saveSettings 必须把 quickWorkspaceRecent 摘掉')
+  /**
+   * ⚠️ 断言必须落在"**发出去的是 editable**"这个语义上（复审 N2）：
+   * 只断言解构那一行的话，把 POST 体改回 `JSON.stringify(settings)` 照样全绿
+   * （`editable` 变成未使用变量，而 tsconfig 没有 noUnusedLocals，typecheck 也不报）。
+   */
+  assert.match(saveBody, /JSON\.stringify\(editable\)/, '发出去的必须是摘掉 quickWorkspaceRecent 的 editable')
+  assert.equal(/JSON\.stringify\(settings\)/.test(saveBody), false,
+    '不许再整表发 settings —— 那会让陈旧快照把并发记下的工作区顶掉')
   // 「不再记住」必须带后置校验：提交成功但记录还在（宿主是旧的合并语义）= 静默失败
   const forgetBody = functionBody(stripped, 'forgetQuickWorkspace')
   assert.ok(forgetBody !== null, '没找到 forgetQuickWorkspace（改名了就要同步这条断言）')
   assert.match(forgetBody, /sameRecentWorkspaces\(res\.settings\.quickWorkspaceRecent, next\)/,
     '删完要核对服务端真的按整表落库了，否则用户以为删掉了、下次它又回来')
+  // 基准必须是**服务端当前值**，不是弹窗打开那一刻的本地快照（复审 N1）
+  assert.match(forgetBody, /const snapshot = await api<\{ settings: WorkbenchSettings \}>\('\/api\/workbench\/settings'\)/,
+    '删除前要现读服务端的当前列表，否则陈旧快照会顺手抹掉别的窗口刚记下的条目')
+  assert.match(forgetBody, /forgetRecentWorkspace\(snapshot\.settings\.quickWorkspaceRecent, path\)/,
+    '算整表要用刚读到的服务端快照')
+  /**
+   * 复审 N3：F1 的**用户可见出口**必须真的接在界面上 ——
+   * 只守 `forgetQuickWorkspace` 的函数体的话，把渲染条件改成 false 也能全绿。
+   */
+  assert.match(stripped,
+    /\{quickWorkspaceSource === 'last-manual' && quickWorkspace\.trim\(\) !== '' && !quickWorkspaceTouched && \(/,
+    '「不再记住」按钮的渲染条件少了就等于这个出口不存在（判定说"上次手动选择"时必须给得出按钮）')
+  assert.match(stripped, /onClick=\{\(\) => void forgetQuickWorkspace\(quickWorkspace\)\}/,
+    '按钮必须真的调用 forgetQuickWorkspace')
 })
 
 /**

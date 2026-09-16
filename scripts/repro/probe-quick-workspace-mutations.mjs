@@ -118,6 +118,27 @@ const MUTATIONS = [
     to: 'const editable = settings',
     expect: 'saveSettings 必须把 quickWorkspaceRecent 摘掉再提交',
   },
+  {
+    name: 'M13 摘了字段却又把整表 settings 发出去（形态扫描满意、行为照旧）',
+    file: COMPONENT,
+    from: /body: JSON\.stringify\(editable\)/,
+    to: 'body: JSON.stringify(settings)',
+    expect: '发出去的必须是摘掉 quickWorkspaceRecent 的 editable',
+  },
+  {
+    name: 'M14 「不再记住」按钮的渲染条件改成恒 false（F1 的用户出口被静默摘掉）',
+    file: COMPONENT,
+    from: /\{quickWorkspaceSource === 'last-manual' && quickWorkspace\.trim\(\) !== '' && !quickWorkspaceTouched && \(/,
+    to: '{false && (',
+    expect: '「不再记住」按钮必须真的接在界面上',
+  },
+  {
+    name: 'M15 删除时用弹窗打开那刻的本地快照当基准（会抹掉别的窗口刚记下的）',
+    file: COMPONENT,
+    from: /forgetRecentWorkspace\(snapshot\.settings\.quickWorkspaceRecent, path\)/,
+    to: 'forgetRecentWorkspace(settings.quickWorkspaceRecent, path)',
+    expect: '删除前要现读服务端的当前列表',
+  },
 ]
 
 const run = () => spawnSync(process.execPath, ['--test', ...TEST_FILES], { cwd: ROOT, encoding: 'utf8' })
