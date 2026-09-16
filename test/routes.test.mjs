@@ -727,3 +727,41 @@ function buildMinimalDocx(compressed) {
   eocd.writeUInt32LE(local.length, 16)
   return Buffer.concat([local, centralDir, eocd])
 }
+
+/**
+ * `quickWorkspaceRecent` 的写语义（v1.15.2 变更）。
+ *
+ * 这个列表从 v1.15.2 起是**快速录入默认工作区的唯一来源**，所以：
+ * - 必须能**删**（"不再记住这个目录"）→ 服务端是**整表替换**，不是合并；
+ *   （合并语义下 `[...incoming, ...current]` 会把删掉的那条又并回来 ——
+ *   用户改了「默认工作区」就永远回不去，fresh-eyes 审查 F1）
+ * - 顺序由客户端决定（置顶语义在 `shared/quickWorkspaceRecent.ts`），服务端只归一化后落库；
+ * - 不传该字段 = 不动它（设置弹窗保存时就不会把并发记下的工作区顶掉）。
+ */
+test('settings：最近手动选择的工作区是整表替换（能置顶 / 能删 / 能清空），且脏值归一化', async () => {
+  await withServer(async ({ request }) => {
+    const first = await request('POST', '/api/workbench/settings', { quickWorkspaceRecent: ['W1', 'W2'] })
+    assert.equal(first.status, 200)
+    assert.deepEqual(first.body.settings.quickWorkspaceRecent, ['W1', 'W2'])
+
+    const reordered = await request('POST', '/api/workbench/settings', { quickWorkspaceRecent: ['W2', 'W1'] })
+    assert.deepEqual(reordered.body.settings.quickWorkspaceRecent, ['W2', 'W1'], '顺序按客户端提交的整表来（置顶语义）')
+
+    const removed = await request('POST', '/api/workbench/settings', { quickWorkspaceRecent: ['W2'] })
+    assert.deepEqual(removed.body.settings.quickWorkspaceRecent, ['W2'], '删得掉；合并语义下这里会变回两条')
+
+    const cleared = await request('POST', '/api/workbench/settings', { quickWorkspaceRecent: [] })
+    assert.deepEqual(cleared.body.settings.quickWorkspaceRecent, [], '清得空（= 回到设置里的默认工作区）')
+
+    await request('POST', '/api/workbench/settings', { quickWorkspaceRecent: ['W3'] })
+    const kept = await request('POST', '/api/workbench/settings', { defaultWorkspace: 'D:\\Code\\proj' })
+    assert.deepEqual(kept.body.settings.quickWorkspaceRecent, ['W3'], '不传这个字段就不动它')
+    assert.equal(kept.body.settings.defaultWorkspace, 'D:\\Code\\proj')
+
+    const dirty = await request('POST', '/api/workbench/settings', {
+      quickWorkspaceRecent: ['a', 'A\\', '   ', 42, 'b', 'c', 'd', 'e'],
+    })
+    assert.deepEqual(dirty.body.settings.quickWorkspaceRecent, ['a', 'b', 'c', 'd', 'e'],
+      '去重（忽略大小写/结尾分隔符）、丢非字符串与空白、截断到上限')
+  })
+})

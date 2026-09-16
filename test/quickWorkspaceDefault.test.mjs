@@ -16,13 +16,21 @@
  *    没有任何任务/选中项 —— "任务字段传进来也不参与判定"要有实测；
  * 2. **接线**：`openQuickEntry` 不得再读选中任务；提交时"要不要记进最近手动选择"
  *    必须走 `shouldRememberQuickWorkspace`（否则自动预填的值会自己污染自己）。
+ *
+ * 行为级接线（把源码里真实的 `openQuickEntry` 抽出来跑）在
+ * `test/quickIntakeDefaultWiring.test.mjs`；「最近手动选择」列表的合并/删除在
+ * `shared/quickWorkspaceRecent.ts`，前后端共用（服务端整表替换语义的单测在 `routes.test.mjs`）。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import {
-  decideQuickWorkspaceDefault, quickWorkspaceSourceLabel, shouldRememberQuickWorkspace,
+  decideQuickWorkspaceDefault, quickFollowFolderDefault, quickWorkspaceSourceLabel, shouldRememberQuickWorkspace,
 } from '../lib/client/quickWorkspaceDefault.js'
+import {
+  forgetRecentWorkspace, mergeRecentWorkspaces, normalizeRecentWorkspaces, QUICK_WORKSPACE_RECENT_LIMIT,
+  recentWorkspaceKey, sameRecentWorkspaces,
+} from '../lib/shared/quickWorkspaceRecent.js'
 
 // ---------------------------------------------------------------- 判定表
 
@@ -117,20 +125,31 @@ function readSource(relative) {
   }
 }
 
-test('接线 v1.15.2：openQuickEntry 不得再从"当前选中任务"派生默认工作区', () => {
+/** 按名字切出一个 `const name = ... => { ... }` 的函数体（行为级测试与扫描共用）。 */
+function functionBody(source, name) {
+  const matched = new RegExp(`const ${name} = [^\\n]*=> \\{([\\s\\S]*?)\\r?\\n  \\}`).exec(source)
+  return matched === null ? null : matched[1]
+}
+
+test('接线 v1.15.2：判定与投影的接线不许再读"当前选中任务"', () => {
   const { stripped } = readSource('../src/client/index.tsx')
-  const matched = /const openQuickEntry = \(\): void => \{([\s\S]*?)\r?\n  \}/.exec(stripped)
-  assert.ok(matched !== null, '没找到 openQuickEntry 实现（改名了就要同步这条断言）')
-  const body = matched[1]
-  assert.match(body, /decideQuickWorkspaceDefault\(\{/, '默认值必须由纯函数判定给，不许在组件里重新推导')
-  assert.equal(/\bselected\b/.test(body), false,
-    'openQuickEntry 不许读 selected —— 那正是"执行过任务 A 之后默认值变成 A 的工作区"的成因')
-  assert.equal(/effectiveWorkspacePath/.test(body), false,
-    'openQuickEntry 不许读任何任务工作区字段')
-  assert.match(body, /setQuickWorkspaceSource\(decided\.source\)/, '来源提示也要由判定一并给出')
+  const openBody = functionBody(stripped, 'openQuickEntry')
+  assert.ok(openBody !== null, '没找到 openQuickEntry 实现（改名了就要同步这条断言）')
+  assert.match(openBody, /decideQuickWorkspaceDefault\(\{/, '默认值必须由纯函数判定给，不许在组件里重新推导')
+  assert.match(openBody, /applyQuickWorkspaceDecision\(/, '投影只能走 applyQuickWorkspaceDecision（唯一一处）')
+  const applyBody = functionBody(stripped, 'applyQuickWorkspaceDecision')
+  assert.ok(applyBody !== null, '没找到 applyQuickWorkspaceDecision（改名了就要同步这条断言）')
+  for (const [label, body] of [['openQuickEntry', openBody], ['applyQuickWorkspaceDecision', applyBody]]) {
+    assert.equal(/\bselected\b/.test(body), false,
+      `${label} 不许读 selected —— 那正是"执行过任务 A 之后默认值变成 A 的工作区"的成因`)
+    assert.equal(/effectiveWorkspacePath/.test(body), false, `${label} 不许读任何任务工作区字段`)
+  }
+  assert.match(applyBody, /setQuickWorkspaceSource\(decided\.source\)/, '来源提示也要由判定一并给出')
   // 界面上的来源文案只允许来自 quickWorkspaceSourceLabel，不许再内联判断
   assert.match(stripped, /quickWorkspaceSourceLabel\(quickWorkspaceSource\)/)
   assert.equal(/继承自父任务/.test(stripped), false, '「继承自父任务」这句界面文案已随判定一起删掉')
+  // 同义的另一句（审查 F4）：快速录入里 task 恒为 null，clarify 分支明确排除父任务 —— 这句是假的
+  assert.equal(/跟随父任务/.test(stripped), false, '「跟随父任务」在快速录入里永远不成立，不许再写进提示')
 })
 
 test('接线 v1.15.2：把工作区记进「最近手动选择」必须先过 touched 闸门', () => {
@@ -139,16 +158,27 @@ test('接线 v1.15.2：把工作区记进「最近手动选择」必须先过 to
     'rememberQuickWorkspace 的调用必须先问 shouldRememberQuickWorkspace')
   assert.equal(/if \(chosen !== ''\) void rememberQuickWorkspace/.test(stripped), false,
     '不许退回"只要非空就记"：自动预填的值会被记成"上次手动选择"，下一轮就是默认值')
+  const rememberBody = functionBody(stripped, 'rememberQuickWorkspace')
+  assert.ok(rememberBody !== null, '没找到 rememberQuickWorkspace（改名了就要同步这条断言）')
+  assert.match(rememberBody, /sameRecentWorkspaces\(/, '同值不写：算出来一样就别发请求')
   // recent 同时是下一次的默认值来源 —— 这条链只在设置接口那一处写
   const settingsWriters = stripped.match(/quickWorkspaceRecent:/g) ?? []
   assert.ok(settingsWriters.length >= 1, 'rememberQuickWorkspace 仍要写 quickWorkspaceRecent')
+  // 设置弹窗不得整表回传这个列表（服务端是整表替换语义，陈旧快照会把并发记下的顶掉）
+  assert.match(stripped, /const \{ quickWorkspaceRecent: _ignored, \.\.\.editable \} = settings/,
+    'saveSettings 必须把 quickWorkspaceRecent 摘掉再提交')
+  // 「不再记住」必须带后置校验：提交成功但记录还在（宿主是旧的合并语义）= 静默失败
+  const forgetBody = functionBody(stripped, 'forgetQuickWorkspace')
+  assert.ok(forgetBody !== null, '没找到 forgetQuickWorkspace（改名了就要同步这条断言）')
+  assert.match(forgetBody, /sameRecentWorkspaces\(res\.settings\.quickWorkspaceRecent, next\)/,
+    '删完要核对服务端真的按整表落库了，否则用户以为删掉了、下次它又回来')
 })
 
 /**
- * 上面那条扫的是 `openQuickEntry` **内部**；这条扫的是"所有能让预填值变化的写入点"。
+ * 上面那条扫的是"预填相关的两个函数"；这条扫的是"所有能让预填值变化的写入点"。
  *
  * 为什么要两条：真正的语义是「预填值只能由判定结果或用户输入决定」。
- * 只盯 openQuickEntry 的话，未来在别处加一句 `setQuickWorkspace(task.effectiveWorkspacePath)`
+ * 只盯那两个函数的话，未来在别处加一句 `setQuickWorkspace(task.effectiveWorkspacePath)`
  * （换个入口、加个"跟随任务"按钮）照样能溜过去。
  */
 test('接线 v1.15.2：setQuickWorkspace 的实参只允许是判定结果或用户输入', () => {
@@ -162,4 +192,57 @@ test('接线 v1.15.2：setQuickWorkspace 的实参只允许是判定结果或用
         + '或用户输入 —— 任何"从某个任务/最近执行过的东西派生"的写法都会重新引入本次事故',
     )
   }
+})
+
+// ------------------------------------------------------- 「最近手动选择」列表本身（shared/）
+
+test('quickWorkspaceRecent: 归一化 = 去空白 / 按比较键去重 / 截断到上限', () => {
+  assert.deepEqual(normalizeRecentWorkspaces(['a', 'A\\', '   ', 'b', 42, 'c', 'd', 'e', 'f']),
+    ['a', 'b', 'c', 'd', 'e'])
+  assert.equal(normalizeRecentWorkspaces(['a', 'b', 'c', 'd', 'e', 'f']).length, QUICK_WORKSPACE_RECENT_LIMIT)
+  assert.deepEqual(normalizeRecentWorkspaces(null), [], '脏值（手改 meta / 旧版本形状）当空列表')
+  assert.deepEqual(normalizeRecentWorkspaces('不是数组'), [])
+  assert.equal(recentWorkspaceKey('  D:\\Code\\Proj\\  '), 'd:/code/proj')
+})
+
+test('quickWorkspaceRecent: 合并 = 置顶 + 去重（同一目录再选一次要挪到第一位）', () => {
+  assert.deepEqual(mergeRecentWorkspaces(['W1', 'W2'], 'W3'), ['W3', 'W1', 'W2'])
+  assert.deepEqual(mergeRecentWorkspaces(['W1', 'W2'], 'W2'), ['W2', 'W1'],
+    '审查 F5：修前实现"已存在就直接 return"，于是预填仍是 W1（而它现在是默认值来源）')
+  assert.deepEqual(mergeRecentWorkspaces(['W1', 'w1\\'], 'W1'), ['W1'], '大小写/结尾分隔符差异算同一个')
+  assert.deepEqual(mergeRecentWorkspaces(null, 'W'), ['W'])
+  assert.deepEqual(mergeRecentWorkspaces(['W'], '   '), ['W'], '空白输入不改变列表')
+})
+
+test('quickWorkspaceRecent: 删除 = 删得掉（这是"改回默认工作区"的唯一路径）', () => {
+  assert.deepEqual(forgetRecentWorkspace(['W1', 'W2'], 'W1'), ['W2'])
+  assert.deepEqual(forgetRecentWorkspace(['W1', 'W2'], 'w1\\'), ['W2'], '比较键相同即同一条')
+  assert.deepEqual(forgetRecentWorkspace(['W1'], '别的'), ['W1'])
+  assert.deepEqual(forgetRecentWorkspace(['W1'], 'W1'), [], '清空后默认值就回到设置里的默认工作区')
+})
+
+test('quickWorkspaceRecent: 同值不写（否则每个 tick 都可能发一次写请求）', () => {
+  assert.equal(sameRecentWorkspaces(['W1', 'W2'], ['W1', 'W2']), true)
+  assert.equal(sameRecentWorkspaces(['W1', 'W2'], ['w1\\', 'W2']), true, '比较键相同即等价')
+  assert.equal(sameRecentWorkspaces(['W1', 'W2'], ['W2', 'W1']), false, '顺序变了就要写（置顶靠它）')
+  assert.equal(sameRecentWorkspaces(['W1'], ['W1', 'W2']), false)
+  assert.equal(sameRecentWorkspaces(null, []), true)
+})
+
+test('quickFollowFolderDefault: 只看全局开关与"有没有目标目录"，不按路径来源分叉', () => {
+  assert.equal(quickFollowFolderDefault('D:\\root', true), true)
+  assert.equal(quickFollowFolderDefault('D:\\root', false), false)
+  assert.equal(quickFollowFolderDefault('', true), false, '没有目标目录就没什么可建')
+  assert.equal(quickFollowFolderDefault('   ', true), false)
+  assert.equal(quickFollowFolderDefault(null, true), false)
+  /**
+   * 审查 F2 的正面断言：同一份设置下，"路径来自哪里"不参与判定。
+   * 按来源分叉（例如 `source === 'system-default'` 才勾）会让"上次手动选择"这一支
+   * 静默把默认勾选翻成 false —— 新任务的文件就不再落进 `W/<任务ID>-<标题片段>`。
+   */
+  assert.equal(
+    quickFollowFolderDefault('W', true),
+    quickFollowFolderDefault('D', true),
+    '两条不同来源的路径在同一个开关下必须给出同一个默认勾选',
+  )
 })

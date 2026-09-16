@@ -36,6 +36,7 @@
  * 不 import React、不碰 DOM、不读 `document` —— 可被 `node --test` 直接测。
  */
 import { normalizeWindowsPathToWsl } from './workspacePath.js'
+import { normalizeRecentWorkspaces } from '../shared/quickWorkspaceRecent.js'
 
 /** 参与判定的设置片段（只声明用得到的字段）。 */
 export interface QuickWorkspaceDefaultInput {
@@ -66,13 +67,25 @@ export interface QuickWorkspaceDefaultDecision {
  */
 export function decideQuickWorkspaceDefault(input: QuickWorkspaceDefaultInput): QuickWorkspaceDefaultDecision {
   const normalize = (value: string): string => (input.isWsl === true ? normalizeWindowsPathToWsl(value) : value)
-  const manual = (input.recent ?? [])
-    .map((item) => String(item ?? '').trim())
-    .find((item) => item !== '')
+  /** 归一化只有一处实现（`shared/quickWorkspaceRecent.ts`）：这里只需问"最靠前的那一条是什么"。 */
+  const manual = normalizeRecentWorkspaces(input.recent)[0]
   if (manual !== undefined) return { path: normalize(manual), source: 'last-manual' }
   const fallback = String(input.defaultWorkspace ?? '').trim()
   if (fallback !== '') return { path: normalize(fallback), source: 'system-default' }
   return { path: '', source: 'unset' }
+}
+
+/**
+ * 「在该工作区下建任务资料夹」的默认勾选。
+ *
+ * 口径 = **全局设置本身的语义**（"自动为每个任务创建独立文件夹"）+ 有目标目录。
+ * 刻意**不按路径来源分叉**（fresh-eyes 审查 F2）：
+ * 按来源分叉会让"上次手动选择"这一支静默把默认勾选从 true 翻成 false，
+ * 于是新任务的文件不再落进 `W/<任务ID>-<标题片段>`、提示词里也没有 `workspace_path` ——
+ * 那正是 v1.15.1 任务资料夹改造要消灭的"文件散在目录里"。
+ */
+export function quickFollowFolderDefault(path: string, autoCreateTypeFolders: boolean): boolean {
+  return autoCreateTypeFolders === true && String(path ?? '').trim() !== ''
 }
 
 /**

@@ -26,6 +26,7 @@ import { makeReportRoutes } from './routes/reports.js'
 import { makeTaskRoutes } from './routes/tasks.js'
 import type { TeamMemoryService } from '../review-memory.js'
 import { teamMemoryAvailable } from '../review-memory.js'
+import { normalizeRecentWorkspaces } from '../shared/quickWorkspaceRecent.js'
 
 /**
  * 插件版本：直接读包内 package.json，避免再出现"代码已升级、health 还报旧版本"的漂移。
@@ -46,45 +47,17 @@ export function readDailyCapacityMinutes(db: DatabaseSync): number {
   return Math.min(1440, Math.round(raw))
 }
 
-/** 快速录入「最近用过的工作区」上限（再多候选列表就不好用了）。 */
-export const QUICK_WORKSPACE_RECENT_LIMIT = 5
-
 /**
  * 读取「最近用过的工作区」列表。
  *
  * 存 meta 的 JSON 字符串（单键，不动 schema）：这是**用户偏好**而非业务数据，
  * 且必须容忍脏值（手改过 meta、旧版本写过别的形状）——解析失败就返回空数组，
- * 绝不让一个坏字符串把设置接口整个打挂。
+ * 绝不让一个坏字符串把设置接口整个打挂。脏值也在这里归一化（去重/截断）。
  */
 export function readRecentWorkspaces(db: DatabaseSync): string[] {
   const raw = readMeta(db, 'quick_workspace_recent')
   if (raw === undefined || raw === '') return []
-  try {
-    const parsed: unknown = JSON.parse(raw)
-    if (!Array.isArray(parsed)) return []
-    return parsed.filter((item): item is string => typeof item === 'string' && item.trim() !== '').slice(0, QUICK_WORKSPACE_RECENT_LIMIT)
-  } catch { return [] }
-}
-
-/**
- * 把新用过的路径并入候选列表：去重（忽略大小写与末尾斜杠差异）、最新的排最前、截断到上限。
- * 纯函数，便于单测。
- */
-export function updateRecentWorkspaces(current: string[], used: unknown[]): string[] {
-  const key = (value: string): string => value.trim().replace(/[\\/]+$/, '').toLowerCase()
-  const incoming = used
-    .filter((item): item is string => typeof item === 'string' && item.trim() !== '')
-    .map((item) => item.trim())
-  const merged: string[] = []
-  const seen = new Set<string>()
-  for (const path of [...incoming, ...current]) {
-    const k = key(path)
-    if (k === '' || seen.has(k)) continue
-    seen.add(k)
-    merged.push(path)
-    if (merged.length >= QUICK_WORKSPACE_RECENT_LIMIT) break
-  }
-  return merged
+  try { return normalizeRecentWorkspaces(JSON.parse(raw)) } catch { return [] }
 }
 
 
@@ -169,7 +142,14 @@ export function makeRoutes(db: DatabaseSync, deps: WorkbenchRouteDeps = {}): Web
             writeMeta(db, 'daily_capacity_minutes', String(minutes))
           }
           if (Array.isArray(body.quickWorkspaceRecent)) {
-            writeMeta(db, 'quick_workspace_recent', JSON.stringify(updateRecentWorkspaces(readRecentWorkspaces(db), body.quickWorkspaceRecent)))
+            /**
+             * ⚠️ 语义是**整表替换**（2026-09-16 从"合并"改过来）：
+             * 这个列表现在是"快速录入默认工作区"的唯一来源，客户端必须能**删**它
+             * （"不再记住这个目录"）——合并语义下 `[...incoming, ...current]` 会把删掉的门又并回来，
+             * 用户改回系统默认工作区就成了不可能（fresh-eyes 审查 F1）。
+             * 合并/删除的唯一实现在客户端 `shared/quickWorkspaceRecent.ts`，这里只负责归一化后落库。
+             */
+            writeMeta(db, 'quick_workspace_recent', JSON.stringify(normalizeRecentWorkspaces(body.quickWorkspaceRecent)))
           }
           return writeJson(res, 200, { ok: true, settings: {
             defaultWorkspace: readMeta(db, 'ai_default_workspace') ?? '',

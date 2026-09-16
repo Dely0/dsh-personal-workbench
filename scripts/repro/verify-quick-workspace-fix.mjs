@@ -29,7 +29,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { decideQuickWorkspaceDefault, shouldRememberQuickWorkspace } from '../../lib/client/quickWorkspaceDefault.js'
+import { decideQuickWorkspaceDefault, quickFollowFolderDefault, shouldRememberQuickWorkspace } from '../../lib/client/quickWorkspaceDefault.js'
 import { normalizeWindowsPathToWsl } from '../../lib/client/workspacePath.js'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
@@ -85,19 +85,28 @@ function sourceOf(rev) {
   return { text, label: rev }
 }
 
-/** 抽出 `openQuickEntry` 的函数体，装成一个真函数（外部依赖全部由桩提供）。 */
+/** 抽出 `openQuickEntry`（+ 它调用的投影函数）的函数体，装成一个真函数（外部依赖全部由桩提供）。 */
 function openQuickEntryOf(source) {
   const matched = /const openQuickEntry = \(\): void => \{([\s\S]*?)\r?\n  \}/.exec(source)
   if (matched === null) return null
+  /**
+   * `applyQuickWorkspaceDecision` 是 v1.15.2 复审后抽出来的投影函数（打开弹窗与"不再记住"共用）。
+   * 修前版本没有它 —— 那时 `openQuickEntry` 直接调 setState，所以这里允许缺（缺则给一个不会被调用的桩）。
+   */
+  const applyMatched = /const applyQuickWorkspaceDecision = [^\n]*=> \{([\s\S]*?)\r?\n  \}/.exec(source)
+  const applyBody = applyMatched === null
+    ? "throw new Error('本版本没有 applyQuickWorkspaceDecision')"
+    : applyMatched[1]
   const factory = new Function('deps', `
     'use strict'
-    const { settings, selected, runtime, state, detectWslHost, normalizeWindowsPathToWsl, decideQuickWorkspaceDefault } = deps
+    const { settings, selected, runtime, state, detectWslHost, normalizeWindowsPathToWsl, decideQuickWorkspaceDefault, quickFollowFolderDefault } = deps
     const setQuickText = (value) => { state.quickText = value }
     const setQuickWorkspace = (value) => { state.quickWorkspace = value }
     const setQuickWorkspaceSource = (value) => { state.quickWorkspaceSource = value }
     const setQuickWorkspaceTouched = (value) => { state.quickWorkspaceTouched = value }
     const setQuickFollowFolder = (value) => { state.quickFollowFolder = value }
     const setShowQuick = (value) => { state.showQuick = value }
+    const applyQuickWorkspaceDecision = (decided, autoCreateTypeFolders) => {${applyBody}}
     return () => {${matched[1]}}
   `)
   return factory
@@ -141,6 +150,7 @@ function runOpenQuickEntry(source, selected, settingsOverride) {
     detectWslHost: () => false,
     normalizeWindowsPathToWsl,
     decideQuickWorkspaceDefault,
+    quickFollowFolderDefault,
   })
   open()
   return state

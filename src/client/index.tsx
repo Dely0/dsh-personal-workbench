@@ -66,9 +66,12 @@ import {
 } from './taskFolder.js'
 import { pickIntakeWorkspace } from './intakeWorkspace.js'
 import {
-  decideQuickWorkspaceDefault, quickWorkspaceSourceLabel, shouldRememberQuickWorkspace,
-  type QuickWorkspaceDefaultSource,
+  decideQuickWorkspaceDefault, quickFollowFolderDefault, quickWorkspaceSourceLabel, shouldRememberQuickWorkspace,
+  type QuickWorkspaceDefaultDecision, type QuickWorkspaceDefaultSource,
 } from './quickWorkspaceDefault.js'
+import {
+  forgetRecentWorkspace, mergeRecentWorkspaces, sameRecentWorkspaces,
+} from '../shared/quickWorkspaceRecent.js'
 import {
   effectiveSelection, evaluateImageSupport, gateModelPicker, indexModalities, type ModelModalityRecord,
 } from './modelCapability.js'
@@ -1545,7 +1548,14 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   const saveSettings = async (): Promise<void> => {
     setSettingsSaving(true)
     try {
-      await api('/api/workbench/settings', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(settings) })
+      /**
+       * ⚠️ 刻意**不带** `quickWorkspaceRecent`：这个列表在设置弹窗里根本不可编辑，
+       * 而服务端现在是"整表替换"语义 —— 一个开着很久的设置弹窗会把期间
+       * 快速录入刚记下的工作区顶掉。它只由 `rememberQuickWorkspace` / `forgetQuickWorkspace`
+       * 这两个知道自己手上是不是最新列表的地方写。
+       */
+      const { quickWorkspaceRecent: _ignored, ...editable } = settings
+      await api('/api/workbench/settings', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(editable) })
       setShowSettings(false)
       pushToast('设置已保存', 'success')
     } catch (e) {
@@ -1969,6 +1979,20 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   /** 待你处理的事项数：服务端的待确认草稿 + 到期提醒（草稿数不参与本地过滤）。 */
   const pendingCount = allPendingDrafts.length + reminders.length
   /**
+   * 把一份判定结果投影到工作区那几个状态上（预填路径 / 来源提示 / 是否手动改过 / 建资料夹默认勾选）。
+   *
+   * 抽出来是因为"打开弹窗"与"不再记住这个目录"都要做**同一件事** ——
+   * 两处各写一遍就是本项目最大的 bug 类别（同一个语义两处实现）。
+   * 建资料夹的判据走 `quickFollowFolderDefault()`，与判定模块同一处口径。
+   */
+  const applyQuickWorkspaceDecision = (decided: QuickWorkspaceDefaultDecision, autoCreateTypeFolders: boolean): void => {
+    setQuickWorkspace(decided.path)
+    setQuickWorkspaceSource(decided.source)
+    // 有默认值时显示来源提示；用户改过就切到"手动指定"
+    setQuickWorkspaceTouched(false)
+    setQuickFollowFolder(quickFollowFolderDefault(decided.path, autoCreateTypeFolders))
+  }
+  /**
    * 打开「快速录入」并把工作区选择**重置成稳定默认值**。
    *
    * ## ⚠️ 这里曾经被"最近执行过哪个任务"污染（v1.15.2 修）
@@ -1987,40 +2011,66 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
    * 每次打开都重算 —— 用户可能刚改过默认工作区、或刚手动选过别的目录。
    */
   const openQuickEntry = (): void => {
-    const decided = decideQuickWorkspaceDefault({
+    applyQuickWorkspaceDecision(decideQuickWorkspaceDefault({
       recent: settings.quickWorkspaceRecent,
       defaultWorkspace: settings.defaultWorkspace,
       isWsl: detectWslHost(runtime),
-    })
+    }), settings.autoCreateTypeFolders)
     setQuickText('')
-    setQuickWorkspace(decided.path)
-    setQuickWorkspaceSource(decided.source)
-    // 有默认值时显示来源提示；用户改过就切到"手动指定"
-    setQuickWorkspaceTouched(false)
-    /**
-     * 「在该工作区下建任务资料夹」的默认勾选沿用旧口径的语义：
-     * 只有"路径来自系统默认根目录"时才自动勾（= 默认根目录下按任务分文件夹）；
-     * 来自用户手选/记住的目录时不勾（用户选的就是目标目录本身）。
-     */
-    setQuickFollowFolder(decided.source === 'system-default' && settings.autoCreateTypeFolders)
     setShowQuick(true)
   }
   /**
-   * 记住这次用过的工作区（写进设置，最新的排最前，最多 5 条）。
+   * 记住这次用过的工作区（写进设置，最新的排最前）。
+   *
+   * 合并口径在 `shared/quickWorkspaceRecent.ts`（置顶 + 去重 + 截断），**同一目录再选一次会挪到第一位**
+   * —— 修前实现是"已存在就直接 return"，于是"我明明刚选过这个"却仍预填旧的第一条（审查 F5）。
+   * 同值不写：算出来和当前完全一样就不发请求（避免无意义写盘与自激回路）。
    * 失败静默：这只是便利功能，不能因为它挡住"创建工作区"这个主流程。
    */
   const rememberQuickWorkspace = async (path: string): Promise<void> => {
-    const key = (value: string): string => value.trim().replace(/[\\/]+$/, '').toLowerCase()
-    if (path.trim() === '' || (settings.quickWorkspaceRecent ?? []).some((item) => key(item) === key(path))) return
-    const next = [path.trim(), ...(settings.quickWorkspaceRecent ?? [])]
-      .filter((item, index, all) => all.findIndex((other) => key(other) === key(item)) === index)
-      .slice(0, 5)
+    const next = mergeRecentWorkspaces(settings.quickWorkspaceRecent, path)
+    if (sameRecentWorkspaces(settings.quickWorkspaceRecent, next)) return
     try {
       const res = await api<{ settings: WorkbenchSettings }>('/api/workbench/settings', {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ quickWorkspaceRecent: next }),
       })
       setSettings(res.settings)
     } catch { /* 记不住就算了，不影响主流程 */ }
+  }
+  /**
+   * 「不再记住这个目录」——把当前预填（若来自"上次手动选择"）从最近列表里删掉。
+   *
+   * 为什么必须有（审查 F1）：这个列表是默认值的**唯一来源**，删不掉就意味着
+   * "用户在设置里改了默认工作区也永远回不去"。删除后立刻用**服务端回传的权威设置**重算预填，
+   * 走的还是同一个 `decideQuickWorkspaceDefault()`，不另写一套。
+   */
+  const forgetQuickWorkspace = async (path: string): Promise<void> => {
+    const next = forgetRecentWorkspace(settings.quickWorkspaceRecent, path)
+    try {
+      const res = await api<{ settings: WorkbenchSettings }>('/api/workbench/settings', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ quickWorkspaceRecent: next }),
+      })
+      setSettings(res.settings)
+      /**
+       * 后置校验：服务端必须按**提交的整表**落库。
+       *
+       * 为什么值得写：这条链跨了服务端（旧版本是"合并"语义，会把删掉的又并回来），
+       * 而"提交成功但记录还在"是**静默失败** —— 用户以为已经不再记住，下次打开它又回来了。
+       * 换成可读错误至少能说清"重启 DSH 后生效"。
+       */
+      if (!sameRecentWorkspaces(res.settings.quickWorkspaceRecent, next)) {
+        setError('服务端没有按提交的列表落库：「最近手动选择」里那条记录仍在。宿主若还是旧版本，重启 DSH 后生效。')
+      }
+      applyQuickWorkspaceDecision(decideQuickWorkspaceDefault({
+        recent: res.settings.quickWorkspaceRecent,
+        defaultWorkspace: res.settings.defaultWorkspace,
+        isWsl: detectWslHost(runtime),
+      }), res.settings.autoCreateTypeFolders)
+    } catch (e) {
+      // 失败必须可观测：否则用户以为已经不再记住，下次打开它又回来了
+      setError(`不再记住「${path}」失败：${e instanceof Error ? e.message : String(e)}`)
+    }
   }
 
   /**
@@ -3502,6 +3552,12 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                 settings.defaultWorkspace,
               ].filter((path) => path !== ''))].map((path) => <option key={path} value={path} />)}
             </datalist>
+            {/* 这个列表是默认值的唯一来源 → 必须能删，否则"在设置里改了默认工作区"永远不生效 */}
+            {quickWorkspaceSource === 'last-manual' && quickWorkspace.trim() !== '' && !quickWorkspaceTouched && (
+              <button type="button" className="wb-btn" style={{ marginTop: 6 }} onClick={() => void forgetQuickWorkspace(quickWorkspace)}>
+                不再记住「{quickWorkspace}」
+              </button>
+            )}
           </div>
           {quickWorkspace.trim() !== '' && (
             <label className="wb-inline-check">
@@ -3514,7 +3570,8 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
             </label>
           )}
           <div className="wb-hint">
-            留空则沿用既有规则（跟随父任务 → 否则默认工作区）；路径不存在时会<b>明确报错</b>，不会静默换目录。
+            默认值取「上次手动选择的目录」，否则用设置里的默认工作区；这两条都与"最近执行过哪个任务"无关。
+            路径不存在时会<b>明确报错</b>，不会静默换目录。
           </div>
           <div className="wb-hint">AI 会先澄清必要信息（一次一个主题，最多 5 轮），再提交任务草稿由你确认。</div>
         </Modal>
