@@ -24,6 +24,7 @@
     "src/client/quickAttachments.ts",
     "src/client/modelCapability.ts",
     "src/client/popoverPlacement.ts",
+    "src/client/quickWorkspaceDefault.ts",
     "src/review-memory.ts",
     "src/workspace-check.ts"
   ]

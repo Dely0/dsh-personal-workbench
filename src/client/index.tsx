@@ -66,6 +66,10 @@ import {
 } from './taskFolder.js'
 import { pickIntakeWorkspace } from './intakeWorkspace.js'
 import {
+  decideQuickWorkspaceDefault, quickWorkspaceSourceLabel, shouldRememberQuickWorkspace,
+  type QuickWorkspaceDefaultSource,
+} from './quickWorkspaceDefault.js'
+import {
   effectiveSelection, evaluateImageSupport, gateModelPicker, indexModalities, type ModelModalityRecord,
 } from './modelCapability.js'
 import {
@@ -552,6 +556,13 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
    */
   const [quickWorkspace, setQuickWorkspace] = useState('')
   const [quickWorkspaceTouched, setQuickWorkspaceTouched] = useState(false)
+  /**
+   * 当前预填值是"从哪来的"（上次手动选择 / 系统默认 / 未设置）。
+   *
+   * 由 `decideQuickWorkspaceDefault()` 一次性给出，界面只负责显示 ——
+   * 界面上再自己判一遍"这算不算继承"就是同一个语义两处实现（本次事故的形态）。
+   */
+  const [quickWorkspaceSource, setQuickWorkspaceSource] = useState<QuickWorkspaceDefaultSource>('unset')
   const [quickFollowFolder, setQuickFollowFolder] = useState(false)
   /**
    * 快速录入的附件（v1.15.1）：图片走宿主原生多模态管线，PDF/DOCX 先由服务端抽成文本。
@@ -1958,22 +1969,40 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   /** 待你处理的事项数：服务端的待确认草稿 + 到期提醒（草稿数不参与本地过滤）。 */
   const pendingCount = allPendingDrafts.length + reminders.length
   /**
-   * 打开「快速录入」并把工作区选择**重置成当前隐式行为的默认值**。
+   * 打开「快速录入」并把工作区选择**重置成稳定默认值**。
    *
-   * 默认值必须与改动前逐字一致（不选 = 无变化），所以这里是复刻 startAISession 的旧推导：
-   * 跟随选中任务的 effectiveWorkspacePath，否则用默认工作区（WSL 下归一化路径形态）。
-   * 每次打开都重算 —— 用户可能刚换了选中任务或改了默认工作区。
+   * ## ⚠️ 这里曾经被"最近执行过哪个任务"污染（v1.15.2 修）
+   *
+   * 原实现是 `const inherited = selected?.task.effectiveWorkspacePath ?? ''`，
+   * 即**从当前选中的任务派生默认值**。而执行一个任务恰好会留下这个状态：
+   * 「AI 执行」只在任务详情里 → 点它之前 `selected` 必然是被执行的任务；
+   * `startAISession` 结尾的 `closePanel()` 只收起面板（React 树不卸载）→
+   * `selected` 原样留着。于是"执行过任务 A（工作区 X）→ 打开快速录入"
+   * 默认工作区就变成了 X（真机复现截图见 `_local-archive/quick-workspace-default/`）。
+   *
+   * 现在默认值**只**由用户偏好与系统配置决定（`decideQuickWorkspaceDefault`，
+   * 纯函数、有判定表单测）：上次手动选过的目录 → 系统默认工作区 → 空。
+   * 输入里没有任何任务/选中项，从类型上就再见不到这种污染。
+   *
+   * 每次打开都重算 —— 用户可能刚改过默认工作区、或刚手动选过别的目录。
    */
   const openQuickEntry = (): void => {
-    const isWsl = detectWslHost(runtime)
-    const inherited = selected?.task.effectiveWorkspacePath ?? ''
-    const base = inherited !== '' ? inherited : settings.defaultWorkspace
-    const normalized = base === '' ? '' : isWsl ? normalizeWindowsPathToWsl(base) : base
+    const decided = decideQuickWorkspaceDefault({
+      recent: settings.quickWorkspaceRecent,
+      defaultWorkspace: settings.defaultWorkspace,
+      isWsl: detectWslHost(runtime),
+    })
     setQuickText('')
-    setQuickWorkspace(normalized)
+    setQuickWorkspace(decided.path)
+    setQuickWorkspaceSource(decided.source)
     // 有默认值时显示来源提示；用户改过就切到"手动指定"
     setQuickWorkspaceTouched(false)
-    setQuickFollowFolder(inherited === '' && settings.defaultWorkspace !== '' && settings.autoCreateTypeFolders)
+    /**
+     * 「在该工作区下建任务资料夹」的默认勾选沿用旧口径的语义：
+     * 只有"路径来自系统默认根目录"时才自动勾（= 默认根目录下按任务分文件夹）；
+     * 来自用户手选/记住的目录时不勾（用户选的就是目标目录本身）。
+     */
+    setQuickFollowFolder(decided.source === 'system-default' && settings.autoCreateTypeFolders)
     setShowQuick(true)
   }
   /**
@@ -3348,9 +3377,13 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                    * ⚠️ v1.15.1 起**不再在这里拼文件夹名**：资料夹名是
                    * `<任务ID>-<标题片段>`，而任务 ID 由 `startAISession` 在澄清前预留
                    * （这里拿不到）。所以只传"用户选的目录"与"要不要在里面建任务资料夹"。
+                   *
+                   * ⚠️ v1.15.2：「最近手动选择」的清单只管**用户真的动过这个输入框**的选择
+                   * （`shouldRememberQuickWorkspace`）。自动预填进来的值一旦被记进去，
+                   * 下一次它就变成"上次手动选择"—— 默认值自己污染自己。
                    */
                   const chosen = quickWorkspace.trim()
-                  if (chosen !== '') void rememberQuickWorkspace(chosen)
+                  if (shouldRememberQuickWorkspace(quickWorkspaceTouched, chosen)) void rememberQuickWorkspace(chosen)
                   void startAISession('clarify', null, quickText, [], undefined, chosen, {
                     attachments: quickAttachments,
                     followFolder: quickFollowFolder,
@@ -3451,13 +3484,8 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
             <span>
               AI 会话工作区
               <span className="wb-field-note">
-                {quickWorkspaceTouched
-                  ? '手动指定'
-                  : selected !== null && (selected.task.effectiveWorkspacePath ?? '') !== ''
-                    ? `继承自父任务「${selected.task.title}」`
-                    : quickWorkspace === ''
-                      ? '未设置（DSH 当前工作区）'
-                      : '使用默认工作区'}
+                {/* 来源提示由判定一并给出（`quickWorkspaceSource`），界面不再自己判一遍 */}
+                {quickWorkspaceTouched ? '手动指定' : quickWorkspaceSourceLabel(quickWorkspaceSource)}
               </span>
             </span>
             <input
