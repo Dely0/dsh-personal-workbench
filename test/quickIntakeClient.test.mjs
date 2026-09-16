@@ -229,3 +229,58 @@ test('回归 v1.15.2：可用性判定不得依赖它自己要控制的状态（
     '可用性判定分支里不许读 open —— 那正是本次假失败的成因',
   )
 })
+
+// ---------------------------------------------------------------------------
+// v1.15.2 回归：模型浮层"被遮挡"（2026-09-15 用户截图）
+//
+// 真实事故：浮层是 `position:absolute; bottom: calc(100% + 4px)`，挂在触发按钮的
+// `position:relative` 包装盒里，而包装盒在 `.wb-dialog-body { overflow: auto }` **里面** ——
+// 只会朝上开、不看还有多少可用空间，多出来的部分被滚动容器裁掉
+// （真浏览器实测：常见窗口下只有 48% 可见，「跟随 DSH 默认模型」与前几个模型正好在被裁掉那一段；
+//  1000x400 且弹窗滚动过时浮层顶边到了 -94px，即视口之外）。
+//
+// 修法：portal 到 document.body + `position: fixed` + `placePopover()` 每次滚动/改尺寸重算。
+// 判定表本身的单测在 `test/popoverPlacement.test.mjs`；这里扫**接线**，
+// 因为"判定对但没接上"（或被人改回就地 absolute）单测看不出来。
+// ---------------------------------------------------------------------------
+
+test('回归 v1.15.2：模型浮层必须 portal 到 body、位置由 placePopover 算、打开状态可读', () => {
+  const source = readFileSync(new URL('../src/client/index.tsx', import.meta.url), 'utf8')
+  assert.match(source, /import \{ createPortal \} from 'react-dom'/, '浮层要 portal，必须引 createPortal')
+  assert.match(source, /placePopover\(\{/, '浮层位置必须由 placePopover() 算（不许再手写 bottom/left）')
+  assert.match(source, /const menu = menuRef\.current[\s\S]{0,900}placePopover\(\{/, '量到的是菜单自己的自然高度（scrollHeight）')
+  assert.match(source, /menu: \{ width: MODEL_MENU_WIDTH, height: menu\.scrollHeight \+ borderY \}/,
+    '自然高度要加回边框：max-height 指的是整块菜单的高度（border-box）')
+  assert.match(source, /viewport: \{ width: window\.innerWidth, height: window\.innerHeight \}/)
+  // 浮层的渲染结果只从组件内部看：整文件里 `document.body` 到处都有，按全文匹配会假通过
+  const picker = /function QuickModelPicker\([\s\S]*?\r?\n\}\r?\n/.exec(source)
+  assert.ok(picker !== null, '没找到 QuickModelPicker 实现（改名了就要同步这条断言）')
+  assert.match(picker[0], /createPortal\(/, '菜单必须走 createPortal')
+  assert.match(picker[0], /,\s*document\.body,\s*\)/, 'portal 的目标必须是 document.body（留在弹窗里就还会被 overflow 裁）')  // 滚动/改尺寸要重算：`scroll` 不冒泡，必须捕获阶段才收得到弹窗内部的滚动
+  assert.match(source, /window\.addEventListener\('scroll', update, true\)/, '弹窗内滚动时必须重算（捕获阶段）')
+  assert.match(source, /window\.addEventListener\('resize', update\)/)
+  assert.match(source, /aria-expanded=\{open\}/, '触发按钮要能读出展开状态')
+  assert.match(source, /samePlacement\(previous, next\) \? previous : next/, '同值不许重写状态（否则量取回路自激）')
+  // 关闭要还焦点：验收标准明确要求"关闭后焦点归还到触发元素"
+  const closePicker = /const closePicker = useCallback\(\(refocus = true\): void => \{([\s\S]*?)\n  \}, \[\]\)/.exec(source)
+  assert.ok(closePicker !== null, '没找到 closePicker 实现（改名了就要同步这条断言）')
+  assert.match(closePicker[1], /triggerRef\.current\?\.focus\(\)/, 'closePicker 必须把焦点还给触发按钮')
+  for (const key of ['Escape', 'ArrowDown', 'ArrowUp']) {
+    assert.ok(source.includes(`'${key}'`), `键盘处理里缺少 ${key}`)
+  }
+  assert.match(source, /window\.addEventListener\('keydown', onKeyDown, true\)/, 'Esc 要在 window 捕获阶段抢下来（否则会连整个弹窗一起关掉）')
+})
+
+test('回归 v1.15.2：浮层样式不许退回"就地 absolute 朝上开"', () => {
+  const styles = readFileSync(new URL('../src/client/styles.ts', import.meta.url), 'utf8')
+  const rule = /\n\.wb-model-menu \{([^}]*)\}/.exec(styles)
+  assert.ok(rule !== null, 'styles.ts 里必须有 .wb-model-menu 规则')
+  assert.match(rule[1], /position:\s*fixed/, '浮层必须是 fixed（absolute 会被 .wb-dialog-body 的 overflow 裁掉）')
+  assert.equal(/bottom:\s*calc\(100%/.test(rule[1]), false, '不得再朝上锚定：那正是本次遮挡的形态')
+  assert.equal(/position:\s*absolute/.test(rule[1]), false, '不得退回 absolute')
+  assert.match(rule[1], /max-height:/, '要留一个量不到时的兜底高度')
+  assert.match(rule[1], /box-sizing:\s*border-box/,
+    'max-height 必须按整块菜单算（content-box 时 border+padding 会额外顶出 14px，实测会在矮窗口里再被挤出视口）')
+  assert.match(styles, /\.wb-model-scrim \{[^}]*z-index:\s*3\d\d/, '点外面关掉的层要在弹窗（300）之上')
+  assert.match(rule[1], /z-index:\s*3\d\d/, '浮层要压住 .wb-overlay（300）')
+})

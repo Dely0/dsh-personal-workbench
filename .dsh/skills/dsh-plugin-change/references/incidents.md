@@ -176,3 +176,42 @@ Chromium 上 `attributeFilter: []` 是空集合过滤器 → 什么都不匹配 
 **可复用做法**：跑之前**grep 脚本有没有写操作**（`POST`/`PATCH`/`DELETE`/`/confirm`/`/defer`）。
 只读的可以直接跑；会写数据的要么先备份库，要么造隔离实例（独立 `DSH_HOME` + 独立库 + 独立端口）。
 **在真实库上删数据前**：备份 + 把待删行导出成回滚 JSON + 先 dry-run 打印将删什么，再 `--apply`。
+
+## 14. 浮层挂在滚动容器里，只朝上开 → 被 overflow 裁掉（v1.15.2 · 2026-09-16）
+
+**现象**：快速录入里点「跟随 DSH 默认模型」，弹出的模型列表**只有下半截**：
+「跟随 DSH 默认模型」与最前面几个模型看不见，列表还盖在输入框上。
+用户 2026-09-15 的截图就是这个形态（描述是"模型选择框被其他元素遮挡"）。
+
+**根因**：`.wb-model-menu` 是 `position: absolute; left: 0; bottom: calc(100% + 4px)`，
+挂在触发按钮的 `position: relative` 包装盒里，而**包装盒在
+`.wb-dialog-body { overflow: auto }` 里面** —— 于是：
+
+1. 只会朝上开、不看还有多少可用空间（按钮上方只有 ~130px，菜单内容 ~262–360px）；
+2. 多出来的部分被滚动容器的**滚动口**裁掉（真浏览器实测：常见窗口 48% 可见、
+   1000x400 且弹窗滚动过时顶边到了 -94px，即视口之外）；
+3. **不是 z-index / 层叠上下文问题**（浮层本来就画在文字上面），
+   也不是定位算错 —— 纯粹是"父容器裁剪 + 没做翻转/收敛"。
+   排查时别被"遮挡"这个词带偏：先量 `getBoundingClientRect()`，看谁在裁它。
+
+**可复用做法**：
+
+- **浮层一律 portal 到 `document.body` + `position: fixed`**：
+  `.wb-dialog{overflow:hidden}`、`.wb-dialog-body{overflow:auto}`、
+  `.wb-overlay{backdrop-filter}`（会变成 fixed 后代的包含块）三者都在，
+  留在原地就一定被裁/错位。位置靠**量**（触发元素 vs 视口），
+  并在 `scroll`（**捕获阶段**，`scroll` 不冒泡）+ `resize` 时重算。
+- 摆放规则抽成**纯函数**（`popoverPlacement.ts` 的 `placePopover()`）：上方放不下就翻转、
+  上下都放不下就把高度收敛到可用值、左右同样收敛；**保证盒子永远在视口内**。
+  `setState` 前做**相等判断**（`samePlacement`），否则"量 → 写状态 → 再渲染 → 再量"会自激。
+- `max-height` 与"整块菜单的高度"要对齐 —— **`box-sizing: border-box`**：
+  漏了它，border+padding（本项目 14px）会额外顶出视口，矮窗口里表现为"又被裁了一点"。
+  同理，自然高度要用 `scrollHeight + 边框`，不能只取 `scrollHeight`。
+- **关闭必须还焦点**（`triggerRef.current?.focus()`）；`Esc` 用 **`window` 捕获阶段**
+  才能抢在 `Modal`（挂在 `document` 捕获）前面只关浮层，而不是把整个弹窗一起关掉。
+- 判据要**能在真浏览器里量**：`scripts/repro/repro-model-picker-occlusion.mjs`
+  （CDP 驱动 Edge，输出"可见比例 / 是否越出视口 / 第一条选项可见"），
+  `css` 模式把历史实现贴回去当对照基线 —— 否则修完就再也复现不出旧 bug。
+  两个已被实测教育的坑：Windows 上 `msedge.exe` 只是启动器（**不能靠子进程 exit 判断起没起来**，
+  要轮询 `/json/version`）；没有 `--user-data-dir` 时命令行会被转发给用户正在用的 Edge，
+  于是**静默什么都不做**（既不截图也不报错）。
