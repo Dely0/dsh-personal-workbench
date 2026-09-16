@@ -79,9 +79,15 @@ export const POPOVER_MARGIN = 8
  * 算出浮层该放在哪儿。
  *
  * **保证**（下面每条都有单测）：`left ≥ margin`、`left + width ≤ viewport.width - margin`、
- * `top ≥ margin`、`top + height ≤ viewport.height - margin`、`height ≤ menu.height`。
- * 视口极端小（可用高度为 0）时会退化成高度 0 —— 这是"宁可不显示也不越出可视区"的显式选择，
- * 不会静默画到屏幕外。
+ * `top ≥ margin`、`top + height ≤ viewport.height - margin`、`height ≤ menu.height`、
+ * 输出永远是有限数。视口极端小（可用高度为 0）时会退化成高度 0 —— 这是"宁可不显示也不越出可视区"
+ * 的显式选择，不会静默画到屏幕外。
+ *
+ * ⚠️ **高度必须同时受"视口"约束**（v1.15.2 复审补的）。第一版只按"锚点那一侧的空间"收敛，
+ * 而锚点自己可以在视口外：实测过的几何是 `anchor.top = -94`、视口 1000x400、菜单自然高 450 ——
+ * 那时 `side=bottom` 侧的"可用空间"有 445px，比整个视口（去掉上下边距只剩 384px）还大，
+ * 于是盒子下沿跑到视口外 53px；而打开「快速录入」弹窗时 `Modal` 会把 `body` 锁成
+ * `overflow: hidden`，这 53px 内容**没有任何办法滚到**。少了这一条，上面那句保证就是假的。
  */
 export function placePopover(input: {
   readonly anchor: PopoverAnchor
@@ -90,28 +96,33 @@ export function placePopover(input: {
   readonly gap?: number
   readonly margin?: number
 }): PopoverPlacement {
-  const gap = input.gap ?? POPOVER_GAP
-  const margin = input.margin ?? POPOVER_MARGIN
-  const viewportWidth = Math.max(0, input.viewport.width)
-  const viewportHeight = Math.max(0, input.viewport.height)
+  const gap = finite(input.gap ?? POPOVER_GAP, POPOVER_GAP)
+  const margin = Math.max(0, finite(input.margin ?? POPOVER_MARGIN, POPOVER_MARGIN))
+  const viewportWidth = Math.max(0, finite(input.viewport.width, 0))
+  const viewportHeight = Math.max(0, finite(input.viewport.height, 0))
+  const menuWidth = Math.max(0, finite(input.menu.width, 0))
+  const menuHeight = Math.max(0, finite(input.menu.height, 0))
+  const anchorTop = finite(input.anchor.top, 0)
+  const anchorBottom = finite(input.anchor.bottom, anchorTop)
+  const anchorLeft = finite(input.anchor.left, 0)
 
-  const width = Math.max(0, Math.min(input.menu.width, viewportWidth - margin * 2))
+  const width = Math.max(0, Math.min(menuWidth, viewportWidth - margin * 2))
   // 贴右边界时向左挪；`max(margin, …)` 保证窗口比"菜单 + 两侧边距"还窄时仍从 margin 起
-  const left = Math.min(Math.max(input.anchor.left, margin), Math.max(margin, viewportWidth - margin - width))
+  const left = Math.min(Math.max(anchorLeft, margin), Math.max(margin, viewportWidth - margin - width))
 
-  const spaceAbove = Math.max(0, input.anchor.top - gap - margin)
-  const spaceBelow = Math.max(0, viewportHeight - input.anchor.bottom - gap - margin)
-  const fitsAbove = spaceAbove >= input.menu.height
-  const fitsBelow = spaceBelow >= input.menu.height
+  const spaceAbove = Math.max(0, anchorTop - gap - margin)
+  const spaceBelow = Math.max(0, viewportHeight - anchorBottom - gap - margin)
+  const fitsAbove = spaceAbove >= menuHeight
+  const fitsBelow = spaceBelow >= menuHeight
   const side: 'top' | 'bottom' = fitsAbove
     ? 'top'
     : fitsBelow
       ? 'bottom'
       : (spaceAbove >= spaceBelow ? 'top' : 'bottom')
 
-  const available = side === 'top' ? spaceAbove : spaceBelow
-  const height = Math.max(0, Math.min(input.menu.height, available))
-  const top = side === 'top' ? input.anchor.top - gap - height : input.anchor.bottom + gap
+  /** 三个上限里最小的那个：菜单自然高、该侧可用空间、**视口本身**。 */
+  const height = Math.max(0, Math.min(menuHeight, side === 'top' ? spaceAbove : spaceBelow, viewportHeight - margin * 2))
+  const top = side === 'top' ? anchorTop - gap - height : anchorBottom + gap
   /**
    * 最后一道收敛：触发元素**自己就在视口外**时（弹窗被拖出可视区、或测量发生在滚动中途，
    * 实测 1000x400 且弹窗滚动过时按钮顶边被顶到 -94px），按锚点算出来的位置会贴着视口外面。
@@ -128,6 +139,18 @@ export function placePopover(input: {
     maxHeight: height,
     height,
   }
+}
+
+/**
+ * 非有限输入（`NaN` / `Infinity` / `undefined`）一律按兜底值处理。
+ *
+ * 为什么纯函数也要守：这个函数的返回值会**直接写进 DOM 定位**，
+ * 一个 `NaN` 会让浮层跳到视口左上角或整块消失，而调用点（量 `getBoundingClientRect`）
+ * 在某些时刻**确实可能量不到**（元素还没上树、宿主没渲染完）。
+ * 与其把 `NaN` 传染给样式，不如给一个"最坏情况可接受"的确定值。
+ */
+function finite(value: number, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback
 }
 
 /**

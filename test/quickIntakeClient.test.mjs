@@ -252,23 +252,62 @@ test('回归 v1.15.2：模型浮层必须 portal 到 body、位置由 placePopov
   assert.match(source, /menu: \{ width: MODEL_MENU_WIDTH, height: menu\.scrollHeight \+ borderY \}/,
     '自然高度要加回边框：max-height 指的是整块菜单的高度（border-box）')
   assert.match(source, /viewport: \{ width: window\.innerWidth, height: window\.innerHeight \}/)
-  // 浮层的渲染结果只从组件内部看：整文件里 `document.body` 到处都有，按全文匹配会假通过
+  // 浮层的渲染结果只从组件内部看：整文件里 `document.body`/`'Escape'` 之类到处都有，按全文匹配会假通过
   const picker = /function QuickModelPicker\([\s\S]*?\r?\n\}\r?\n/.exec(source)
   assert.ok(picker !== null, '没找到 QuickModelPicker 实现（改名了就要同步这条断言）')
   assert.match(picker[0], /createPortal\(/, '菜单必须走 createPortal')
-  assert.match(picker[0], /,\s*document\.body,\s*\)/, 'portal 的目标必须是 document.body（留在弹窗里就还会被 overflow 裁）')  // 滚动/改尺寸要重算：`scroll` 不冒泡，必须捕获阶段才收得到弹窗内部的滚动
-  assert.match(source, /window\.addEventListener\('scroll', update, true\)/, '弹窗内滚动时必须重算（捕获阶段）')
-  assert.match(source, /window\.addEventListener\('resize', update\)/)
-  assert.match(source, /aria-expanded=\{open\}/, '触发按钮要能读出展开状态')
-  assert.match(source, /samePlacement\(previous, next\) \? previous : next/, '同值不许重写状态（否则量取回路自激）')
+  assert.match(picker[0], /,\s*document\.body,\s*\)/, 'portal 的目标必须是 document.body（留在弹窗里就还会被 overflow 裁）')
+  // 滚动/改尺寸要重算：`scroll` 不冒泡，必须捕获阶段才收得到弹窗内部的滚动
+  assert.match(picker[0], /window\.addEventListener\('scroll', update, true\)/, '弹窗内滚动时必须重算（捕获阶段）')
+  assert.match(picker[0], /window\.addEventListener\('resize', update\)/)
+  assert.match(picker[0], /aria-expanded=\{open\}/, '触发按钮要能读出展开状态')
+  assert.match(picker[0], /samePlacement\(previous, next\) \? previous : next/, '同值不许重写状态（否则量取回路自激）')
+  // 菜单内容是异步长出来的（模型目录 load + 收图标注），必须跟着重算
+  assert.match(picker[0], /new ResizeObserver\(update\)/, '菜单内容异步变高时必须重算位置（否则停在旧高度上）')
+  assert.match(picker[0], /observer\?\.disconnect\(\)/, '观察器要在关闭/卸载时断开')
   // 关闭要还焦点：验收标准明确要求"关闭后焦点归还到触发元素"
-  const closePicker = /const closePicker = useCallback\(\(refocus = true\): void => \{([\s\S]*?)\n  \}, \[\]\)/.exec(source)
+  const closePicker = /const closePicker = useCallback\(\(refocus = true\): void => \{([\s\S]*?)\r?\n  \}, \[\]\)/.exec(picker[0])
   assert.ok(closePicker !== null, '没找到 closePicker 实现（改名了就要同步这条断言）')
   assert.match(closePicker[1], /triggerRef\.current\?\.focus\(\)/, 'closePicker 必须把焦点还给触发按钮')
+  /**
+   * ⚠️ 这几个键名必须**在组件内部**扫（v1.15.2 复审的真发现）：
+   * 原来写的是 `source.includes("'Escape'")` —— 扫整份 4700 行文件，而同一文件里别处
+   * 还有一处不相干的 `'Escape'`，于是这条断言**恒真**：把浮层的 Esc 接管拼错成 `'Esc'`
+   * （后果正是注释里警告的"按 Esc 连整个弹窗一起关掉"），套件照样全绿。
+   */
   for (const key of ['Escape', 'ArrowDown', 'ArrowUp']) {
-    assert.ok(source.includes(`'${key}'`), `键盘处理里缺少 ${key}`)
+    assert.ok(picker[0].includes(`'${key}'`), `QuickModelPicker 里缺少 ${key} 处理（整文件别处的同名键不算）`)
   }
-  assert.match(source, /window\.addEventListener\('keydown', onKeyDown, true\)/, 'Esc 要在 window 捕获阶段抢下来（否则会连整个弹窗一起关掉）')
+  assert.match(picker[0], /window\.addEventListener\('keydown', onKeyDown, true\)/, 'Esc 要在 window 捕获阶段抢下来（否则会连整个弹窗一起关掉）')
+})
+
+/**
+ * 回归 v1.15.2 复审：**隐藏元素不可聚焦** —— "按 ↓ 打开后焦点在第一项"曾经静默失效。
+ *
+ * 真实缺陷（审查探针 A，用真 React 复刻时序）：落实 `pendingFocusRef` 的那次 `.focus()`
+ * 原本写在"量并写 placement"的同一个 layout effect 里，而那一刻菜单还是
+ * `visibility: hidden`（首帧 `placement === null`）—— `.focus()` 既不报错也不生效，
+ * 于是用户按 ↓ 打开列表后要**再按一次 ↓** 才进到第一项，且没有任何测试能发现。
+ *
+ * 守的是**顺序**（纯时序问题，不是纯逻辑，只能扫结构）：
+ * 量 placement 的那一次里不许出现 `focusOption(`；落实焦点必须以 `placement` 非空为前提。
+ */
+test('回归 v1.15.2 复审：焦点不许点在还是 hidden 的菜单上（量 placement 的那次里不能点）', () => {
+  const source = readFileSync(new URL('../src/client/index.tsx', import.meta.url), 'utf8')
+  const picker = /function QuickModelPicker\([\s\S]*?\r?\n\}\r?\n/.exec(source)
+  assert.ok(picker !== null, '没找到 QuickModelPicker 实现（改名了就要同步这条断言）')
+
+  const measureEffect = /useLayoutEffect\(\(\) => \{([\s\S]*?)\}, \[open, focusOption\]\)/.exec(picker[0])
+  assert.ok(measureEffect !== null, '没找到"量并写 placement"的 layout effect（结构变了就要同步这条断言）')
+  assert.equal(/focusOption\(/.test(measureEffect[1]), false,
+    '量 placement 的那一次里不许点焦点：那时菜单还是 visibility:hidden，.focus() 会静默失效')
+
+  const focusEffect = /useEffect\(\(\) => \{([\s\S]*?)\}, \[open, placement, focusOption\]\)/.exec(picker[0])
+  assert.ok(focusEffect !== null, '没找到"等 placement 生效再点焦点"的 effect（结构变了就要同步这条断言）')
+  assert.match(focusEffect[1], /if \(!open \|\| placement === null\) return/,
+    '落实焦点必须以"浮层已可见"（placement 非空）为前提')
+  assert.match(focusEffect[1], /pendingFocusRef\.current = null/, '落实后要清掉意图，免得下次打开又跳一次')
+  assert.match(focusEffect[1], /focusOption\(/)
 })
 
 test('回归 v1.15.2：浮层样式不许退回"就地 absolute 朝上开"', () => {

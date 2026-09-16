@@ -34,12 +34,12 @@ test('上下都放得下时保持原方向（朝上），且贴着触发元素�
 })
 
 test('【本次事故】真实几何：修前被滚动容器裁掉 48%，修后必须完整可见', () => {
-  // repro 脚本在 1440x900 下量到的真实矩形：触发按钮 top=444.3 / bottom=479.3 / left=626
-  // 修前浮层留在 `.wb-dialog-body`（top=314）里、只朝上开 → 只有 48% 可见，
+  // repro 脚本在 1440x900 下量到的矩形：触发按钮在弹窗中下部（top≈438、bottom≈473、left≈626），
+  // 修前浮层留在 `.wb-dialog-body` 里、只朝上开 → 只有 ~48% 可见，
   // 「跟随 DSH 默认模型」与前几个模型正好在被裁掉的那一段。
-  // 修后浮层 portal 到 body，约束变成**视口**：上方有 430px，整块放得下。
+  // 修后浮层 portal 到 body，约束变成**视口**：上方有 ~430px，整块放得下。
   const p = placePopover({
-    anchor: anchor(444.3, 626, 73), menu: { width: 320, height: 262 }, viewport: { width: 1440, height: 900 },
+    anchor: anchor(438, 626), menu: { width: 320, height: 262 }, viewport: { width: 1440, height: 900 },
   })
   assert.equal(p.height, 262, '菜单必须完整显示（修前这里只剩 ~126px 可见）')
   assert.equal(p.side, 'top', '视口上方空间够，保持原方向（朝上）')
@@ -119,6 +119,52 @@ test('遍历一批锚点/视口组合：菜单盒必须永远落在视口内（�
     }
   }
   assert.deepEqual(violations, [], `这些组合越出了可视区：\n  - ${violations.slice(0, 8).join('\n  - ')}`)
+})
+
+/**
+ * 回归 v1.15.2 复审：**菜单比视口还高**时，"盒子永远在视口内"曾经是假保证。
+ *
+ * 真实缺陷（审查探针 B，17694 组参数里 2323 组越界）：第一版只把高度收敛到
+ * "锚点那一侧的空间"，而锚点自己可以在视口外 —— 实测几何是
+ * `anchor.top = -94`、视口 1000x400、菜单自然高 450：`side=bottom` 那侧算出 445px 可用，
+ * 比整个视口（去掉上下边距只剩 384px）还大，盒子下沿因此跑到视口外 53px；
+ * 而打开「快速录入」时 `Modal` 把 `body` 锁成 `overflow: hidden`，这 53px 谁也没办法滚到。
+ *
+ * 上面那条不变量扫描当时用的是"菜单 262 < 所有视口高"，正好漏掉这一档 —— 所以这里单独钉死。
+ */
+test('回归 v1.15.2 复审：菜单比视口还高时，高度必须再受视口约束', () => {
+  const cases = [
+    { label: '文档场景 A：1000x400、锚点在视口上方 + 长列表 450px', anchor: anchor(-94, 190), menu: { width: 320, height: 450 }, viewport: { width: 1000, height: 400 } },
+    { label: '文档场景 B：同上 + 更长的列表 700px', anchor: anchor(-94, 190), menu: { width: 320, height: 700 }, viewport: { width: 1000, height: 400 } },
+    { label: '锚点贴视口下沿：anchor.top=399 + 450px', anchor: anchor(399, 190), menu: { width: 320, height: 450 }, viewport: { width: 1000, height: 400 } },
+    { label: '极矮视口：262px 视口 + 360px 菜单', anchor: anchor(120, 20), menu: { width: 320, height: 360 }, viewport: { width: 420, height: 262 } },
+  ]
+  for (const item of cases) {
+    const p = placePopover({ anchor: item.anchor, menu: item.menu, viewport: item.viewport })
+    const box = rect(p)
+    assert.ok(p.height <= item.viewport.height - POPOVER_MARGIN * 2 + 0.001,
+      `${item.label}：高度没有被视口约束（height=${p.height} > ${item.viewport.height - POPOVER_MARGIN * 2}）`)
+    assert.ok(box.bottom <= item.viewport.height - POPOVER_MARGIN + 0.001,
+      `${item.label}：盒子下沿越出视口（bottom=${box.bottom} > ${item.viewport.height - POPOVER_MARGIN}）`)
+    assert.ok(box.top >= POPOVER_MARGIN - 0.001, `${item.label}：top=${box.top} < margin`)
+  }
+})
+
+test('回归 v1.15.2 复审：非有限输入不许传染成 NaN 定位（量不到时给确定值）', () => {
+  const nan = placePopover({
+    anchor: { top: Number.NaN, bottom: Number.NaN, left: Number.NaN, right: Number.NaN },
+    menu: { width: Number.NaN, height: Number.NaN },
+    viewport: { width: 1440, height: 900 },
+  })
+  for (const [key, value] of Object.entries(nan)) {
+    if (typeof value === 'number') assert.ok(Number.isFinite(value), `${key} 不是有限数：${value}`)
+  }
+  assert.ok(nan.left >= POPOVER_MARGIN && nan.top >= POPOVER_MARGIN, '退化后仍要落在视口内')
+
+  const badMenuHeight = placePopover({
+    anchor: anchor(300, 300), menu: { width: 320, height: Number.POSITIVE_INFINITY }, viewport: { width: 1440, height: 900 },
+  })
+  assert.ok(Number.isFinite(badMenuHeight.height) && badMenuHeight.height <= 900 - POPOVER_MARGIN * 2)
 })
 
 test('samePlacement 只在真的变了的时候返回 false（避免同值重写自激）', () => {

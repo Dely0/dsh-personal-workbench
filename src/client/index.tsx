@@ -345,18 +345,41 @@ function QuickModelPicker({ runtime, value, onChange, modalityTable, disabled, o
       setPlacement((previous) => (previous !== null && samePlacement(previous, next) ? previous : next))
     }
     update()
-    const pending = pendingFocusRef.current
-    if (pending !== null) {
-      pendingFocusRef.current = null
-      focusOption(pending === 'first' ? 1 : -1)
-    }
+    /**
+     * 菜单内容会**自己长高**（目录是异步 `load()` 的：先渲染"正在读取模型列表…"，
+     * 模型表到了以后可能多出若干行 + "不支持图片输入"标注）。只在打开那一帧量一次，
+     * 浮层就会停在旧高度上（表现为"多出滚动条、最后几项被裁"）—— 这里补一个观察器，
+     * 内容一变就重算。
+     *
+     * ⚠️ 之所以敢观察"自己即将改尺寸的元素"：`update()` 里做了相等判断，
+     * 尺寸没实质变化就不写状态，所以"改尺寸 → 观察器回调 → 再改尺寸"不会自激。
+     */
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(update)
+    if (observer !== null && menuRef.current !== null) observer.observe(menuRef.current)
     window.addEventListener('scroll', update, true)
     window.addEventListener('resize', update)
     return () => {
+      observer?.disconnect()
       window.removeEventListener('scroll', update, true)
       window.removeEventListener('resize', update)
     }
   }, [open, focusOption])
+
+  /**
+   * 落实"用方向键打开浮层时，把焦点交给第一项 / 最后一项"。
+   *
+   * ⚠️ 必须等 `placement` 生效之后再点，**不能**顺手写在"量并写 placement"的那一次里：
+   * 首帧菜单是 `visibility: hidden`（免得先画在视口左上角再跳过去），而**隐藏元素不可聚焦** ——
+   * `.focus()` 既不报错也不生效，于是"按 ↓ 打开后焦点在第一项"变成静默失效
+   * （用户得再按一次 ↓）。这一条由 `test/quickIntakeClient.test.mjs` 的源码扫描守着。
+   */
+  useEffect(() => {
+    if (!open || placement === null) return
+    const pending = pendingFocusRef.current
+    if (pending === null) return
+    pendingFocusRef.current = null
+    focusOption(pending === 'first' ? 1 : -1)
+  }, [open, placement, focusOption])
 
   /**
    * Esc **只关浮层**，不关整个「快速录入」弹窗。
