@@ -143,3 +143,23 @@ test('接线 v1.15.2：把工作区记进「最近手动选择」必须先过 to
   const settingsWriters = stripped.match(/quickWorkspaceRecent:/g) ?? []
   assert.ok(settingsWriters.length >= 1, 'rememberQuickWorkspace 仍要写 quickWorkspaceRecent')
 })
+
+/**
+ * 上面那条扫的是 `openQuickEntry` **内部**；这条扫的是"所有能让预填值变化的写入点"。
+ *
+ * 为什么要两条：真正的语义是「预填值只能由判定结果或用户输入决定」。
+ * 只盯 openQuickEntry 的话，未来在别处加一句 `setQuickWorkspace(task.effectiveWorkspacePath)`
+ * （换个入口、加个"跟随任务"按钮）照样能溜过去。
+ */
+test('接线 v1.15.2：setQuickWorkspace 的实参只允许是判定结果或用户输入', () => {
+  const { stripped } = readSource('../src/client/index.tsx')
+  const args = [...stripped.matchAll(/setQuickWorkspace\(([^)]*)\)/g)].map((matched) => matched[1].trim())
+  assert.ok(args.length >= 2, `预期至少两处写入（打开时预填 + 用户输入），实际 ${args.length} 处`)
+  for (const argument of args) {
+    assert.ok(
+      argument === 'decided.path' || argument === 'e.target.value',
+      `setQuickWorkspace(${argument}) 不是允许的形态：预填值只能来自 decideQuickWorkspaceDefault 的结果`
+        + '或用户输入 —— 任何"从某个任务/最近执行过的东西派生"的写法都会重新引入本次事故',
+    )
+  }
+})

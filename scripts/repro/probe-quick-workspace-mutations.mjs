@@ -64,6 +64,13 @@ const MUTATIONS = [
     to: 'value',
     expect: 'WSL 下把 Windows 形态归一化',
   },
+  {
+    name: 'M6 在 openQuickEntry **之外**补一句"跟随任务工作区"的写入（换个入口重新引入污染）',
+    file: COMPONENT,
+    from: /setQuickWorkspace\(e\.target\.value\)/,
+    to: "setQuickWorkspace(selected?.task.effectiveWorkspacePath ?? e.target.value)",
+    expect: 'setQuickWorkspace 的实参只允许是判定结果或用户输入',
+  },
 ]
 
 const run = () => spawnSync(process.execPath, ['--test', TEST_FILE], { cwd: ROOT, encoding: 'utf8' })
