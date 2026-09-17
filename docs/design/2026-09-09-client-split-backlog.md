@@ -74,7 +74,7 @@ interface TaskDetailPanelProps {
 ## 4. 每步的验收清单
 
 1. `node node_modules/typescript/bin/tsc --noEmit` → 0 error。
-2. `wsl bash -lc "cd /mnt/d/Code/Linksight/dsh-workbench && pnpm build && node --test test/*.test.mjs"` → 50/50（构建必须在 WSL）。
+2. `wsl bash -lc "cd /mnt/d/Code/my-workspace && pnpm build && node --test test/*.test.mjs"` → 50/50（构建必须在 WSL）。
 3. `node D:\DSHWorkspace\_probe\route-regress.mjs` → 29/29（真实 HTTP）。
 4. 同步 live profile + `dev_reload_package('dsh-personal-workbench')` → fiber `[active]`。
 5. **人工刷新 GUI 目视**：五个页签 + 详情区 + 计划面板 + 各弹窗。

@@ -29,7 +29,7 @@
 ### 实测（`scripts/repro/measure-capacity-baseline.mjs`，只读，2026-09-17 20:0x）
 
 ```
-库：C:\Users\dupenglai\.dsh\workbench\workbench.db   schema 18
+库：C:\Users\<user>\.dsh\workbench\workbench.db   schema 18
 今天：2026-09-17
 已排合计：0 min（0 条）
 逾期未完成但**不计入**已排：10 条 / 750 min

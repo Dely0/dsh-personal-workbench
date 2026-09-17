@@ -1,7 +1,7 @@
 ---
 name: dsh-plugin-change
 description: 开发 DSH 插件（@dely0/dsh-personal-workbench 等）时的编码规范与回归防线：状态所有权要唯一、纯逻辑必须与 DOM/React 解耦、政策要变成会失败的测试、失败必须可观测、幂等与副作用时机、静默丢件的禁区、可选服务分两级、以及删除/重构的正确顺序。当你要写或改这个项目的客户端或服务端代码、加一条策略、删一段逻辑、或定位一个"行为前后矛盾"的 bug 时使用。
-whenToUse: 在 D:\Code\Linksight 下的 DSH 插件仓库里写代码、改行为、或排查回归时
+whenToUse: 在本仓库（clone 下来的 DSH 插件源码树）里写代码、改行为、或排查回归时
 ---
 
 # DSH 插件编码规范

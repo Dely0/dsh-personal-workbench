@@ -37,7 +37,7 @@
 选**升级插件**而不是降级数据库：
 
 ```sh
-cd C:\Users\Administrator\.dsh\profiles\web
+cd C:\Users\<user>\.dsh\profiles\web
 dsh plugin --profile web add @dely0/dsh-personal-workbench@1.13.3
 ```
 
@@ -72,14 +72,14 @@ dsh plugin --profile web add @dely0/dsh-personal-workbench@1.13.3
 **① 装插件前先跑门禁**（关键：pnpm 回退是静默的，装完不报错，直到重启才炸）
 
 ```sh
-node D:/Code/Linksight/dsh-workbench/scripts/check-installed-version.mjs
+node D:/Code/my-workspace/scripts/check-installed-version.mjs
 # 退出码 0 = 一致，可安全重启；1 = 有回退或 schema 风险
 ```
 
 **② 想让 Windows 跟着开发树走**：像 WSL 侧那样改成本地 tgz 依赖，避免 npm 版本被锁文件拉走：
 
 ```
-file:D:/Code/Linksight/dsh-workbench/delyo-dsh-personal-workbench-<version>.tgz
+file:D:/Code/my-workspace/delyo-dsh-personal-workbench-<version>.tgz
 ```
 
 **③ 发布纪律**：本插件 1.13.3（npm 版）**不含**本次加固，也不含 2026-09-12 的侧栏入口家族契约修复——两者都还在本地源码树。要让它们生效必须重新构建并发布/安装。

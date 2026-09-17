@@ -259,7 +259,7 @@ node scripts/dev-install.mjs --apply --profile web
 | 项 | 值 |
 |---|---|
 | 装盘产物 | `_local-build/dsh-personal-workbench-dev-2b8f182-20260917-215615.tgz`（196 条目 / `lib/client.js` 446395 字节） |
-| profile | `C:\Users\dupenglai\.dsh\profiles\web`，本插件一行指向上面那个 tgz |
+| profile | `C:\Users\<user>\.dsh\profiles\web`，本插件一行指向上面那个 tgz |
 | 备份 | `package.json.bak-devinstall-20260917-215615`（+ 同名 `pnpm-lock.yaml`） |
 | 回退 | `dsh plugin --profile web add file:…/dsh-personal-workbench-dev-28e3f4a-20260917-214711.tgz`；或恢复上面两个 `.bak` 后 `pnpm install` |
 | 门禁 | 包完好 ✅ / **零增量 diff**（只有本插件那一行；其余 14 个插件版本未变）✅ / 写盘后四个配置文件**无 BOM** ✅ / 装盘指纹**逐文件一致** ✅ / 版本一致性（装盘 1.15.1、锁文件 1.15.1、DB schema 18 = 插件支持 18）✅ / `--dump-config` exit 0 ✅ |

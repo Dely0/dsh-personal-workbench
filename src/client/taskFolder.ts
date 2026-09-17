@@ -126,7 +126,7 @@ export interface TaskWorkspacePathContext {
  * **唯一权威判定**：这条 `workspace_path` 到底是"系统自动生成的"还是"用户手填的"。
  *
  * 只有前两类允许在默认根目录变更时被迁移/改写；`manual` **永不触碰**
- * （本机有 26+ 条用户手填的真实项目目录，例如 `D:\Code\Linksight\dsh-workbench`）。
+ * （本机有 26+ 条用户手填的真实项目目录，例如 `D:\Code\my-workspace`）。
  *
  * ## 两类自动路径的判据（都被 fresh-eyes 审查收紧过，别放宽）
  *

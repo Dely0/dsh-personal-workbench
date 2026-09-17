@@ -47,8 +47,8 @@ const REAL_LEGACY_TITLE_PATHS = [
 
 /** 本机真实库里的手填型样本（用户自己的项目目录，任何情况下都不许被改写）。 */
 const REAL_MANUAL_PATHS = [
-  { id: '09dbf543-837a-4b99-b153-c87c38ef1ede', title: '设计提醒策略层（分级 / 静默 / 节流 / 补发）', path: 'D:\\Code\\Linksight\\dsh-workbench' },
-  { id: '2287f2e7-0000-0000-0000-000000000000', title: '建设团队共享记忆系统', path: 'D:\\Code\\Linksight\\dsh-team-memory' },
+  { id: '09dbf543-837a-4b99-b153-c87c38ef1ede', title: '设计提醒策略层（分级 / 静默 / 节流 / 补发）', path: 'D:\\Code\\my-workspace' },
+  { id: '2287f2e7-0000-0000-0000-000000000000', title: '建设团队共享记忆系统', path: 'D:\\Code\\my-project\\dsh-team-memory' },
 ]
 
 test('taskFolder: sanitizeTaskId 只留 A-Za-z0-9_-，空则 task', () => {
@@ -130,7 +130,7 @@ test('taskFolder 判定（F2 回归）：目录名恰好等于标题、但不在
   const samples = [
     ['D:\\Code\\proj\\周五接待客户', '周五接待客户'],
     ['D:\\Code\\proj\\Phase 0：实测 dsh-im 可用性与版本', 'Phase 0：实测 dsh-im 可用性与版本兼容（闸门）'],
-    ['D:\\Code\\Linksight\\dsh-workbench', 'dsh-workbench'],
+    ['D:\\Code\\my-workspace', 'dsh-workbench'],
   ]
   for (const [path, title] of samples) {
     assert.equal(
@@ -167,7 +167,7 @@ test('taskFolder 判定（手填型）：本机真实的项目目录绝不能被
     assert.equal(isAutoTaskWorkspacePath(sample.path, sample.id, sample.title, { tasksRoot: TASKS_ROOT }), false)
   }
   // 掉一个 \ 也是手填（不做"猜路径"的模糊匹配）
-  assert.equal(classifyTaskWorkspacePath('D:\\Code\\Linksight', ID, '标题', { tasksRoot: TASKS_ROOT }), 'manual')
+  assert.equal(classifyTaskWorkspacePath('D:\\Code\\my-project', ID, '标题', { tasksRoot: TASKS_ROOT }), 'manual')
 })
 
 test('taskFolder 判定：三种形态互斥且穷举（表驱动）', () => {
@@ -176,7 +176,7 @@ test('taskFolder 判定：三种形态互斥且穷举（表驱动）', () => {
     ['id', `/mnt/d/root/${ID}`, ID, '任意标题'],
     ['legacy-title', 'D:\\DSHWorkspace\\工作台任务提醒接入微信（可选增量能力）', ID, '工作台任务提醒接入微信（可选增量能力）'],
     ['legacy-title', 'D:\\DSHWorkspace\\工作台任务提醒接入微信（可选增量能力）', ID, '工作台任务提醒接入微信（可选增量能力）'],
-    ['manual', 'D:\\Code\\Linksight\\dsh-workbench', ID, '某个标题'],
+    ['manual', 'D:\\Code\\my-workspace', ID, '某个标题'],
     ['manual', 'D:\\Code\\proj\\周五接待客户', ID, '周五接待客户'],
     ['manual', '', ID, '某个标题'],
     ['manual', '   ', ID, '某个标题'],

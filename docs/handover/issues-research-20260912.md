@@ -7,7 +7,7 @@
 | **抓取时间** | **2026-09-12 20:20 (+08:00)**；GitHub API 快照取自同一时刻 |
 | **抓取时 open issue 总数** | **3 条**（#1 / #2 / #3），**无 PR、无 milestone** |
 | **已关闭 issue 总数** | **0 条**（仓库自创建以来从未关闭过任何 issue） |
-| **仓库身份核实** | 本地工作区 `D:\Code\Linksight\dsh-workbench` 的 `origin` = `https://github.com/Dely0/dsh-personal-workbench.git`；GitHub API 返回 `full_name = Dely0/dsh-personal-workbench`，`has_issues = true`、`archived = false` ✅ 与任务目标仓库一致 |
+| **仓库身份核实** | 本地工作区 `D:\Code\my-workspace` 的 `origin` = `https://github.com/Dely0/dsh-personal-workbench.git`；GitHub API 返回 `full_name = Dely0/dsh-personal-workbench`，`has_issues = true`、`archived = false` ✅ 与任务目标仓库一致 |
 | **代码基线** | `main` = `d39cc3d`（**v1.13.3**，2026-09-11）；工作区干净（仅 1 个未跟踪文件：`docs/issues/2026-09-12-subtask-type-code-silently-dropped.md`） |
 | **仓库其他事实** | 24 stars / 8 forks；创建于 2026-08-15；最后 push 2026-09-10；最后 update 2026-09-11 |
 | **验证方式** | GitHub REST API（`/issues`、`/issues/{n}`、`/issues/{n}/comments`、`/releases`）+ 本地源码逐行核对 + 本机 DSH 主程序主题包核对 |

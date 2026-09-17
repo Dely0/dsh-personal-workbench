@@ -36,7 +36,7 @@ const banner = async (label) => {
   return d
 }
 
-const ws = 'D:\\Code\\Linksight\\dsh-workbench\\仅测试，不思考，直接提交任务'
+const ws = 'D:\\Code\\my-workspace\\仅测试，不思考，直接提交任务'
 const mkTask = (sessionId, description) => ({
   kindCode: 'task', sessionId,
   payload: { title: '仅测试，不思考，直接提交任务', typeCode: 'personal', priorityCode: 'p3', statusCode: 'todo', workspacePath: ws, description, subtasks: [] },

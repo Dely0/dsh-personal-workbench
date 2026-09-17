@@ -21,7 +21,7 @@
 
 ## 3. 真实库里的证据
 
-库：`C:\Users\Administrator\.dsh\workbench\workbench.db`（2026-09-13 实测）
+库：`C:\Users\<user>\.dsh\workbench\workbench.db`（2026-09-13 实测）
 
 | | 任务 A | 任务 B |
 |---|---|---|

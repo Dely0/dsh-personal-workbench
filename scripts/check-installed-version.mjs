@@ -10,7 +10,7 @@
  * 落后于 profile 声明的版本 / 落后于数据库 schema"这类不一致。
  *
  * 跑法（在 profile 目录下即可）：
- *   node D:/Code/Linksight/dsh-workbench/scripts/check-installed-version.mjs
+ *   node D:/Code/my-workspace/scripts/check-installed-version.mjs
  *
  * 退出码：0 = 一致；1 = 发现不一致或有风险。
  */

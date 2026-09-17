@@ -31,7 +31,7 @@ const request = async (method, path, body) => {
 }
 const log = (...a) => console.log(...a)
 
-const ws = 'D:\\Code\\Linksight\\dsh-workbench\\仅测试，不思考，直接提交任务'
+const ws = 'D:\\Code\\my-workspace\\仅测试，不思考，直接提交任务'
 const draftBody = {
   kindCode: 'task', sessionId: 'session-6e9b609e',
   payload: { title: '仅测试，不思考，直接提交任务', typeCode: 'personal', priorityCode: 'p3', statusCode: 'todo', workspacePath: ws, description: 'A', subtasks: [] },

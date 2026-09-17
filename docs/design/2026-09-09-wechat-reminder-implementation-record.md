@@ -2,7 +2,7 @@
 
 > 主任务：`2da8c5bb-30fb-4fba-b3f7-e5cecb513737`（工作台任务提醒接入微信）
 > 实施日期：2026-09-09
-> 代码：`D:\Code\Linksight\dsh-workbench`（本地 main，未推送）
+> 代码：`D:\Code\my-workspace`（本地 main，未推送）
 > 结论：**Phase 1–4 全部落地，端到端真机验收通过（3/3）**
 
 ---
@@ -79,7 +79,7 @@ ctx.inject(['timer'], (timerCtx) => {
 仓库在 WSL / Windows 双侧共用，`node_modules/.bin` 只有 WSL 版 shim，Windows 侧 `pnpm build` 会因 `tsc` 不在 PATH、rolldown 原生绑定为 linux 版而失败。
 
 ```bash
-wsl bash -lc "cd /mnt/d/Code/Linksight/dsh-workbench && pnpm build"
+wsl bash -lc "cd /mnt/d/Code/my-workspace && pnpm build"
 ```
 
 ### 4.3 live profile 需手动同步构建产物
@@ -98,7 +98,7 @@ wsl bash -lc "cd /mnt/d/Code/Linksight/dsh-workbench && pnpm build"
 
 ```bash
 # 构建 + 测试（WSL）
-wsl bash -lc "cd /mnt/d/Code/Linksight/dsh-workbench && pnpm build && node --test test/*.test.mjs"
+wsl bash -lc "cd /mnt/d/Code/my-workspace && pnpm build && node --test test/*.test.mjs"
 
 # 同步到 live profile 并热重载
 Copy-Item lib\* "$env:USERPROFILE\.dsh\profiles\web\node_modules\@dely0\dsh-personal-workbench\lib" -Recurse -Force
