@@ -6,7 +6,7 @@ import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import type { DatabaseSync } from 'node:sqlite'
 import {
   addReminder, addTaskMemory, archiveTask, completeTaskCascade, createTask, createTaskReview, ensureRecurringInstances,
-  getTask, getTaskMemoryContext, getTaskRootId, linkTaskSession, listArchivedTasks, listChildren, listReminders, listTaskEvents,
+  getDictionary, getTask, getTaskMemoryContext, getTaskRootId, linkTaskSession, listArchivedTasks, listChildren, listReminders, listTaskEvents,
   listTaskMemories, listTaskReviews, listTaskSessions, listTasks, repairParentCompletion, restoreTask, updateTask, updateTaskWithCompletion,
 } from '../../db/repo.js'
 import { TASKS_PREFIX, clampEstimateForStorage, defaultRecurrenceRule, isLoopbackRequest, pathSegments, publicTask, readJsonBody, requireCode, taskInputFromBody, todayRange, writeJson } from './helpers.js'
@@ -42,6 +42,13 @@ export function makeTaskRoutes(db: DatabaseSync): WebRoute[] {
               if (input.aiPolicyCode !== undefined) requireCode(db, 'ai_policy', input.aiPolicyCode, 'aiPolicyCode')
               if (input.recurrenceCode !== undefined && input.recurrenceCode !== null && input.recurrenceCode !== 'none') requireCode(db, 'recurrence', input.recurrenceCode, 'recurrenceCode')
               const task = createTask(db, input)
+              // 直接建任务时按「类型默认 → 优先级默认」补提醒：否则这里建出来的任务永不提醒。
+              if (task.dueAt !== null) {
+                const typeDefault = getDictionary(db, 'type', task.typeCode)?.config.defaultReminderMinutes
+                const priorityDefault = getDictionary(db, 'priority', task.priorityCode)?.config.defaultReminderMinutes
+                const offset = typeof typeDefault === 'number' ? typeDefault : typeof priorityDefault === 'number' ? priorityDefault : undefined
+                if (typeof offset === 'number' && Number.isFinite(offset) && offset >= 0) addReminder(db, task.id, offset, 'browser')
+              }
               ensureRecurringInstances(db)
               return writeJson(res, 201, { ok: true, task: publicTask(task) })
             } catch (error) {
@@ -107,6 +114,16 @@ export function makeTaskRoutes(db: DatabaseSync): WebRoute[] {
             // 新语义：任意节点直接完成时，在同一事务内级联完成未完成子节点，并向上递归聚合父节点。
             const task = updateTaskWithCompletion(db, id, patch)
             if (task === undefined) return writeJson(res, 404, { error: 'task not found' })
+            // 改/设截止时间时，若该任务还没有生效中的提醒，按默认提前量补一条。
+            if ('dueAt' in body && task.dueAt !== null) {
+              const active = listReminders(db, id).filter((r) => r.enabled === 1 && r.firedAt === null && r.skippedAt === null && r.acknowledgedAt === null)
+              if (active.length === 0) {
+                const typeDefault = getDictionary(db, 'type', task.typeCode)?.config.defaultReminderMinutes
+                const priorityDefault = getDictionary(db, 'priority', task.priorityCode)?.config.defaultReminderMinutes
+                const offset = typeof typeDefault === 'number' ? typeDefault : typeof priorityDefault === 'number' ? priorityDefault : undefined
+                if (typeof offset === 'number' && Number.isFinite(offset) && offset >= 0) addReminder(db, id, offset, 'browser')
+              }
+            }
             if (patch.recurrenceCode !== undefined || patch.recurrenceRule !== undefined) ensureRecurringInstances(db)
             return writeJson(res, 200, { ok: true, task: publicTask(task) })
           } catch (error) {

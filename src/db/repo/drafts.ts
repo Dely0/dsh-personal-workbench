@@ -282,6 +282,13 @@ export function confirmTaskDraft(
         if (problem !== undefined) { problems.push(problem); continue }
         const child = createTask(db, { ...normalized.input, parentId: parentId2 }, actor, at)
         childCount += 1
+        // 子任务同样按「类型默认 → 优先级默认」补提醒：否则草稿拆出来的子任务永远不会提醒。
+        const childTypeDefault = getDictionary(db, 'type', child.typeCode)?.config.defaultReminderMinutes
+        const childPriorityDefault = getDictionary(db, 'priority', child.priorityCode)?.config.defaultReminderMinutes
+        const childOffset = typeof childTypeDefault === 'number' ? childTypeDefault : typeof childPriorityDefault === 'number' ? childPriorityDefault : undefined
+        if (child.dueAt !== null && typeof childOffset === 'number' && Number.isFinite(childOffset) && childOffset >= 0) {
+          addReminder(db, child.id, childOffset, 'browser', at)
+        }
         if (Array.isArray(item.children)) walkChildren(item.children as DraftTaskItem[], child.id)
       }
     }

@@ -303,7 +303,26 @@ function applyReady(ctx: Context, db: DatabaseSync, config: Config): void {
   const scheduler = new ReminderScheduler({
     db,
     adapter,
-    isTargetConfigured: () => adapter.status().configured,
+    /**
+     * 通道是否就绪。
+     *
+     * 不能直接读 `adapter.status().configured` —— 它读的是适配层内存缓存 `cachedTarget`，
+     * 而该缓存只在 `resolveTarget()` 里填充。进程刚启动（或插件热重载）时缓存为空，
+     * 调度器会在 `channelReady` 处早退，把包括启动补发在内的\**所有任务提醒静默跳过**，
+     * 直到有人手动保存一次提醒设置页。
+     * （草稿通知侧早已绕开这一点，见 reminder/draft-notify.ts 的注释；任务提醒侧漏修。）
+     *
+     * 改为「缓存 → 数据库显式绑定 → 乐观放行并异步补解析」三级判定；
+     * 真解析不到目标时 `send()` 会失败并照常入队退避，不会丢提醒。
+     */
+    isTargetConfigured: () => {
+      if (adapter.status().configured) return true
+      const botId = readMeta(db, 'reminder_bot_id')
+      const targetId = readMeta(db, 'reminder_target_id')
+      if (typeof botId === 'string' && botId.trim() !== '' && typeof targetId === 'string' && targetId.trim() !== '') return true
+      void adapter.resolveTarget().catch(() => { })
+      return adapter.available()
+    },
     readInboundCount: () => readWeixinInboundCount(ctx),
     log: (message) => { ctx.logger?.info?.(message) },
   })

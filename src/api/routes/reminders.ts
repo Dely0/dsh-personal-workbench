@@ -50,6 +50,10 @@ export function makeReminderRoutes(db: DatabaseSync, deps: ReminderRouteDeps = {
         if (deps.channel === undefined) return writeJson(res, 503, { error: 'reminder channel unavailable' })
         const method = req.method ?? 'GET'
         if (method === 'GET') {
+          // 先解析一次投递目标再回报状态：status().configured 读的是适配层内存缓存 cachedTarget，
+          // 进程刚启动时缓存为空，会把明明已绑定的目标误报成「未配置」。
+          // listOptions() 不填充该缓存，必须显式 resolveTarget()。
+          await deps.channel.resolveTarget()
           const options = await deps.channel.listOptions()
           return writeJson(res, 200, { ok: true, status: deps.channel.status(), options, queue: listQueue(db, 20) })
         }
