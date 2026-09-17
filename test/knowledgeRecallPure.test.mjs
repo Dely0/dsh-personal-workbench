@@ -15,14 +15,18 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   extractTerms,
-  scoreCandidate,
+  formatRelevance,
   formatRecallText,
   isTrivialQuery,
   normalizeText,
   mergeRecallOutcomes,
   recallKnowledge,
   recencyFactor,
+  relevanceOf,
+  RELEVANCE_CEILING,
   RECALL_DEFAULTS,
+  scoreCandidate,
+  scoreFromRelevance,
   taskIdFromWorkspacePath,
 } from '../lib/shared/knowledgeRecall.js'
 
@@ -399,3 +403,35 @@ test('缺省阈值与上限是唯一来源（改这里必须连带改测试，�
   assert.equal(RECALL_DEFAULTS.minScore, 0.34)
   assert.equal(RECALL_DEFAULTS.maxEntries, 3)
 })
+
+/**
+ * v1.15.5：展示相关度归一化（用户 2026-09-17 的疑问 —— "团队记忆那边 0.8~0.99，
+ * 这边怎么这么低"）。原因是两边**分母不同**：团队记忆显示 `raw/(1+raw)`（raw 无上界），
+ * 本仓显示有界原始分（上限 = 标题权重 0.55）。现在展示层统一除以 0.55。
+ */
+test('相关度归一化：原始分上限 0.55 → 展示 1.00，两个口径可互相换算', () => {
+  assert.equal(RELEVANCE_CEILING, 0.55, '上限必须是标题权重（权重表变了这里要跟着变）')
+  assert.equal(relevanceOf(0.55), 1, '标题档满分 → 相关度 1.00（不再是 0.55 的天花板）')
+  assert.equal(relevanceOf(0.45), 0.45 / 0.55, '标签档满分 → 0.82')
+  assert.equal(relevanceOf(0.25), 0.25 / 0.55, '正文档满分 → 0.45')
+  assert.equal(relevanceOf(0), 0)
+  assert.equal(relevanceOf(2), 1, '越界要夹到 1（不能出现 1.00 以上的"相关度"）')
+  assert.ok(relevanceOf(0.52) > relevanceOf(0.4), '单调：分高的相关度不会更低')
+  // 阈值在两种口径下必须指向同一件事（换算可逆）
+  assert.ok(Math.abs(scoreFromRelevance(relevanceOf(RECALL_DEFAULTS.minScore)) - RECALL_DEFAULTS.minScore) < 1e-12)
+  assert.equal(formatRelevance(RECALL_DEFAULTS.minScore), '0.62', '阈值换算成展示口径是 0.62，不是 0.34')
+})
+
+test('命中同时带原始分与展示相关度，注入文案只露归一化那个', () => {
+  const outcome = recallKnowledge({ query: '盘符根', candidates: [candidate({ id: 'k-1', title: '盘符根' })], now: NOW })
+  const hit = outcome.hits[0]
+  assert.ok(hit !== undefined)
+  assert.equal(hit.score, 0.55, '内部原始分不动（阈值与排序靠它）')
+  assert.equal(hit.relevance, 1, '标题档满分 → 展示 1.00')
+  const text = formatRecallText(outcome)
+  assert.match(text, /相关度 1\.00/, '注入文本用归一化口径')
+  assert.doesNotMatch(text, /相关度 0\.55/, '展示层不许把内部原始分露出去（会再被当成"低分"）')
+  assert.match(text, /完整 uuid/, '要写清"按 id 取全文"用的是完整 uuid')
+  assert.match(text, /workbench_search_knowledge/, '并给出取全文的工具名')
+})
+

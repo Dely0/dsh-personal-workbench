@@ -281,3 +281,79 @@ test('端点围栏：非 loopback 请求被拒（与其余路由同一条规矩�
     assert.equal(res.statusCode, 403, '非 loopback 必须 403')
   })
 })
+
+/**
+ * v1.15.5 修的两条"承诺与能力不一致"（用户 2026-09-17 实测抓到的）：
+ *
+ * 1. 注入文本写着"需要展开某条时用返回里的 id 再查一次"，而工具**只会按关键词抽词**，
+ *    传 uuid 进去必然零命中 —— 于是 52 条带 `file_link` 的镜像型条目在会话里
+ *    只剩 160 字摘要可用，知识库"检索得回来、消费不下去"。
+ * 2. 展示的"相关度"是**有界原始分**（上限 0.55），看着永远比团队记忆的 0.8~0.99 低，
+ *    用户合理地质疑"是不是打分有问题"。现在展示层归一化到 0~1，工具阈值同口径。
+ */
+test('工具：把 [id] 当 query 直读全文（注入文案承诺的那条路必须真的能用）', async () => {
+  await withDb(async (db) => {
+    const long = '正文前缀'.repeat(60) // 远超 160 字摘要长度
+    const entry = createKnowledge(db, {
+      title: '带镜像文档的条目',
+      contentMd: `${long}  尾部唯一标记 TAIL-MARK`,
+      tags: ['镜像'],
+      fileLink: 'file:///D:/docs/mirror.md',
+    })
+    const manager = new KnowledgeRecallManager(db, { log: () => {} })
+    const tool = searchKnowledgeTool(manager)
+    const exec = { agent: { session: { id: 'sess-byid' } } }
+
+    // 注入文案里的形态就是 [uuid]
+    const output = await tool.execute({ query: `[${entry.id}]` }, exec)
+    assert.match(output, /TAIL-MARK/, '按 id 要能拿到 160 字摘要之外的真实全文')
+    assert.match(output, new RegExp(entry.id), '回显条目 id（便于 report_usage）')
+    assert.match(output, /file:\/\/\/D:\/docs\/mirror\.md/, '镜像文档路径要一并给出')
+    assert.doesNotMatch(output, /零命中/, '不能把"按 id 读"走进关键词检索的零命中分支')
+
+    // 裸 uuid 与 entry_id: 前缀都认（模型抄 id 时形态会变）
+    const bare = await tool.execute({ query: entry.id }, exec)
+    assert.match(bare, /TAIL-MARK/, '裸 uuid 也要认')
+    assert.match(await tool.execute({ query: `entry_id:${entry.id}` }, exec), /TAIL-MARK/, 'entry_id: 前缀也要认')
+
+    // 落库的日志要区分"按 id 直读"与关键词检索（否则噪声账对不上）
+    const log = listRecallLog(db, { sessionId: 'sess-byid' })
+    assert.equal(log.length, 3)
+    assert.equal(log[0].trigger, 'tool')
+    assert.equal(log[0].hits[0].id, entry.id)
+    assert.match(log[0].hits[0].reason, /按 id 直读全文/)
+  })
+})
+
+test('工具：未知 id 当场说"没有这条"，不伪装成零命中', async () => {
+  await withDb(async (db) => {
+    createKnowledge(db, { title: '盘符的坑', contentMd: '盘符' })
+    const manager = new KnowledgeRecallManager(db, { log: () => {} })
+    const output = await searchKnowledgeTool(manager).execute(
+      { query: '00000000-0000-0000-0000-000000000000' },
+      { agent: { session: { id: 'sess-noid' } } },
+    )
+    assert.match(output, /没有这条知识条目/, '要明确说这条 id 不存在')
+    assert.match(output, /完整 uuid/, '要给出下一步（拿完整 id 再试）')
+    assert.doesNotMatch(output, /候选池/, '不能退化成关键词零命中那句话')
+  })
+})
+
+test('工具：min_score 用归一化相关度（与输出里的"相关度"同一把尺子）', async () => {
+  await withDb(async (db) => {
+    // query 4 个关键词、标题命中 3 个 → 原始分 0.55×1×(0.5+0.5×0.75)=0.48125 → 相关度 0.875
+    // （原始分口径下它 0.48 也算"过线"，但按 0.8 当原始分传就会被全挡下 —— 这正是修复点）
+    createKnowledge(db, { title: '盘符根目录', contentMd: '无关正文' })
+    const manager = new KnowledgeRecallManager(db, { log: () => {} })
+    const tool = searchKnowledgeTool(manager)
+    const exec = { agent: { session: { id: 'sess-score' } } }
+
+    const pass = await tool.execute({ query: '盘符根本', min_score: 0.8 }, exec)
+    assert.match(pass, /命中 1 条/, '相关度 0.875 要过 0.8 这条线')
+    assert.match(pass, /相关度 0\.8\d/, '展示的必须是归一化相关度')
+
+    const blocked = await tool.execute({ query: '盘符根本', min_score: 0.9 }, exec)
+    assert.match(blocked, /零命中/, '相关度 0.875 < 0.9 → 要被挡下')
+  })
+})
+

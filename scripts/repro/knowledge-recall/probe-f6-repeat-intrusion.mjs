@@ -14,6 +14,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openWorkbenchDb } from '../../../lib/db/database.js'
 import { KnowledgeRecallManager } from '../../../lib/knowledge-recall.js'
+import { formatRelevance } from '../../../lib/shared/knowledgeRecall.js'
 
 const SOURCE = join(process.env.USERPROFILE ?? process.env.HOME ?? '', '.dsh', 'workbench', 'workbench.db')
 if (!existsSync(SOURCE)) { console.log('SKIP: 找不到线上工作台库'); process.exit(2) }
@@ -28,7 +29,7 @@ const counts = new Map()
 const manager = new KnowledgeRecallManager(db, { log: () => {} })
 for (const query of QUERIES) {
   const outcome = manager.recallToText({ taskId: null, query })
-  console.log(`「${query}」→ ${outcome.hits.map((h) => `${h.title.slice(0, 26)}(${h.score.toFixed(2)})`).join(' / ') || '零命中'}`)
+  console.log(`「${query}」→ ${outcome.hits.map((h) => `${h.title.slice(0, 26)}(${formatRelevance(h.score)})`).join(' / ') || '零命中'}`)
   for (const hit of outcome.hits) counts.set(hit.id, { title: hit.title, n: (counts.get(hit.id)?.n ?? 0) + 1 })
 }
 const repeated = [...counts.entries()].filter(([, v]) => v.n >= 3)

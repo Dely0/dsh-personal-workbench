@@ -27,8 +27,12 @@ import { join } from 'node:path'
 import { openWorkbenchDb } from '../../lib/db/database.js'
 import { KnowledgeRecallManager } from '../../lib/knowledge-recall.js'
 import { listRecallLog } from '../../lib/knowledge-recall-log.js'
+import { formatRelevance } from '../../lib/shared/knowledgeRecall.js'
 import { listKnowledge, listTasks } from '../../lib/db/repo.js'
 import { linkTaskSession } from '../../lib/db/repo/task-sessions.js'
+
+/** 展示相关度（0~1 归一化口径）—— 与注入文本/工具输出同一把尺子，别在这里露原始分。 */
+const rel = (hit) => formatRelevance(hit.score)
 
 const args = process.argv.slice(2)
 const flag = (name, fallback = undefined) => {
@@ -64,7 +68,24 @@ const say = (...parts) => { if (!QUIET) console.log(...parts) }
 const knowledge = listKnowledge(db, { limit: 500 })
 say(`知识库条目：${knowledge.length} 条（真实库副本）`)
 const requestedTask = flag('--task')
-const taskWithKnowledge = requestedTask ?? knowledge.find((entry) => entry.sourceTaskId !== null)?.sourceTaskId ?? null
+/**
+ * 自动挑"本任务"：**取关联知识条数最多的那个**（并列时按 id 定序，保证可重复）。
+ *
+ * 为什么不是"列表里第一条带 sourceTaskId 的"：`listKnowledge` 按更新时间倒序，
+ * 知识库每新增一条就可能换一个任务 —— 2026-09-17 就是这么翻的车：
+ * 新确认的一条【修正】条目（关联本任务）插到最前，演示换到了本任务上，
+ * 而本任务的 `prime` 恰好注入了「…（01 天线测试业务知识库）」这条，
+ * 紧接着时机 ① 的追问因**会话去重**（日志里写着"已注入过去重 1"）命中 0 条，
+ * 表现为"①失败"，其实是演示脚本选任务不稳定（同一份代码在旧库副本上 15/15）。
+ * 取"关联最多"既稳定又更贴合"优先本任务/本任务树"这条被验收的设计。
+ */
+const linkedCounts = new Map()
+for (const entry of knowledge) {
+  if (entry.sourceTaskId !== null) linkedCounts.set(entry.sourceTaskId, (linkedCounts.get(entry.sourceTaskId) ?? 0) + 1)
+}
+const taskWithKnowledge = requestedTask
+  ?? [...linkedCounts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0]?.[0]
+  ?? null
 const taskTitle = taskWithKnowledge === null ? '(无)' : (listTasks(db, { includeArchived: true }).find((t) => t.id === taskWithKnowledge)?.title ?? '(已删除)')
 say(`本任务：${taskWithKnowledge ?? '(无)'} 「${taskTitle}」\n`)
 
@@ -72,7 +93,7 @@ const manager = new KnowledgeRecallManager(db, { log: () => {} })
 const sessionFor = (suffix) => `demo-${taskWithKnowledge ?? 'global'}-${suffix}`
 if (taskWithKnowledge !== null) {
   // 让 resolveTaskId 走**权威路径**（task_sessions），而不是靠工作目录命名猜
-  for (const suffix of ['before', 'error', 'code', 'accept']) {
+  for (const suffix of ['before', 'before-q', 'error', 'code', 'accept']) {
     linkTaskSession(db, { taskId: taskWithKnowledge, sessionId: sessionFor(suffix), roleCode: 'execute' })
   }
 }
@@ -122,7 +143,7 @@ const timings = []
   say('─'.repeat(78))
   say(`【① 执行任务前 · session-start 自动召回】用任务标题 + 描述分句检索`)
   for (const line of manager.drainLogs()) say(`  ${line.replace('[workbench-knowledge] ', '')}`)
-  for (const hit of primed?.hits ?? []) say(`  ✔ [${hit.id.slice(0, 8)}] ${hit.title}  相关度 ${hit.score.toFixed(2)}｜${hit.reason}`)
+  for (const hit of primed?.hits ?? []) say(`  ✔ [${hit.id.slice(0, 8)}] ${hit.title}  相关度 ${rel(hit)}｜${hit.reason}`)
   say(`  会话里可见的注入文本：${text === '' ? '(无)' : `【工作台知识库】… ${text.split('\n').filter((l) => l.startsWith('- [')).length} 条`}`)
   if (primed !== undefined && primed.hits.length > 0) {
     const report = manager.reportUsage(sessionId, [primed.hits[0].id])
@@ -132,7 +153,13 @@ const timings = []
 }
 
 for (const spec of TIMINGS) {
-  const sessionId = sessionFor(spec.suffix)
+  /**
+   * ①「开工前」的**追问**用一个全新会话：`prime` 刚在 `before` 会话里注入过的条目
+   * 会被会话去重（这是设计要的噪声控制，日志里写作"已注入过去重 N"），
+   * 于是"同一个会话里再问一遍"本来就该零命中 —— 拿它当验收例子会误判成失败。
+   * ②③④ 没有这个问题（各自是独立的新会话）。
+   */
+  const sessionId = spec.suffix === 'before' ? sessionFor('before-q') : sessionFor(spec.suffix)
   let chosen = null
   for (const query of spec.queries) {
     manager.drainLogs()
@@ -150,7 +177,7 @@ for (const spec of TIMINGS) {
     }
     for (const hit of outcome.hits) {
       say(`  ✔ [${hit.id.slice(0, 8)}] ${hit.title}`)
-      say(`      相关度 ${hit.score.toFixed(2)}｜${hit.reason}｜${hit.fromTask ? '本任务' : '全库'}`)
+      say(`      相关度 ${rel(hit)}｜${hit.reason}｜${hit.fromTask ? '本任务' : '全库'}`)
     }
     // 回报引用：模型"用到了"第一条（演示 report_usage 落到 cited_ids）
     const report = manager.reportUsage(sessionId, [outcome.hits[0].id])
@@ -224,8 +251,8 @@ for (const [real, decoy] of sharingDecoys) {
   const decoyOutcome = manager.recallToText({ taskId: taskWithKnowledge, query: decoy })
   sharingRealHits += realOutcome.hits.length
   sharingDecoyHits += decoyOutcome.hits.length
-  say(`  [A 字面共享] 真实「${real}」→ ${realOutcome.hits.length} 条（${realOutcome.hits.map((h) => h.score.toFixed(2)).join(', ') || '—'}）`)
-  say(`               诱饵「${decoy}」→ ${decoyOutcome.hits.length} 条（${decoyOutcome.hits.map((h) => h.score.toFixed(2)).join(', ') || '—'}）`)
+  say(`  [A 字面共享] 真实「${real}」→ ${realOutcome.hits.length} 条（${realOutcome.hits.map((h) => rel(h)).join(', ') || '—'}）`)
+  say(`               诱饵「${decoy}」→ ${decoyOutcome.hits.length} 条（${decoyOutcome.hits.map((h) => rel(h)).join(', ') || '—'}）`)
 }
 check('A 字面共享型诱饵不比真实提问更宽（逐字检索的固有边界，如实记录）', sharingDecoyHits <= sharingRealHits, `真实 ${sharingRealHits} 条 vs 诱饵 ${sharingDecoyHits} 条`)
 

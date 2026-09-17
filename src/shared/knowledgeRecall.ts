@@ -29,11 +29,31 @@
  * ```
  * hits     = 命中的不同关键词数
  * coverage = hits / 本次检索的关键词总数
- * score    = clamp01(weight * min(1, hits/3) * (0.5 + 0.5*coverage))
+ * score    = clamp01(weight * min(1, hits/3) * (0.5 + 0.5*coverage))   ← 内部原始分
  *   weight: 标题命中 0.55 / 标签命中 0.45 / 正文命中 0.25（取命中的**最高**一档）
- * 命中判定: score > 0.34
+ * 命中判定: score > 0.34（原始分口径）
+ * 展示相关度: relevance = score / 0.55 ∈ (0, 1]        ← 所有给人看的地方用这个
  * 排序: score 降序 → 本任务优先 → 更新时间降序 → id（结果稳定，日志才有可比性）
  * ```
+ *
+ * ## 为什么必须有 `relevance`（展示层归一化）—— 别再把"相关度 0.41"当成低分
+ *
+ * 原始分是**有界**的：上限正好是标题权重 0.55，所以一条完美命中也只能显示 0.55。
+ * 而用户对"相关度"的心理刻度是 0~1（团队记忆插件那边就是 0.8~0.99）。
+ * 两边一比，本仓的 0.41 看着像"勉强相关"，实际已经是上限的 75% —— 这是**刻度**问题，
+ * 不是相关性质量问题（用户 2026-09-17 就是这么问的）。
+ *
+ * 团队记忆的口径是 `score = rawScore / (1 + rawScore)`（见其 `test_p2_units.mjs`）：
+ * rawScore 无上界（标题+正文各中一次就是 4 分），于是任何命中都被挤到 0.8 以上。
+ * 本仓选择**除以权重上限**这条线性归一化：
+ * - 它是**单调**的，所以排序、阈值判定与归一化前完全一致（不改变任何行为）；
+ * - 它是**可解释**的：`0.82` 就是"标签档满分"，`0.45` 就是"只有正文命中"，
+ *   正好覆盖公司内部口径的分档含义；
+ * - 它不引入 `1/(1+x)` 那种"分数越靠近 1 越挤"的饱和，1.00 是真满分而不是渐近线。
+ *
+ * **内部一切判定仍用原始分**（阈值、排序、上限），展示层只做这一处换算 ——
+ * 一条判据一个值：`RecallHit.score` 是原始分、`RecallHit.relevance` 是展示分，
+ * 两者由 `relevanceOf()` 单向导出，谁都不许自己再除一遍。
  *
  * **两个因子各治一种病**（都是本轮实测踩出来的，改公式前先看完这段）：
  *
@@ -72,7 +92,13 @@ export interface RecallHit {
   id: string
   title: string
   kindCode: string
+  /** **内部原始分**（权重 × 长度因子 × 覆盖率，上限 0.55）：只用于阈值与排序。 */
   score: number
+  /**
+   * **展示相关度**（`score / 0.55`，落在 (0, 1]）：注入文本、工具输出、日志、界面
+   * 一律用它，不要再用原始分（理由见文件头"为什么必须有 relevance"）。
+   */
+  relevance: number
   /** 命中的词（按重要性降序）。 */
   terms: string[]
   /** 为什么算命中（一句话，含"哪个字段命中了哪些词"）。 */
@@ -152,6 +178,11 @@ export const RECALL_DEFAULTS = {
    *
    * 结论：**命中要落在标题或标签上，且要有一定覆盖率**。这正是知识条目质量的
    * 自然要求 —— 一条知识的标题如果命中了你在问的事，它就该被带出来；只有正文擦边的不该。
+   *
+   * 口径提醒：这是**原始分**阈值，换算成给人看的归一化相关度是
+   * `0.34 / 0.55 ≈ 0.62` —— 也就是说"过线的命中在界面上显示 0.62 以上"，
+   * 别把 0.62 看成低分（对照团队记忆的 0.8~0.99，那是另一套分母，
+   * 见文件头"为什么必须有 relevance"）。
    */
   minScore: 0.34,
   /** 单回合最多注入 3 条：知识条目带正文片段，比团队记忆的摘要更长，额度要更紧。 */
@@ -231,6 +262,31 @@ function clamp01(value: number): number {
 }
 
 /**
+ * 展示相关度的上限 = 标题权重（原始分的理论上限）。
+ *
+ * 常量而不是字面量 0.55：权重表一改，归一化自动跟着走 ——
+ * 分开写就会出现"权重调了、归一化没调"的静默偏差。
+ */
+export const RELEVANCE_CEILING = WEIGHT.title
+
+/** 原始分 → 展示相关度（0~1）。**唯一的换算入口**，别在别处再除一遍。 */
+export function relevanceOf(score: number): number {
+  return clamp01(clamp01(score) / RELEVANCE_CEILING)
+}
+
+/** 展示相关度 → 原始分（给"按相关度传阈值"的入口用：工具参数、配置）。 */
+export function scoreFromRelevance(relevance: number): number {
+  return clamp01(relevance) * RELEVANCE_CEILING
+}
+
+/**
+ * 人类可读的相关度（两位小数）。展示层统一走它，免得三处各写一次 `toFixed(2)`。
+ */
+export function formatRelevance(score: number): string {
+  return relevanceOf(score).toFixed(2)
+}
+
+/**
  * 最近度：一年内线性衰减到 0。时间串坏掉时给 0（**不猜**）。
  *
  * ⚠️ 它**不进分数**，只做同分时的排序（理由见文件头"新旧不进分数"那段）。
@@ -305,7 +361,7 @@ export function scoreCandidate(candidate: RecallCandidate, context: ScoreContext
       : { label: '正文', terms: bodyTerms, weight: WEIGHT.body }
   const terms = [...new Set([...titleTerms, ...tagTerms, ...bodyTerms])]
   const reason = `${candidate.fromTask ? '本任务' : '全库'} · ${winner.label}命中「${winner.terms.join('、')}」`
-    + `（该字段命中 ${winner.terms.length}/${totalTerms} 个关键词）→ ${score.toFixed(2)}`
+    + `（该字段命中 ${winner.terms.length}/${totalTerms} 个关键词）→ 相关度 ${formatRelevance(score)}`
 
   // 片段：优先取正文里第一个命中词的上下文；正文没命中就取开头。
   const raw = String(entry.contentMd ?? '').replace(/\s+/g, ' ').trim()
@@ -326,6 +382,7 @@ export function scoreCandidate(candidate: RecallCandidate, context: ScoreContext
     title: entry.title,
     kindCode: entry.kindCode,
     score,
+    relevance: relevanceOf(score),
     terms,
     reason,
     snippet,
@@ -509,11 +566,20 @@ export function formatRecallText(outcome: RecallOutcome): string {
   for (const hit of outcome.hits) {
     const source = hit.fromTask ? '本任务' : '全库'
     const from = hit.query !== undefined && hit.query !== outcome.query ? ` · 来自「${hit.query.slice(0, 24)}」` : ''
-    lines.push(`- [${hit.id}] ${hit.title}（${hit.kindCode} · ${source} · 相关度 ${hit.score.toFixed(2)} · 更新 ${hit.updatedAt.slice(0, 10)}${from}）`)
+    lines.push(`- [${hit.id}] ${hit.title}（${hit.kindCode} · ${source} · 相关度 ${formatRelevance(hit.score)} · 更新 ${hit.updatedAt.slice(0, 10)}${from}）`)
     if (hit.snippet !== '') lines.push(`  摘要：${hit.snippet}`)
     if (hit.fileLink !== null && hit.fileLink !== '') lines.push(`  文档：${hit.fileLink}`)
   }
-  lines.push('需要全文时调用 workbench_search_knowledge；需要展开某条时用返回里的 id 再查一次。用到哪几条请调用 workbench_knowledge_recall_control(action=report_usage)。')
+  /**
+   * 结尾两句话都必须**兑现得了**（v1.15.5 修）。
+   *
+   * 原先这里写着"需要展开某条时用返回里的 id 再查一次" —— 而 `workbench_search_knowledge`
+   * 当时只会把 query 当**关键词**抽词打分，传 uuid 进去必然零命中：
+   * 文档在许一个工具做不到的承诺。实测（2026-09-17，本机）就是这么被用户抓到的：
+   * `query="7532f45e-cb93-…"` → 零命中。现在工具支持按 id 直读全文，这句话才成立。
+   */
+  lines.push('需要全文时：把上面某条的 [id]（完整 uuid）作为 query 传给 workbench_search_knowledge，会返回全文而不是 160 字摘要。')
+  lines.push('用到哪几条请调用 workbench_knowledge_recall_control(action=report_usage, entry_ids=[...]) 回报引用。')
   return lines.join('\n')
 }
 

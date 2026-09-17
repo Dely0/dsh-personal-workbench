@@ -31,13 +31,14 @@
  */
 import type { Context } from '@deepseek-ai/cordis'
 import type { DatabaseSync } from 'node:sqlite'
-import { getTask, listKnowledge } from './db/repo.js'
+import { getKnowledge, getTask, listKnowledge } from './db/repo.js'
 import type { KnowledgeRow } from './db/repo/knowledge.js'
 import { findTaskIdBySession } from './db/repo/task-sessions.js'
 import { readMeta } from './db/repo/meta.js'
 import { appendRecallLog, citeRecallLog, readSessionOverrides, writeSessionOverride } from './knowledge-recall-log.js'
 import {
   formatRecallText,
+  formatRelevance,
   mergeRecallOutcomes,
   recallKnowledge,
   RECALL_DEFAULTS,
@@ -45,6 +46,31 @@ import {
   type RecallCandidate,
   type RecallOutcome,
 } from './shared/knowledgeRecall.js'
+
+/** 完整知识条目 id（uuid v4 形态）。工具按 id 直读时只认这个，不做前缀模糊匹配。 */
+const ENTRY_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
+ * 剥掉注入文本里的包裹符号（`[id]` / `【id】` / `entry_id:id`）后取 id。
+ *
+ * 为什么必须容忍这些写法：注入文本与工具输出里 id 都是 `[xxxx]` 形态，
+ * 模型会**原样**把它当成 query 传回来 —— 只认裸 uuid 的话这条路又会断在最后一步。
+ * 不是 uuid 就返回 `undefined`（调用方据此走关键词检索那条老路，不做别的猜测）。
+ */
+export function unwrapEntryId(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined
+  const trimmed = raw.trim()
+    .replace(/^\[|\]$/g, '')
+    .replace(/^【|】$/g, '')
+    .replace(/^(?:entry[_-]?id|id)\s*[:=]\s*/i, '')
+    .trim()
+  return ENTRY_ID_RE.test(trimmed) ? trimmed.toLowerCase() : undefined
+}
+
+/** 这个 query 是不是"按 id 直读"（工具与日志共用同一份判定，不许各判一次）。 */
+export function isEntryIdQuery(raw: unknown): boolean {
+  return unwrapEntryId(raw) !== undefined
+}
 
 /** 全局开关的 meta 键（缺省 **开**：功能不默认关闭，否则用户永远发现不了它）。 */
 const AUTO_RECALL_KEY = 'knowledge_recall_auto'
@@ -419,7 +445,7 @@ export class KnowledgeRecallManager {
         ? `命中 ${outcome.matched} 条但全部被阈值 ${this.options.minScore ?? RECALL_DEFAULTS.minScore} 挡下`
         : '零命中（知识库里没有相关条目）'
     this.log(`[${input.trigger}]${skip} 检索「${input.query.slice(0, 60)}」关键词=[${outcome.terms.join(' ')}] → ${tail}`
-      + (outcome.hits.length > 0 ? `：${outcome.hits.map((hit) => `${hit.id.slice(0, 8)}(${hit.score.toFixed(2)})`).join(' ')}` : '')
+      + (outcome.hits.length > 0 ? `：${outcome.hits.map((hit) => `${hit.id.slice(0, 8)}(${formatRelevance(hit.score)})`).join(' ')}` : '')
       + (logId === undefined ? '（日志未落库）' : `（日志 #${logId}）`))
   }
 
@@ -559,18 +585,49 @@ export class KnowledgeRecallManager {
   }
 
   /** 给界面/端点：本会话最近的召回记录（含"是否被引用"）。 */
-  sessionState(sessionId: string): { enabled: boolean; lastQuery: string; lastHits: Array<{ id: string; title: string; score: number; reason: string }> } {
+  sessionState(sessionId: string): { enabled: boolean; lastQuery: string; lastHits: Array<{ id: string; title: string; relevance: number; reason: string }> } {
     const state = this.sessions.get(sessionId)
     return {
       enabled: this.sessionEnabled(sessionId),
       lastQuery: state?.lastQuery ?? '',
-      lastHits: state?.lastOutcome?.hits.map((hit) => ({ id: hit.id, title: hit.title, score: hit.score, reason: hit.reason })) ?? [],
+      // 回显用**展示相关度**（与注入文本同一口径），不把内部原始分递出去
+      lastHits: state?.lastOutcome?.hits.map((hit) => ({ id: hit.id, title: hit.title, relevance: hit.relevance, reason: hit.reason })) ?? [],
     }
   }
 
   /** 任务是否存在（工具校验显式传入的 task_id：不存在就报错，绝不静默退回全库）。 */
   taskExists(taskId: string): boolean {
     return getTask(this.db, taskId) !== undefined
+  }
+
+  /**
+   * 按 id 取**单条**（工具路径的"展开全文"，v1.15.5）。
+   *
+   * ## 为什么必须有这条路
+   *
+   * 在此之前，`workbench_search_knowledge` 只会把 query 当**关键词**抽词打分，
+   * 而注入文本却写着"需要展开某条时用返回里的 id 再查一次" —— 传 uuid 进去
+   * **必然零命中**（实测 2026-09-17）。于是 52 条带 `file_link` 的镜像型条目
+   * 在正常会话里只剩 160 字摘要可用：知识库只兑现了"检索"，没兑现"消费"。
+   *
+   * ## 为什么只认**完整 uuid**、不做前缀模糊匹配
+   *
+   * 前缀匹配会引入"两三条都匹配 → 挑哪条"的选择题，而静默挑一条正是本仓
+   * 明令禁止的（挑错等于把另一条知识当成事实塞进上下文）。完整 uuid 没有歧义：
+   * 命中就返回，没命中就明说没有。要短写法可以自己截，但工具不替用户猜。
+   *
+   * 直接 `getKnowledge` 读库（不走候选缓存）：这是一次**指定 id 的直读**，
+   * 不该受"15 秒候选缓存"影响 —— 刚从待确认里确认的条目也必须能立刻读到。
+   */
+  findEntryById(rawId: string): KnowledgeRow | undefined {
+    const id = unwrapEntryId(rawId)
+    if (id === undefined) return undefined
+    try {
+      return getKnowledge(this.db, id)
+    } catch (error) {
+      this.log(`按 id 读取知识条目失败：${error instanceof Error ? error.message : String(error)}`)
+      return undefined
+    }
   }
 
   /**
@@ -601,7 +658,8 @@ export class KnowledgeRecallManager {
     taskId: string | null
     query: string
     terms: string[]
-    hits: Array<{ id: string; title: string; score: number }>
+    /** `relevance` 是**展示相关度**（0~1）；`reason` 缺省"模型主动检索"，按 id 直读时另写。 */
+    hits: Array<{ id: string; title: string; relevance: number; reason?: string }>
     matched?: number
     droppedByScore?: number
   }): number | undefined {
@@ -614,7 +672,8 @@ export class KnowledgeRecallManager {
           query: input.query,
           terms: input.terms,
           hits: input.hits.map((hit) => ({
-            id: hit.id, title: hit.title, score: hit.score, reason: '模型主动检索',
+            id: hit.id, title: hit.title, score: hit.relevance, relevance: hit.relevance,
+            reason: hit.reason ?? '模型主动检索',
             snippet: '', terms: [], tags: [], fromTask: false, updatedAt: '', fileLink: null, sourceTaskId: null, kindCode: '',
           })),
           matched: input.matched ?? input.hits.length,

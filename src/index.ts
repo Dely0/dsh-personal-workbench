@@ -220,7 +220,14 @@ export interface Config extends WorkbenchDbConfig {
   reminderScanIntervalMs?: number
   /** 知识库自动召回：全局缺省开关（不传则读 meta，缺省**开**）。 */
   knowledgeRecallEnabled?: boolean
-  /** 知识库自动召回的相关度阈值（缺省 0.34，见 `RECALL_DEFAULTS`）。 */
+  /**
+   * 知识库自动召回的阈值 —— **原始权重分**口径（缺省 0.34，见 `RECALL_DEFAULTS`）。
+   *
+   * ⚠️ 这个数字不是界面上看到的"相关度"：展示层做了归一化
+   * （`relevance = 原始分 / 0.55`），所以 0.34 对应界面上的 **0.62**。
+   * 填之前想清楚用的是哪把尺子（工具参数 `min_score` 用的是归一化口径，两处刻意不同：
+   * 配置是调试公式用的，工具参数是给模型看着输出里的数字填的）。
+   */
   knowledgeRecallMinScore?: number
   /** 知识库自动召回的单回合条数上限（缺省 3）。 */
   knowledgeRecallMaxEntries?: number

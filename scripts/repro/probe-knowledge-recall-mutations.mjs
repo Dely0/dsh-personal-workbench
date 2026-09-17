@@ -21,6 +21,7 @@ const CORE = join(ROOT, 'lib', 'shared', 'knowledgeRecall.js')
 const MANAGER = join(ROOT, 'lib', 'knowledge-recall.js')
 const LOG = join(ROOT, 'lib', 'knowledge-recall-log.js')
 const REPO_KNOWLEDGE = join(ROOT, 'lib', 'db', 'repo', 'knowledge.js')
+const TOOLS = join(ROOT, 'lib', 'knowledge-tools.js')
 const TEST_FILES = [
   'test/knowledgeRecallPure.test.mjs',
   'test/knowledgeRecallManager.test.mjs',
@@ -197,6 +198,39 @@ const MUTATIONS = [
       },
     ],
     expect: '只有真的把该条目带给过模型的那一行才配记引用',
+  },
+  /**
+   * v1.15.5 的三条（用户 2026-09-17 实测抓到的"承诺与能力不一致"）：
+   * 注入文案承诺"按 id 再查一次就能展开"，而工具只会关键词检索；展示相关度是有界分，
+   * 看着永远比团队记忆低。这三条各自必须被断言守住。
+   */
+  {
+    name: 'M21 按 id 直读那条路失效（工具退回"只会关键词检索"→ 注入文案的承诺再次变成假话）',
+    file: TOOLS,
+    from: /if \(isEntryIdQuery\(query\)\) \{/,
+    to: 'if (false) {',
+    expect: '把 [id] 当 query 必须能取到全文',
+  },
+  {
+    name: 'M22 id 解包不再剥方括号（注入文案里就是 [uuid] 形态 → 模型照抄必失败）',
+    file: MANAGER,
+    from: /\.replace\(\/\^\\\[\|\\\]\$\/g, ''\)/,
+    to: ".replace(/$^/g, '')",
+    expect: '[id] 与 【id】 两种包裹都要能剥掉',
+  },
+  {
+    name: 'M23 展示层退回内部原始分（相关度又变成"永远 0.55 封顶"，用户会再次认为打分偏低）',
+    file: CORE,
+    from: /相关度 \$\{formatRelevance\(hit\.score\)\}/,
+    to: '相关度 ${hit.score.toFixed(2)}',
+    expect: '展示层必须是归一化相关度（0~1）',
+  },
+  {
+    name: 'M24 min_score 不做口径换算（按界面上的数字传阈值 → 命中被静默挡下）',
+    file: TOOLS,
+    from: /scoreFromRelevance\(args\.min_score\)/,
+    to: 'args.min_score',
+    expect: '工具阈值与输出里的相关度必须是同一把尺子',
   },
 ]
 

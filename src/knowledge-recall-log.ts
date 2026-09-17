@@ -121,7 +121,15 @@ export function appendRecallLog(
     input.trigger,
     input.outcome.query,
     JSON.stringify(input.outcome.terms),
-    JSON.stringify(input.outcome.hits.map((hit) => ({ id: hit.id, title: hit.title, score: hit.score, reason: hit.reason }))),
+    /**
+     * `score` 存**展示相关度**（0~1，与注入文本/工具输出同一口径 —— 日志是用来对账的，
+     * 口径不一致就没法对），`rawScore` 另存内部原始分，便于按公式复算。
+     *
+     * 历史上的行只有 `score`（当时存的是原始分）：读到旧行时 `rawScore` 缺失，
+     * `parseRow` 按"score 即相关度"处理 —— 旧行的数字会显得偏小，
+     * 但它们是 2026-09-17 之前的证据，本就不该与新行混着比。
+     */
+    JSON.stringify(input.outcome.hits.map((hit) => ({ id: hit.id, title: hit.title, score: hit.relevance, rawScore: hit.score, reason: hit.reason }))),
     input.outcome.matched,
     input.outcome.droppedByScore,
     input.outcome.droppedByLimit,
