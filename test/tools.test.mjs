@@ -210,12 +210,29 @@ test('agent tools write pending drafts and update tasks', async () => {
       { title: '经验：先验证再开发', content_md: '# 结论', kind_code: 'lesson', tags: ['流程'], file_link: 'D:\\docs\\经验.md' },
       { agent: { session: { id: 'sess-know' } } },
     )
-    assert.match(kOut, /知识草稿已保存/)
+    assert.match(kOut, /知识草稿已新建/)
+    const firstDraftId = getDraftBySession(db, 'sess-know').id
     assert.equal(getDraftBySession(db, 'sess-know').payload.fileLink, 'D:\\docs\\经验.md')
-    assert.match(await submitKnowledge.execute(
-      { title: '经验：先验证再开发 v2', content_md: '# 结论 v2', kind_code: 'lesson', tags: ['流程'] },
+    /**
+     * 第二次**不带 draft_id** 的提交：按会话去重 → 覆盖同一份草稿。
+     * 回执必须写成"已更新本会话已有草稿（id=…）"并带上被替换的标题，
+     * 不能再说"已保存"（旧措辞让"覆盖"读起来像"新建"，这是本次要修的缺陷）。
+     */
+    const kOut2 = await submitKnowledge.execute(
+      { title: '经验：换个主题的覆盖测试', content_md: '# 结论 v2', kind_code: 'lesson', tags: ['流程'] },
       { agent: { session: { id: 'sess-know' } } },
-    ), /知识草稿已保存/)
+    )
+    assert.match(kOut2, /已更新本会话已有草稿/)
+    assert.match(kOut2, /不是新建/)
+    assert.ok(kOut2.includes(firstDraftId), '回执必须带上被覆盖的那份草稿 id')
+    // 回执里说的必须是**被替换掉的旧标题**。两条标题刻意不互为子串，
+    // 否则"读的是更新后的新标题"这种错法照样能匹配上（形态对、来源错）。
+    assert.match(kOut2, /经验：先验证再开发/)
+    assert.equal(/经验：换个主题的覆盖测试/.test(kOut2), false, '回执要说被替换的旧标题，不能是新标题')
+    assert.equal(getDraftBySession(db, 'sess-know').id, firstDraftId)
+    // 历史落进 payload —— 界面靠它显示"这是替换、不是新增"
+    assert.equal(getDraftBySession(db, 'sess-know').payload.revision, 2)
+    assert.deepEqual(getDraftBySession(db, 'sess-know').payload.replacedTitles, ['经验：先验证再开发'])
     // 非法 file_link 会被工具拒绝，不写入草稿
     const badLink = await submitKnowledge.execute(
       { title: '坏链接', content_md: '# x', kind_code: 'note', file_link: 'relative/path.md' },

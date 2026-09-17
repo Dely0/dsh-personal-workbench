@@ -6,6 +6,7 @@ import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { DatabaseSync } from 'node:sqlite'
 import { addTaskMemory, assertValidFileLink, createDraft, getDeferredDraftForTask, getDictionary, getDraft, getIdea, getIdeaCluster, getPendingDailyPlanDraft, getPendingDraftForSession, getPendingDraftForTask, getPendingKnowledgeDraft, getPendingReportDraft, getTask, listActiveDictionaryCodes, listTaskEvents, listTaskSessions, listTasks, localDateString, taskIdProblem, updateDraft, updateTask } from './db/repo.js'
+import { KNOWLEDGE_DRAFT_SESSION_CONSTRAINT, knowledgeDraftWriteMessage, planKnowledgeDraftWrite, withKnowledgeDraftHistory } from './shared/knowledgeDraftOverwrite.js'
 import { checkWorkspacePath } from './workspace-check.js'
 
 function text(value: string): ContentBlock[] {
@@ -490,7 +491,10 @@ export function submitKnowledgeTool(db: DatabaseSync) {
     name: 'workbench_submit_knowledge',
     description:
       '个人工作台知识库工具：把值得沉淀的经验教训、决策、笔记或可复用片段提交为知识条目草稿（pending），由用户在工作台确认后才入库。' +
-      'kind_code 可选 note/lesson/decision/snippet；tags 为字符串数组；source_task_id 可选，用于关联任务；file_link 可选，用于绑定本地文档（file:// 或绝对路径）。同一会话重复提交会更新同一草稿。',
+      'kind_code 可选 note/lesson/decision/snippet；tags 为字符串数组；source_task_id 可选，用于关联任务；file_link 可选，用于绑定本地文档（file:// 或绝对路径）。' +
+      '⚠️ 同一会话重复提交（不带 draft_id）不是新建、是「覆盖」同一份草稿：' +
+      `${KNOWLEDGE_DRAFT_SESSION_CONSTRAINT}` +
+      '回执会写明本次是"新建"还是"已更新本会话已有草稿"并带上草稿 id；用户界面在确认前也会标出"这是替换"。',
     parameters: {
       draft_id: { type: 'string', description: '已有知识草稿 id；修改后再次提交时传' },
       title: { type: 'string', required: true, description: '知识标题，简洁可检索' },
@@ -540,10 +544,20 @@ export function submitKnowledgeTool(db: DatabaseSync) {
         sourceReviewId: str(args.source_review_id) ?? null,
         fileLink,
       }
+      /**
+       * 本次到底是"新建"还是"覆盖本会话已有草稿"——判定抽在
+       * `shared/knowledgeDraftOverwrite.ts`（工具回执与界面提示共用同一份口径，
+       * 不许在这里再算一遍）。被替换掉的标题必须**先读出来**再更新，
+       * 否则回执只能说"更新了 xxx"，用户仍然不知道没了什么。
+       */
+      const previousTitle = existing === undefined ? null : str((existing.payload as Record<string, unknown>).title) ?? null
+      const plan = planKnowledgeDraftWrite({ draftIdProvided: draftId, existing, replacedTitle: previousTitle })
       const draft = existing !== undefined
-        ? updateDraft(db, existing.id, payload)
-        : createDraft(db, { kindCode: 'knowledge', sessionId, payload })
-      return `知识草稿已保存（id=${draft?.id}），等待用户在工作台确认后入库。请勿声称已存入知识库。`
+        ? updateDraft(db, existing.id, withKnowledgeDraftHistory(payload, plan))
+        : createDraft(db, { kindCode: 'knowledge', sessionId, payload: withKnowledgeDraftHistory(payload, plan) })
+      const draftIdOut = draft?.id ?? plan.existingDraftId
+      if (draftIdOut === null || draftIdOut === undefined) return '错误：知识草稿未能写入（既没拿到草稿 id 也没命中已有草稿）'
+      return knowledgeDraftWriteMessage(plan, draftIdOut)
     },
   })
 }
