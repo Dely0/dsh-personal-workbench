@@ -136,6 +136,32 @@ function estimateRangeMessage(defaultMinutes: number): string {
   return `耗时必须是 1–1440 之间的整数（留空表示用默认 ${defaultMinutes} 分钟）`
 }
 
+/** 容量两项偏好的兜底值（与 `capacity.ts` 的常量同值：一处读书、一处落库，必须一致）。 */
+const SETTINGS_FALLBACK = {
+  defaultEstimateMinutes: DEFAULT_ESTIMATE_MINUTES,
+  dailyCapacityIncludeOverdue: false,
+} as const
+
+/**
+ * 把服务端返回的 settings 补上「客户端必需、但服务端可能还没给」的字段。
+ *
+ * 为什么必须有它（**装盘后实测踩到，不是假想**）：装盘完成、宿主还没重启的那段时间里，
+ * 宿主仍在跑**旧的服务端代码**，`GET /api/workbench/settings` 的响应里**没有**
+ * `defaultEstimateMinutes` / `dailyCapacityIncludeOverdue`。此时直接 `setSettings(r.settings)`
+ * 会把新键冲成 `undefined`，界面就显示成
+ * 「预计耗时：默认 **undefined** 分钟（未单独设置）」—— 一句暴露给用户的怪话，
+ * 而且看起来像产品 bug（真机脚本第一次跑就把它逮住了）。
+ *
+ * 兜底只补**缺失**的键（`??`），不覆盖服务端明确给出的值；重启后服务端给出真值，兜底自然失效。
+ */
+function withSettingsFallback(settings: WorkbenchSettings): WorkbenchSettings {
+  return {
+    ...settings,
+    defaultEstimateMinutes: settings.defaultEstimateMinutes ?? SETTINGS_FALLBACK.defaultEstimateMinutes,
+    dailyCapacityIncludeOverdue: settings.dailyCapacityIncludeOverdue ?? SETTINGS_FALLBACK.dailyCapacityIncludeOverdue,
+  }
+}
+
 /**
  * 读回知识库列表状态。
  *
@@ -881,7 +907,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
     if (view === 'ideas') void loadIdeas().catch(() => undefined)
   }, [view, loadIdeas, ideaRefreshKey])
   useEffect(() => { void refresh().catch((e: unknown) => setError(e instanceof Error ? e.message : String(e))) }, [refresh])
-  useEffect(() => { void api<{ settings: WorkbenchSettings }>('/api/workbench/settings').then((r) => setSettings(r.settings)).catch(() => undefined) }, [])
+  useEffect(() => { void api<{ settings: WorkbenchSettings }>('/api/workbench/settings').then((r) => setSettings(withSettingsFallback(r.settings))).catch(() => undefined) }, [])
 
   /**
    * 拉一次知识库召回回执（日志行 + 单会话关闭清单）。
@@ -2276,7 +2302,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
       const res = await api<{ settings: WorkbenchSettings }>('/api/workbench/settings', {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ quickWorkspaceRecent: next }),
       })
-      setSettings(res.settings)
+      setSettings(withSettingsFallback(res.settings))
     } catch { /* 记不住就算了，不影响主流程 */ }
   }
   /**
@@ -2298,7 +2324,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ quickWorkspaceRecent: next }),
       })
-      setSettings(res.settings)
+      setSettings(withSettingsFallback(res.settings))
       /**
        * 后置校验：服务端必须按**提交的整表**落库。
        *

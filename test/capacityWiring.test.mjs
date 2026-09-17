@@ -262,9 +262,48 @@ test('新建任务表单也补了同一组字段（同一字段两个入口，�
   const form = indexSource.slice(indexSource.indexOf('id="wb-new-task-form"'), indexSource.indexOf('</form>', indexSource.indexOf('id="wb-new-task-form"')))
   assert.ok(form.length > 0, '新建任务表单存在')
   assert.match(form, /name="estimatedMinutes"/, '新建表单也要能设耗时')
-  assert.match(form, /name="allDay"/, '新建表单也要能设全天')
+  assert.match(form, /name="allDay"/, '新建表单要能设全天')
   assert.match(indexSource, /allDay: form\.get\('allDay'\) !== null/, 'createTask 的 payload 要带上 allDay')
   assert.match(indexSource, /estimatedMinutes, allDay: form\.get\('allDay'\)/, 'createTask 的 payload 要带上 estimatedMinutes')
+})
+
+/**
+ * 「服务端还没重启」的过渡态（真机实测踩到的缺陷，不是假想）。
+ *
+ * 装盘完成、宿主还没重启的那段时间里，宿主跑的是**旧的服务端代码**：
+ * `GET /api/workbench/settings` 的响应里没有 `defaultEstimateMinutes` /
+ * `dailyCapacityIncludeOverdue`。旧写法 `setSettings(r.settings)` 会把新键冲成 `undefined`，
+ * 界面于是显示「预计耗时：默认 **undefined** 分钟（未单独设置）」——
+ * 真机脚本第一次跑就把这句话逮住了。
+ *
+ * 这里锁住两件事：① 从服务端 hydrate 的地方**都**过 `withSettingsFallback`；
+ * ② 缺失的键被补成缺省值（30 / false），且**不覆盖**服务端明确给出的值。
+ */
+test('settings 从服务端 hydrate 时补兜底：缺字段不许把界面渲染成 undefined', () => {
+  /**
+   * 用"数出现次数"而不是正则抽调用：`setSettings((prev) => ({ ...prev, x: y }))` 里有多层括号，
+   * 正则很容易截错。⚠️ 必须先剥注释 —— 上面 `withSettingsFallback` 的文档注释里就写了
+   * `setSettings(r.settings)` 这个"旧写法示例"，不剥注释会多数出一处（我第一版就多数了 1 处）。
+   * 两类调用点分别数清：
+   * - 服务端回填：`setSettings(withSettingsFallback(res.settings))` / `... (r.settings))`
+   * - 局部 patch：`setSettings((prev) => ...)`（不经服务端，不需要兜底）
+   */
+  const code = stripComments(indexSource)
+  const fromServer = (code.match(/setSettings\(withSettingsFallback\((res|r)\.settings\)\)/g) ?? []).length
+  const localPatch = (code.match(/setSettings\(\(prev\) =>/g) ?? []).length
+  const total = (code.match(/setSettings\(/g) ?? []).length
+  assert.ok(fromServer >= 3, `服务端回填的调用点应至少 3 处（初次加载 + 记住路径 + 不再记住），实际 ${fromServer}`)
+  assert.ok(localPatch >= 3, `局部 patch 的调用点应至少 3 处，实际 ${localPatch}`)
+  assert.equal(fromServer + localPatch, total,
+    `每个 setSettings 调用点都必须是「过兜底的服务端回填」或「局部 patch」，实际 ${total} 处里有 ${total - fromServer - localPatch} 处两者都不是`)
+  // 兜底函数本身的行为
+  const start = code.indexOf('function withSettingsFallback(')
+  assert.ok(start > 0, 'withSettingsFallback 存在')
+  const body = code.slice(start, code.indexOf('\n}', start))
+  assert.match(body, /defaultEstimateMinutes: settings\.defaultEstimateMinutes \?\?/, '缺 defaultEstimateMinutes 要补')
+  assert.match(body, /dailyCapacityIncludeOverdue: settings\.dailyCapacityIncludeOverdue \?\?/, '缺 dailyCapacityIncludeOverdue 要补')
+  // 用 `??` 而不是 `||`：`||` 会把服务端明确给出的 0/false 也当成"没给"从而改写用户设置
+  assert.doesNotMatch(body, /\|\|/, '兜底只能用 ??（用 || 会改写服务端明确给出的 0/false）')
 })
 
 test('设置页有两个新控件的入口（默认耗时 + 逾期口径）', () => {

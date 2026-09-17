@@ -262,6 +262,25 @@ try {
     const m = (document.querySelector('.wb-detail')?.textContent ?? '').match(/预计耗时：([^\\n·]*)/)
     return m === null ? null : m[1].trim()
   })()`)
+  /**
+   * 从**容量账本**里读临时任务这一条当前算了几分钟。
+   *
+   * 为什么不能直接断言「已排 +123」（第一次真机跑就栽在这里）：临时任务的 due 是"今天 18:00"，
+   * 它**一建出来就已经按默认耗时计入了「已排」**。所以"改成 123"带来的增量是
+   * `123 − 建出来时那一条的分钟数`，不是 123。基准若在建完之后才读，差值还会再少一份。
+   * 正确做法：把这条任务在账本里的**当前分钟数**读出来，用它算期望增量 ——
+   * 这样即使默认耗时被用户改成别的值，断言依然成立。
+   */
+  const readLedgerMinutes = async (title) => await evaluate(`(() => {
+    const toggle = document.querySelector('.wb-cap-rule-toggle')
+    if (toggle === null) return null
+    if (toggle.getAttribute('aria-expanded') !== 'true') toggle.click()
+    const rows = Array.from(document.querySelectorAll('.wb-cap-audit tbody tr'))
+    const hit = rows.find((r) => (r.querySelector('td.t')?.textContent ?? '') === ${JSON.stringify(title)})
+    if (hit === undefined) return null
+    const cell = hit.querySelector('td.m')?.textContent ?? ''
+    return /^\\d+$/.test(cell.trim()) ? Number(cell.trim()) : null
+  })()`)
   /** 在弹窗里写 input 值：必须走原生 setter + input 事件，否则 React 收不到。 */
   const setInputValue = async (selector, value) => await evaluate(`(() => {
     const input = document.querySelector(${JSON.stringify(selector)})
@@ -312,8 +331,10 @@ try {
   await until(`document.querySelector('.wb-cap-meta') !== null`, '今日容量条出现')
   await sleep(500)
   const plannedBefore = await readPlanned()
+  const ledgerBeforeRaw = await readLedgerMinutes(TEMP_TITLE)
   await shot('01-before')
   console.log(`改之前「已排」 : ${plannedBefore} min`)
+  console.log(`改之前账本里这条任务 : ${ledgerBeforeRaw === null ? '（未计入今日容量）' : ledgerBeforeRaw + ' min'}`)
 
   // ---------------------------------------------------------------- 步骤 2：改耗时 → 不刷新读「已排」
   await clickByText('.wb-seg', '任务', '「任务」标签页（回去选任务）')
@@ -340,8 +361,10 @@ try {
   await until(`document.querySelector('.wb-cap-meta') !== null`, '今日容量条出现（改后）')
   await sleep(600)
   const plannedAfter = await readPlanned()
+  const ledgerAfter = await readLedgerMinutes(TEMP_TITLE)
   await shot('03-after-save-no-reload')
   console.log(`改之后「已排」（未刷新） : ${plannedAfter} min`)
+  console.log(`改之后账本里这条任务 : ${ledgerAfter === null ? '（未计入）' : ledgerAfter + ' min'}`)
 
   // ---------------------------------------------------------------- 步骤 3：F5 后仍是目标值
   await loadPage('刷新后')
@@ -392,7 +415,17 @@ try {
   const checks = [
     { name: '改之前临时任务未单独设耗时（走默认）', ok: detailBefore !== null && String(detailBefore).includes('默认'), detail: `详情行=${detailBefore}` },
     { name: `详情行不刷新就显示「${TARGET_MINUTES} 分钟」`, ok: detailAfter !== null && String(detailAfter).includes(String(TARGET_MINUTES)), detail: `详情行=${detailAfter}` },
-    { name: `不刷新时「已排」正好增加 ${TARGET_MINUTES} min`, ok: plannedBefore !== null && plannedAfter === plannedBefore + TARGET_MINUTES, detail: `${plannedBefore} → ${plannedAfter}` },
+    {
+      name: `不刷新时「已排」的增量 = ${TARGET_MINUTES} − 账本里改动前的分钟数`,
+      // 增量必须是"新值 − 旧值"：临时任务一开始就按默认耗时计入了，所以不能说"+123"
+      ok: ledgerBeforeRaw !== null && plannedAfter === plannedBefore - ledgerBeforeRaw + TARGET_MINUTES,
+      detail: `已排 ${plannedBefore} → ${plannedAfter}（账本里这条 ${ledgerBeforeRaw} → 期望 ${plannedBefore - ledgerBeforeRaw + TARGET_MINUTES}）`,
+    },
+    {
+      name: `账本里这条任务变成 ${TARGET_MINUTES} min（主证据：它决定「已排」）`,
+      ok: ledgerAfter === TARGET_MINUTES,
+      detail: `账本=${String(ledgerAfter)}`,
+    },
     { name: `F5 后详情行仍是「${TARGET_MINUTES} 分钟」`, ok: String(detailAfterReload).includes(String(TARGET_MINUTES)), detail: `详情行=${detailAfterReload}` },
     { name: `F5 后重开弹窗回显 ${TARGET_MINUTES}`, ok: String(prefilledAfterReload) === String(TARGET_MINUTES), detail: `弹窗=${prefilledAfterReload}` },
     { name: `库里 estimatedMinutes = ${TARGET_MINUTES}`, ok: storedMinutes === TARGET_MINUTES, detail: `库=${String(storedMinutes)}` },
@@ -401,7 +434,7 @@ try {
   const report = {
     at: new Date().toISOString(),
     tempTask: { id: TEMP_ID, title: TEMP_TITLE, targetMinutes: TARGET_MINUTES },
-    observed: { plannedBefore, plannedAfter, detailBefore, detailAfter, detailAfterReload, prefilledBefore: prefilled, prefilledAfterReload, storedMinutes, storedAfterInvalid, blocked },
+    observed: { plannedBefore, plannedAfter, ledgerBefore: ledgerBeforeRaw, ledgerAfter, detailBefore, detailAfter, detailAfterReload, prefilledBefore: prefilled, prefilledAfterReload, storedMinutes, storedAfterInvalid, blocked },
     checks,
     verdict: checks.every((c) => c.ok) ? 'pass' : 'fail',
   }
