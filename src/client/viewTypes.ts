@@ -134,6 +134,14 @@ export interface DshSessionListState {
   ids: string[]
   byId: Record<string, DshSessionSummary>
   current?: string
+  /**
+   * 宿主会话列表的**就绪相位**（`pending` / `ready`）。
+   *
+   * `pending` 期间 `ids` 还是空的——这时的"查不到会话"**不能**当成"会话没了"，
+   * 否则启动瞬间会凭空多开一个重复会话。旧宿主没有这个字段（`undefined`），
+   * 判据按"不下结论"处理（同 `pending`）。
+   */
+  phase?: string
 }
 export interface WorkbenchRuntime {
   sessions: {
@@ -142,7 +150,12 @@ export interface WorkbenchRuntime {
     open(id: string): void
   }
   workspaces: {
-    list: { getSnapshot(): { items: readonly { workspaceId: string; path?: string }[] } }
+    /**
+     * `archivedSessionIds` 是宿主的**归档集**：「归档会话」只把 id 收进这个集合、
+     * **不删文件**，所以归档过的会话仍然出现在 `sessions.list` 里——只查会话列表
+     * 查不出"已归档"。旧宿主没有这个字段（`undefined`），判据退化为原行为。
+     */
+    list: { getSnapshot(): { items: readonly { workspaceId: string; path?: string }[]; archivedSessionIds?: readonly string[] } }
     create?(input: { path: string }): Promise<{ workspaceId?: string }>
     openPath?(path: string): Promise<void>
   }

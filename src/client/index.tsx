@@ -26,6 +26,7 @@ import { DEFAULT_ESTIMATE_MINUTES, MAX_ESTIMATE_MINUTES, capacityTodayKey, compu
 import { WORKBENCH_CSS } from './styles.js'
 import { ACTIVE_ATTR, OFFICIAL_ATTR, PANEL_NAME, PENDING_ATTR, VIEW_ATTR } from './constants.js'
 import { panelDataOpen, shouldShowPanel } from './panelState.js'
+import { isAiSessionReusable } from './aiSessionReuse.js'
 import { checkHostCapabilities, refuseToStart, type SlotsProbe } from './capabilities.js'
 import {
   ENTRY_TITLE, OFFICIAL_MAIN_SLOT, OFFICIAL_OVERLAY_SLOT, OFFICIAL_PANEL_LIST_SLOT,
@@ -1249,7 +1250,13 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
           : mode === 'idea_brainstorm' ? ['idea_brainstorm', text]
           : text.startsWith('week:') ? ['week_report', text.slice(5)] : ['day_report', text.slice(4)]
         const existing = await api<{ session: { sessionId: string } | null }>(`/api/workbench/ai-sessions?scope_code=${scopeCode}&anchor=${anchor}`)
-        if (existing.session !== null) {
+        /**
+         * 登记行 ≠ "会话还在"：用户把那个对话归档以后，宿主只把 id 收进归档集、
+         * 连文件都不删，`sessions.open()` 照样"成功"——随后宿主清掉选中，用户看到
+         * 的是"点了没反应"，而这行登记永不更新、新会话永远不会被创建。
+         * 判据不成立时**落回下面的新建流程**（登记接口是 upsert，会覆盖陈旧那行）。
+         */
+        if (existing.session !== null && aiSessionUsable(runtime, existing.session.sessionId)) {
           let shouldReuse = true
           if (mode === 'plan') {
             const hasPlan = planAnchor === localDateString()
@@ -1269,7 +1276,12 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
           // 旧版本生成的报告可能还没有登记会话：直接复用报告里的 session_id。
           const periodCode = text.startsWith('week:') ? 'week' : 'day'
           const rep = await api<{ report: { sessionId?: string | null } | null }>(`/api/workbench/reports/${periodCode}/${anchor}`)
-          if (typeof rep.report?.sessionId === 'string' && rep.report.sessionId !== '') {
+          /**
+           * 报告行自己的 `sessionId` 是**第二条复用路径**：报告落库后再点同一天，登记那条路
+           * 已被判据拦住，这里若不判就会裸切一个已归档 / 已删除的会话（用户实测：点了没反应）。
+           * 判据不成立 → 落回下面的新建流程。
+           */
+          if (typeof rep.report?.sessionId === 'string' && rep.report.sessionId !== '' && aiSessionUsable(runtime, rep.report.sessionId)) {
             safeService<WorkbenchRuntime['sessions']>(runtime, 'sessions')?.open(rep.report.sessionId)
             closePanel()
             return
@@ -2695,6 +2707,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
         kindName={(kind, code) => dicts.find((d) => d.kind === kind && d.code === code)?.name ?? code}
         onProblems={setDraftProblems}
         onNotice={(message, tone) => pushToast(message, tone)}
+        isSessionUsable={(sessionId) => aiSessionUsable(runtime, sessionId)}
         onConfirmed={(outcome) => handleDraftConfirmed(outcome, pendingDraft)}
         switchedFrom={draftSwitchedFrom === null ? undefined : { kindCode: dicts.find((d) => d.kind === 'draft_kind' && d.code === draftSwitchedFrom.kindCode)?.name ?? draftSwitchedFrom.kindCode }}
         /**
@@ -3455,7 +3468,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                               : selected.task.statusCode === 'done' || selected.task.statusCode === 'cancelled'
                                 ? <button className="wb-btn" disabled={busy} onClick={() => {
                                     const existing = selected.sessions.find((x) => x.role_code === 'review')
-                                    if (existing !== undefined && typeof existing.session_id === 'string' && existing.session_id !== '') {
+                                    if (existing !== undefined && typeof existing.session_id === 'string' && existing.session_id !== '' && aiSessionUsable(runtime, existing.session_id)) {
                                       safeService<WorkbenchRuntime['sessions']>(runtime, 'sessions')?.open(existing.session_id)
                                       closePanel()
                                     } else {
@@ -3532,7 +3545,13 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                                   const sessionInfo = sessionListSnapshot.byId[sid]
                                   const name = sessionInfo?.displayTitle ?? shortId(sid)
                                   return (
-                                    <button key={`${sid}-${role}`} className="wb-session-row" onClick={() => { if (sid !== '') { safeService<WorkbenchRuntime['sessions']>(runtime, 'sessions')?.open(sid); closePanel() } }} title={roleLabel(role)}>
+                                    <button key={`${sid}-${role}`} className="wb-session-row" onClick={() => {
+                                      if (sid === '') return
+                                      /** 会话页签的行来自历史关联：那条会话可能已被归档或删除，裸切只会静默失败。 */
+                                      if (!aiSessionUsable(runtime, sid)) { setNotice('这条会话已被归档或已删除，无法打开'); return }
+                                      safeService<WorkbenchRuntime['sessions']>(runtime, 'sessions')?.open(sid)
+                                      closePanel()
+                                    }} title={roleLabel(role)}>
                                       <span className="wb-session-role">{roleLabel(role)}</span>
                                       <span className="wb-session-name">{name}</span>
                                       <span className="wb-session-open">打开 ↗</span>
@@ -4090,6 +4109,25 @@ function optionalService<T>(ctx: unknown, name: string): T | undefined {
  * 处理原则：拿不到就当 `undefined`，让调用点自己决定降级 ——
  * **绝不让"旧实例的残留回调"把错误抛到用户控制台上**。
  */
+/**
+ * 复用前的**会话可用性判据**：读宿主两份快照（归档集 + 会话列表），委托给纯判据。
+ *
+ * 判据不成立 = 这条登记 / 引用已经不能用了（会话被归档、或已被物理删除），调用方
+ * **必须**落回新建或给出明确提示 —— 不能再拿着旧 id 去切会话：归档会话切过去会
+ * "看似成功"然后被宿主清掉选中（表现是"点了没反应"），已删除会话切过去会直接抛
+ * `sessions.select: unknown session`。
+ *
+ * 2026-09-17 真实故障：判据原先只加在"登记表复用"一处，报告行的 `sessionId`、
+ * 任务详情会话页签、草稿横幅三处仍在裸切 —— 用户点了只看到"什么都没发生"。
+ */
+function aiSessionUsable(runtime: WorkbenchRuntime, sessionId: string): boolean {
+  return isAiSessionReusable({
+    sessionId,
+    archivedSessionIds: safeService<WorkbenchRuntime['workspaces']>(runtime, 'workspaces')?.list?.getSnapshot?.()?.archivedSessionIds,
+    list: safeService<WorkbenchRuntime['sessions']>(runtime, 'sessions')?.list?.getSnapshot?.(),
+  })
+}
+
 function safeService<T>(runtime: unknown, name: string): T | undefined {
   const target = runtime as Record<string, unknown> | undefined
   if (target === undefined || target === null) return undefined
