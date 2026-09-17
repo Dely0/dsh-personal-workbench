@@ -38,7 +38,7 @@
  * **本脚本绝不重启 DSH** —— 重启会掐断用户正在用的会话，必须由用户明确发起。
  */
 import { execFileSync, spawnSync } from 'node:child_process'
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -137,8 +137,21 @@ function referencedDevPackage() {
 
 // 只保留最近 KEEP 个开发包（其余历史包请手工归到 _local-archive/）
 const referenced = referencedDevPackage()
-const devTgz = readdirSync(DEV_DIR).filter((file) => /-dev-.*\.tgz$/.test(file)).sort()
-for (const stale of devTgz.slice(0, Math.max(0, devTgz.length - KEEP))) {
+const devTgz = readdirSync(DEV_DIR).filter((file) => /-dev-.*\.tgz$/.test(file))
+/**
+ * ⚠️ 两个必须守住的点（2026-09-17 真实踩坑："清理旧开发包"把**刚打好的包**删了，
+ * 紧接着的 `dsh plugin add` 报 ENOENT，profile 已被改回去，白跑一轮）：
+ *
+ * 1. **本次产物绝不在清理范围内** —— 它是下一步要装的东西；
+ * 2. 排序按**文件 mtime**而不是文件名：文件名里的时间戳是 `yyyyMMdd-HHmmss`，
+ *    但"旧"是和**上一个**包比出来的，用字典序排会在跨构建戳时判错
+ *    （实测 `…-20260916-232749` 与 `…-20260917-102248` 的顺序把新包排成了"最旧"）。
+ */
+const staleCandidates = devTgz
+  .filter((file) => join(DEV_DIR, file) !== tgzPath)
+  .map((file) => ({ file, mtime: statSync(join(DEV_DIR, file)).mtimeMs }))
+  .sort((a, b) => b.mtime - a.mtime)
+for (const { file: stale } of staleCandidates.slice(KEEP)) {
   if (stale === referenced) {
     console.log(`  （保留 ${stale}：profile 当前指着它，删了会让装别的插件失败）`)
     continue
