@@ -299,3 +299,61 @@ test('会话遗忘：销毁后状态清掉（长跑进程不能只涨不减）',
     assert.equal(manager.injectionFor('sess-9', 1), '', '销毁后不再注入')
   })
 })
+
+/**
+ * v1.15.6 的 P1（两档闸门）在**接线层**的三条约定。
+ *
+ * 纯函数那层只能证明"分数落进提示档会进 nearMisses"；真正会犯的错在接线：
+ * ① 提示算不算"注入过"（算错的后果是注入日志与实际不符）；
+ * ② 提示会不会每回合重复刷（验收第 5 条要拦的"反复注入不相关条目"）；
+ * ③ 提示过的条目将来真命中了，还能不能被完整注入（**不能被永久压制**）。
+ */
+test('P1 提示档：未达注入闸门时只留一行提示，且日志如实区分"提示"与"注入"', () => {
+  withDb((db) => {
+    createKnowledge(db, { title: '盘符根目录的坑', contentMd: '盘符 parent null' })
+    const manager = new KnowledgeRecallManager(db, { log: () => {} })
+    // 把注入闸门抬到 0.4，让 0.367 落进提示档（真实场景里阈值没动，这里是构造边界）
+    const hinted = new KnowledgeRecallManager(db, { minScore: 0.4, log: () => {} })
+    hinted.prefetch('sess-h1', undefined, '盘符')
+    const text = hinted.injectionFor('sess-h1', 1)
+    assert.match(text, /未达注入闸门/, '会话里要有那行提示')
+    assert.match(text, /\[.{8}/, '提示里带 id，模型才能取全文')
+    assert.doesNotMatch(text, /摘要：/, '提示行不给摘要（那是完整块的待遇）')
+
+    // 注入日志必须区分两种情形：否则"注入知识 0 条"会让人以为什么都没发生
+    const logs = hinted.drainLogs()
+    assert.ok(logs.some((line) => /提示 1 行/.test(line)), `日志里要有"提示 1 行"：${logs.join(' | ')}`)
+    assert.ok(!logs.some((line) => /注入知识 0 条/.test(line)), '不该出现"注入知识 0 条"这种自相矛盾的行')
+    assert.ok(manager !== undefined)
+  })
+})
+
+test('P1 提示档：同一条不会在同一会话里反复提示', () => {
+  withDb((db) => {
+    createKnowledge(db, { title: '盘符根目录的坑', contentMd: '盘符 parent null' })
+    const manager = new KnowledgeRecallManager(db, { minScore: 0.4, log: () => {} })
+    manager.prefetch('sess-h2', undefined, '盘符')
+    assert.match(manager.injectionFor('sess-h2', 1), /未达注入闸门/, '第一回合给提示')
+    // 第二回合再问同样的事：提示过的不再提示（噪声控制）
+    manager.prefetch('sess-h2', undefined, '盘符')
+    assert.equal(manager.injectionFor('sess-h2', 2), '', '同一会话里不重复提示同一条')
+  })
+})
+
+test('P1 提示档：提示过的条目**将来真命中了仍然会被完整注入**（提示不等于已注入）', () => {
+  withDb((db) => {
+    const entry = createKnowledge(db, { title: '盘符根目录的坑', contentMd: '盘符 parent null' })
+    // 低闸门下先给一次提示
+    const strict = new KnowledgeRecallManager(db, { minScore: 0.9, log: () => {} })
+    strict.prefetch('sess-h3', undefined, '盘符')
+    assert.match(strict.injectionFor('sess-h3', 1), /未达注入闸门/, '先只有提示')
+
+    // 换成正常闸门、再问一次更精确的话 → 它应该作为**完整命中**注入
+    const normal = new KnowledgeRecallManager(db, { log: () => {} })
+    normal.prefetch('sess-h3', undefined, '盘符根目录的坑')
+    const injected = normal.injectionFor('sess-h3', 1)
+    assert.match(injected, new RegExp(entry.id.slice(0, 8)), '提示过的条目仍能被完整注入（不被永久压制）')
+    assert.match(injected, /摘要：/, '这次是完整块（带摘要）')
+  })
+})
+

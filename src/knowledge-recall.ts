@@ -37,12 +37,14 @@ import { findTaskIdBySession } from './db/repo/task-sessions.js'
 import { readMeta } from './db/repo/meta.js'
 import { appendRecallLog, citeRecallLog, readSessionOverrides, writeSessionOverride } from './knowledge-recall-log.js'
 import {
+  formatHintText,
   formatRecallText,
   formatRelevance,
   mergeRecallOutcomes,
   recallKnowledge,
   RECALL_DEFAULTS,
   taskIdFromWorkspacePath,
+  willInject,
   type RecallCandidate,
   type RecallOutcome,
 } from './shared/knowledgeRecall.js'
@@ -115,6 +117,15 @@ interface SessionState {
   lastQuery: string
   /** 已经注入过的条目 id：默认不再重复占额度（噪声控制的关键一条）。 */
   seenIds: Set<string>
+  /**
+   * 已经**提示过**（差一点点那一档）的条目 id。
+   *
+   * 为什么要单独一个集合：提示行是"可能相关、仅供参考"，它比完整注入轻得多，
+   * 但**同一条在同一会话里反复提示**正是验收第 5 条要拦的"反复注入不相关条目"。
+   * 所以提示也去重，而且与 `seenIds` 分开 —— 提示过的条目将来真命中了，
+   * 仍然应该被完整注入（不该因为"提示过"就被永久压制）。
+   */
+  hintedIds: Set<string>
   /** 最近一次召回的结论（供日志页/工具回显）。 */
   lastOutcome?: RecallOutcome
 }
@@ -207,8 +218,10 @@ export class KnowledgeRecallManager {
        * 重新打开时**清掉去重集合**：用户关掉再打开，语义是"重新开始"，而不是
        * "接着上次的已注入集合继续跳过"。留着它会表现为"打开了却再也不带出任何东西" ——
        * 那正是"开关看起来是开的、实际没生效"这一类最难归因的缺陷。
+       * 提示去重集合同理一起清（否则重开后连提示都没有，同样像"没生效"）。
        */
       state.seenIds.clear()
+      state.hintedIds.clear()
     }
     this.log(`会话 ${sessionId} 自动召回 → ${mode}（当前${effective ? '开' : '关'}）`)
     return effective
@@ -217,10 +230,40 @@ export class KnowledgeRecallManager {
   private state(sessionId: string): SessionState {
     let state = this.sessions.get(sessionId)
     if (state === undefined) {
-      state = { primed: false, pendingText: '', cachedText: '', injectedTurn: -1, lastQuery: '', seenIds: new Set() }
+      state = { primed: false, pendingText: '', cachedText: '', injectedTurn: -1, lastQuery: '', seenIds: new Set(), hintedIds: new Set() }
       this.sessions.set(sessionId, state)
     }
     return state
+  }
+
+  /**
+   * 把一次召回的结论落成"下一回合要注入的文本"（v1.15.6：两档闸门）。
+   *
+   * 规则只有三条，且**顺序即优先级**：
+   * 1. 有完整命中 → 注入完整块（`formatRecallText`），提示不参与（有了确切的还要"可能"干嘛）；
+   * 2. 没有完整命中、但有**没见过**的提示候选 → 注入提示行，并把这些 id 记进 `hintedIds`
+   *    （同一会话不重复提示同一条）；
+   * 3. 都没有 → 空串（**不插占位**，保前缀缓存）。
+   *
+   * 抽成一个私有方法是因为 `prime` 与 `prefetch` **两处**都要用它 ——
+   * 写两遍就会出现"开工前会提示、回合预取不提示"这种一处生效一处的偏差。
+   */
+  private buildPending(state: SessionState, outcome: RecallOutcome): void {
+    if (outcome.hits.length > 0) {
+      state.pendingText = formatRecallText(outcome)
+      state.injectedTurn = -1
+      return
+    }
+    const fresh = (outcome.nearMisses ?? []).filter((hit) => !state.hintedIds.has(hit.id))
+    if (fresh.length === 0) {
+      state.pendingText = ''
+      state.injectedTurn = -1
+      return
+    }
+    for (const hit of fresh) state.hintedIds.add(hit.id)
+    state.pendingText = formatHintText(outcome, fresh)
+    this.log(`提示 ${fresh.length} 条"可能相关"（未达注入闸门，仅一行提示）：${fresh.map((hit) => `${hit.id.slice(0, 8)}(${formatRelevance(hit.score)})`).join(' ')}`)
+    state.injectedTurn = -1
   }
 
   private log(message: string): void {
@@ -439,13 +482,20 @@ export class KnowledgeRecallManager {
       this.log(`写召回日志失败（检索本身已完成）：${error instanceof Error ? error.message : String(error)}`)
     }
     const skip = outcome.skippedReason !== undefined ? `跳过（${outcome.skippedReason}）` : ''
+    const hints = outcome.nearMisses ?? []
     const tail = outcome.hits.length > 0
       ? `命中 ${outcome.hits.length} 条${outcome.droppedByScore > 0 ? `（另有 ${outcome.droppedByScore} 条低于阈值）` : ''}`
-      : outcome.matched > 0
-        ? `命中 ${outcome.matched} 条但全部被阈值 ${this.options.minScore ?? RECALL_DEFAULTS.minScore} 挡下`
-        : '零命中（知识库里没有相关条目）'
+      : hints.length > 0
+        // 有提示没命中：日志要写成"提示 N 条"，不能写成"零命中"—— 会话里确实留了一行
+        ? `未达注入闸门，但提示 ${hints.length} 条"可能相关"`
+        : outcome.matched > 0
+          ? `命中 ${outcome.matched} 条但全部被阈值 ${this.options.minScore ?? RECALL_DEFAULTS.minScore} 挡下`
+          : '零命中（知识库里没有相关条目）'
+    const detail = outcome.hits.length > 0
+      ? outcome.hits.map((hit) => `${hit.id.slice(0, 8)}(${formatRelevance(hit.score)})`).join(' ')
+      : hints.map((hit) => `${hit.id.slice(0, 8)}(${formatRelevance(hit.score)})`).join(' ')
     this.log(`[${input.trigger}]${skip} 检索「${input.query.slice(0, 60)}」关键词=[${outcome.terms.join(' ')}] → ${tail}`
-      + (outcome.hits.length > 0 ? `：${outcome.hits.map((hit) => `${hit.id.slice(0, 8)}(${formatRelevance(hit.score)})`).join(' ')}` : '')
+      + (detail === '' ? '' : `：${detail}`)
       + (logId === undefined ? '（日志未落库）' : `（日志 #${logId}）`))
   }
 
@@ -496,12 +546,11 @@ export class KnowledgeRecallManager {
       query,
       outcome: this.recallWith({ sessionId, taskId, query, candidates: this.candidates(taskId), trigger: 'session_start', seen: state.seenIds }),
     })), { maxEntries: this.maxEntries() })
-    this.logOutcome({ trigger: 'session_start', query: outcome.query, outcome, injected: outcome.hits.length > 0, sessionId, taskId })
+    this.logOutcome({ trigger: 'session_start', query: outcome.query, outcome, injected: willInject(outcome), sessionId, taskId })
     state.primed = true
     state.lastOutcome = outcome
     state.lastQuery = outcome.query
-    state.pendingText = formatRecallText(outcome)
-    state.injectedTurn = -1
+    this.buildPending(state, outcome)
     for (const hit of outcome.hits) state.seenIds.add(hit.id)
     return outcome
   }
@@ -530,7 +579,7 @@ export class KnowledgeRecallManager {
 
     if (!state.primed) {
       const late = this.prime(sessionId, cwd)
-      if (late !== undefined && late.hits.length > 0) parts.push({ query: late.query, outcome: late })
+      if (late !== undefined && willInject(late)) parts.push({ query: late.query, outcome: late })
     }
 
     const { taskId } = this.primeQueries(sessionId, cwd)
@@ -542,7 +591,7 @@ export class KnowledgeRecallManager {
       trigger: 'turn',
       seen: state.seenIds,
     })
-    this.logOutcome({ trigger: 'turn', query, outcome: turn, injected: turn.hits.length > 0, sessionId, taskId })
+    this.logOutcome({ trigger: 'turn', query, outcome: turn, injected: willInject(turn), sessionId, taskId })
     parts.push({ query, outcome: turn })
 
     const outcome = parts.length === 1
@@ -550,8 +599,7 @@ export class KnowledgeRecallManager {
       : mergeRecallOutcomes(parts, { maxEntries: this.maxEntries() })
     state.lastOutcome = outcome
     state.lastQuery = outcome.query
-    state.pendingText = formatRecallText(outcome)
-    state.injectedTurn = -1
+    this.buildPending(state, outcome)
     for (const hit of outcome.hits) state.seenIds.add(hit.id)
     return outcome
   }
@@ -570,7 +618,16 @@ export class KnowledgeRecallManager {
       state.cachedText = state.pendingText
       state.injectedTurn = turn
       state.pendingText = ''
-      this.log(`注入知识 ${state.cachedText.split('\n').filter((line) => line.startsWith('- [')).length} 条（session=${sessionId} turn=${turn}）`)
+      /**
+       * 日志要如实区分**注入了完整块**还是**只给了一行提示** ——
+       * 两者在会话里的分量完全不同，混成一句"注入知识 N 条"会让日志失去判据价值
+       * （提示行的条目数在这里恒为 0，因为提示行不是 `- [id]` 那种条目行）。
+       */
+      const entryLines = state.cachedText.split('\n').filter((line) => line.startsWith('- [')).length
+      const isHint = entryLines === 0
+      this.log(isHint
+        ? `提示 1 行"可能相关"（未达注入闸门；session=${sessionId} turn=${turn}）`
+        : `注入知识 ${entryLines} 条（session=${sessionId} turn=${turn}）`)
       return state.cachedText
     }
     return ''
@@ -680,6 +737,7 @@ export class KnowledgeRecallManager {
           droppedByScore: input.droppedByScore ?? 0,
           droppedByLimit: 0,
           droppedAsSeen: 0,
+          nearMisses: [],
         },
         injected: false,
       })

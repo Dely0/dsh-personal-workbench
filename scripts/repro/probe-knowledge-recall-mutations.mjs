@@ -232,6 +232,27 @@ const MUTATIONS = [
     to: 'args.min_score',
     expect: '工具阈值与输出里的相关度必须是同一把尺子',
   },
+  {
+    name: 'M25 砍掉提示档（真实提问普遍卡在阈值下 0.01~0.03，砍掉就又是"自动层什么都不给"）',
+    file: CORE,
+    from: /const nearMisses = scored\.filter\(\(hit\) => hit\.score > hintScore && hit\.score <= minScore\);/,
+    to: 'const nearMisses = [];',
+    expect: '差一点点的要进提示档，而不是被彻底丢掉',
+  },
+  {
+    name: 'M26 提示不去重（同一条在同一会话里每回合都提示 = 反复注入噪声）',
+    file: MANAGER,
+    from: /const fresh = \(outcome\.nearMisses \?\? \[\]\)\.filter\(\(hit\) => !state\.hintedIds\.has\(hit\.id\)\);/,
+    to: 'const fresh = (outcome.nearMisses ?? []);',
+    expect: '同一会话不重复提示同一条',
+  },
+  {
+    name: 'M27 willInject 只看 hits（日志说"没注入"、会话里却留了一行提示 —— 账对不上）',
+    file: CORE,
+    from: /return outcome\.hits\.length > 0 \|\| \(outcome\.nearMisses\?\.length \?\? 0\) > 0;/,
+    to: 'return outcome.hits.length > 0;',
+    expect: '有提示也算"会留下东西"',
+  },
 ]
 
 const run = () => spawnSync(process.execPath, ['--test', ...TEST_FILES], { cwd: ROOT, encoding: 'utf8' })

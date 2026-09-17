@@ -125,8 +125,10 @@ export interface RecallInput {
   /** 用户这一回合的提问（或"开工前"用的任务标题）。 */
   query: string
   candidates: RecallCandidate[]
-  /** 阈值：`score >= minScore` 才算命中。默认来自 `RECALL_DEFAULTS`。 */
+  /** 阈值：`score > minScore` 才算命中。默认来自 `RECALL_DEFAULTS`。 */
   minScore?: number
+  /** 提示档阈值（`score > hintScore` 才值得提一行）。默认来自 `RECALL_DEFAULTS`。 */
+  hintScore?: number
   /** 条数上限。 */
   maxEntries?: number
   /** 单会话去重：这些 id 已经在之前的回合注入过，不再重复占额度。 */
@@ -142,9 +144,23 @@ export interface RecallOutcome {
   query: string
   /** 真正会注入的条目（已按 score 降序）。 */
   hits: RecallHit[]
+  /**
+   * **差一点点的条目**（`hintScore <= score < minScore`，v1.15.6 的 P1）。
+   *
+   * 为什么要这一档：实测（2026-09-17，本机 60 条真实库 + 本会话 11 条真实提问）
+   * 真实提问的正确答案**普遍卡在阈值下面一点点** —— genui 渲染失败 0.327 /
+   * 紧缩场时序控制器 0.309 / Windows计划任务 0.324，而阈值是 0.34，**top-1 排序全是对的**。
+   * 只把阈值降下来是不行的：同一批数据里那条泛化标题（「…01 天线测试业务知识库」）
+   * 对一句与天线无关的闲聊也能拿 0.338 —— **噪声比正确答案分还高**，降闸门等于放它进来。
+   *
+   * 所以：**闸门不降，但差一点点的给一行"可能相关"提示**（只给 id + 标题 + 相关度，
+   * 不给摘要、不占 3 条注入额度）。模型看到就知道"库里有东西、可以去查"，
+   * 而上下文成本只有一行（约 70 字符，vs 完整块约 1000 字符）。
+   */
+  nearMisses: RecallHit[]
   /** 命中过（含被阈值/条数上限挡下的）总条数 —— 用于区分"库里没有"与"被闸门挡下"。 */
   matched: number
-  /** 被阈值挡下的条数。 */
+  /** 被阈值挡下**且连提示档也没够到**的条数。 */
   droppedByScore: number
   /** 被条数上限截掉的条数。 */
   droppedByLimit: number
@@ -185,8 +201,21 @@ export const RECALL_DEFAULTS = {
    * 见文件头"为什么必须有 relevance"）。
    */
   minScore: 0.34,
+  /**
+   * **提示档阈值**（v1.15.6 的 P1）：分数落在 `[hintScore, minScore)` 的条目
+   * 不注入完整块，但会在注入位置留**一行**"可能相关"提示（id + 标题 + 相关度）。
+   *
+   * `0.20` 是**量出来的**：本会话 11 条真实提问里，正确答案的最低分是 0.275
+   * （「还是不行，genui还是没有渲染」），而唯一一条"库里真的没有对应条目"的提问
+   * （问 GitHub issues 那条）只有 0.052 —— 两者之间有 0.22 的空档，取 0.20 落在空档里。
+   *
+   * 换算成给模型看的相关度是 `0.20 / 0.55 ≈ 0.36`。
+   */
+  hintScore: 0.20,
   /** 单回合最多注入 3 条：知识条目带正文片段，比团队记忆的摘要更长，额度要更紧。 */
   maxEntries: 3,
+  /** 单回合最多提示几条（提示行很短，但同样要防刷屏）。 */
+  maxHints: 2,
   /** 注入正文片段长度（字符）。 */
   snippetLength: 160,
 } as const
@@ -408,7 +437,7 @@ export function recallKnowledge(input: RecallInput): RecallOutcome {
   const now = input.now ?? new Date()
   const exclude = new Set(input.excludeIds ?? [])
   const dedupe = input.dedupe !== false
-  const base = { query, hits: [] as RecallHit[], matched: 0, droppedByScore: 0, droppedByLimit: 0, droppedAsSeen: 0, terms: [] as string[] }
+  const base = { query, hits: [] as RecallHit[], nearMisses: [] as RecallHit[], matched: 0, droppedByScore: 0, droppedByLimit: 0, droppedAsSeen: 0, terms: [] as string[] }
 
   if (query === '') return { ...base, skippedReason: '空提问' }
   if (isTrivialQuery(query)) return { ...base, skippedReason: '琐碎消息' }
@@ -435,7 +464,15 @@ export function recallKnowledge(input: RecallInput): RecallOutcome {
   const matched = scored.length
   // 严格大于：正文单命中（上限正好 0.34）必须被挡下 —— 见 `RECALL_DEFAULTS.minScore`。
   const aboveScore = scored.filter((hit) => hit.score > minScore)
-  const droppedByScore = matched - aboveScore.length
+  /**
+   * 提示档：`[hintScore, minScore]` —— 差一点点的那些（见 `RecallOutcome.nearMisses`）。
+   * 只在**没有完整命中**时才对外有意义（有完整命中时，提示是多余的噪声）；
+   * `injectionFor` 那条路会照这个前提决定要不要拼提示行。
+   * 阈值同上取**闭区间上界**：`score >= hintScore && score <= minScore`。
+   */
+  const hintScore = input.hintScore ?? RECALL_DEFAULTS.hintScore
+  const nearMisses = scored.filter((hit) => hit.score > hintScore && hit.score <= minScore)
+  const droppedByScore = matched - aboveScore.length - nearMisses.length
 
   let droppedAsSeen = 0
   const fresh = aboveScore.filter((hit) => {
@@ -444,8 +481,12 @@ export function recallKnowledge(input: RecallInput): RecallOutcome {
   })
   const hits = fresh.slice(0, maxEntries)
   const droppedByLimit = fresh.length - hits.length
+  // 提示也守会话去重：已经作为完整命中注入过的条目不再当"差一点点"。
+  const freshNear = nearMisses
+    .filter((hit) => !exclude.has(hit.id))
+    .slice(0, RECALL_DEFAULTS.maxHints)
 
-  return { query, hits, matched, droppedByScore, droppedByLimit, droppedAsSeen, terms }
+  return { query, hits, nearMisses: freshNear, matched, droppedByScore, droppedByLimit, droppedAsSeen, terms }
 }
 
 /**
@@ -479,6 +520,7 @@ export function mergeRecallOutcomes(
   const base: RecallOutcome = {
     query: inputs.map((item) => item.query).join(' ／ '),
     hits: [],
+    nearMisses: [],
     matched: 0,
     droppedByScore: 0,
     droppedByLimit: 0,
@@ -492,6 +534,9 @@ export function mergeRecallOutcomes(
 
   const best = new Map<string, RecallHit>()
   const order: string[] = []
+  /** 差一点点的那些（提示档）：只在**没有任何完整命中**时才有意义，所以也按 id 去重、取高分。 */
+  const nearBest = new Map<string, RecallHit>()
+  const nearOrder: string[] = []
   let matched = 0
   let droppedByScore = 0
   let droppedAsSeen = 0
@@ -509,12 +554,26 @@ export function mergeRecallOutcomes(
       }
       if (hit.score > seen.score) best.set(hit.id, { ...hit, query })
     }
+    for (const near of outcome.nearMisses ?? []) {
+      if (best.has(near.id)) continue // 已经是完整命中了，不必再当"差一点点"
+      const seen = nearBest.get(near.id)
+      if (seen === undefined) {
+        nearOrder.push(near.id)
+        nearBest.set(near.id, { ...near, query })
+        continue
+      }
+      if (near.score > seen.score) nearBest.set(near.id, { ...near, query })
+    }
   }
   const ranked = order
     .map((id) => best.get(id)!)
     .sort((a, b) => b.score - a.score || Number(b.fromTask) - Number(a.fromTask) || a.id.localeCompare(b.id))
   const hits = ranked.slice(0, maxEntries)
-  return { ...base, hits, matched, droppedByScore, droppedByLimit: ranked.length - hits.length, droppedAsSeen }
+  const nearMisses = nearOrder
+    .map((id) => nearBest.get(id)!)
+    .sort((a, b) => b.score - a.score || Number(b.fromTask) - Number(a.fromTask) || a.id.localeCompare(b.id))
+    .slice(0, RECALL_DEFAULTS.maxHints)
+  return { ...base, hits, nearMisses, matched, droppedByScore, droppedByLimit: ranked.length - hits.length, droppedAsSeen }
 }
 
 /**
@@ -581,6 +640,42 @@ export function formatRecallText(outcome: RecallOutcome): string {
   lines.push('需要全文时：把上面某条的 [id]（完整 uuid）作为 query 传给 workbench_search_knowledge，会返回全文而不是 160 字摘要。')
   lines.push('用到哪几条请调用 workbench_knowledge_recall_control(action=report_usage, entry_ids=[...]) 回报引用。')
   return lines.join('\n')
+}
+
+/**
+ * 这次召回**会不会在会话里留下东西**（完整块或提示行）。
+ *
+ * 单独一个函数是因为它被用在三个地方（`prime` 的日志、`prefetch` 的日志、
+ * `prefetch` 里"迟到的开工前结果要不要并进来"），三处各写一遍
+ * `hits.length > 0 || nearMisses.length > 0` 迟早会漏掉一处 —— 而漏掉的表现是
+ * "日志说没注入、会话里却有提示行"，正是本仓最忌讳的账对不上。
+ */
+export function willInject(outcome: RecallOutcome): boolean {
+  return outcome.hits.length > 0 || (outcome.nearMisses?.length ?? 0) > 0
+}
+
+/**
+ * 渲染**提示行**（v1.15.6 的 P1，两档闸门的第二档）。
+ *
+ * ## 为什么是"一行"而不是"一个小块"
+ *
+ * 提示档的语义是"**未必相关，但值得你看一眼**" —— 所以它必须**看起来就不像已确认的知识**：
+ * 不给摘要、不给分类、不给更新时间，只给 id + 标题 + 相关度，并明说"未达注入闸门"。
+ * 这样模型不会把它当事实用，而是当成一个"要不要去查"的线索。
+ *
+ * 成本对比（实测同一条条目）：完整块 ≈ 1000 字符（表头 483 字 + 条目行 + 160 字摘要 + 文档路径 + 两行纪律），
+ * 提示行 ≈ 90 字符 —— 差一个数量级。而这正是"真实提问普遍卡在阈值下 0.01~0.03"这个实测现状的补偿手段：
+ * **闸门不降（噪声进不来），但差一点点的不再被完全丢掉**。
+ *
+ * 纪律与 `formatRecallText` 一致：没有提示就返回空串（**不插占位**）。
+ */
+export function formatHintText(outcome: RecallOutcome, hints: RecallHit[] = outcome.nearMisses): string {
+  if (hints.length === 0) return ''
+  const items = hints
+    .map((hit) => `[${hit.id}] ${hit.title.slice(0, 28)}（${formatRelevance(hit.score)}）`)
+    .join('；')
+  return `【工作台知识库】本回合提到的事，库里有 ${hints.length} 条**可能**相关但未达注入闸门（仅供参考，未核实）：`
+    + `${items}。需要的话用 workbench_search_knowledge 按 [id] 取全文。`
 }
 
 /**

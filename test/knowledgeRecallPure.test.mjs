@@ -15,6 +15,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   extractTerms,
+  formatHintText,
   formatRelevance,
   formatRecallText,
   isTrivialQuery,
@@ -28,6 +29,7 @@ import {
   scoreCandidate,
   scoreFromRelevance,
   taskIdFromWorkspacePath,
+  willInject,
 } from '../lib/shared/knowledgeRecall.js'
 
 /**
@@ -156,8 +158,14 @@ test('相关度 = 权重 × 命中覆盖率：命中越多词越高，但长提�
     now: NOW,
   })
   assert.equal(partial.matched, 1, '确实共享了若干字，所以算命中过')
-  assert.equal(partial.droppedByScore, 1, '但覆盖率太低 → 分数低于阈值，必须挡下')
-  assert.equal(partial.hits.length, 0)
+  /**
+   * v1.15.6 起这里记成 `nearMisses`（提示档）而不是 `droppedByScore`：
+   * 分数 0.21 落在 `[hintScore 0.20, minScore 0.34)` 里 → **不注入完整块**（意图不变），
+   * 但会在会话里留一行"可能相关"。判据仍是"不进 hits"。
+   */
+  assert.equal(partial.hits.length, 0, '覆盖率太低 → 绝不注入完整块')
+  assert.equal(partial.nearMisses.length, 1, '但落在了提示档里（0.21 ∈ [0.20, 0.34)）')
+  assert.equal(partial.droppedByScore, 0, '提示档不算"被阈值挡下"（它确实留了痕迹）')
   /**
    * 反方向也要守：**提问与标题几乎同字时不该被过度惩罚**（这是真实性门槛）。
    * 早期"命中数÷提问长度"的写法会在这里给出 0.31，把真实提问全挡在门外。
@@ -347,13 +355,20 @@ test('阈值是**严格大于**：分数正好等于 minScore 不算命中', () 
   const exact = recallKnowledge({ query: '盘符', candidates: [candidate({ id: 'a', title: '盘符' })], minScore: at, now: NOW })
   assert.equal(exact.matched, 1)
   assert.equal(exact.hits.length, 0, '正好等于阈值 → 不算命中')
-  assert.equal(exact.droppedByScore, 1)
+  // 提示档的判据同样是**严格大于下界**：分数 0.367 > hintScore 0.20 → 值得提一行
+  assert.equal(exact.nearMisses.length, 1, '没到注入闸门，但够得上提示档')
+  assert.equal(exact.droppedByScore, 0, '提示档不再计入"被阈值挡下"')
+
+  // 把提示档也关掉（hintScore = minScore）→ 才真正落到 droppedByScore
+  const noHint = recallKnowledge({ query: '盘符', candidates: [candidate({ id: 'a', title: '盘符' })], minScore: at, hintScore: at, now: NOW })
+  assert.equal(noHint.nearMisses.length, 0, 'hintScore == minScore 时提示档为空')
+  assert.equal(noHint.droppedByScore, 1, '这时才算被挡下')
+
   const above = recallKnowledge({ query: '盘符', candidates: [candidate({ id: 'a', title: '盘符' })], minScore: at - 0.001, now: NOW })
   assert.equal(above.hits.length, 1, '略高于阈值 → 命中')
 })
 
-test('多句 query 合并：**分句检索**才算得准，拼成一句会把最相关的条目淹掉', () => {
-  /**
+test('多句 query 合并：**分句检索**才算得准，拼成一句会把最相关的条目淹掉', () => {  /**
    * 这是 `prime`（开工前用「任务标题 + 任务描述」两次检索）的**纯函数防线**，
    * 也是实测踩过的坑：拼成一句时覆盖率的分母翻倍，最相关那条从 0.55 掉到 0.33。
    *
@@ -434,4 +449,80 @@ test('命中同时带原始分与展示相关度，注入文案只露归一化�
   assert.match(text, /完整 uuid/, '要写清"按 id 取全文"用的是完整 uuid')
   assert.match(text, /workbench_search_knowledge/, '并给出取全文的工具名')
 })
+
+/**
+ * v1.15.6 的 P1：**两档闸门**（提示档）。
+ *
+ * 背景是量出来的，不是想出来的：真实会话的 11 条提问里，正确答案普遍卡在阈值下面 0.01~0.03
+ * （genui 渲染失败 0.327 / 紧缩场时序控制器 0.309 / Windows计划任务 0.324，阈值 0.34），
+ * 而 top-1 排序**全是对的**。直接降阈值不行 —— 同批数据里那条泛化标题对一句闲聊也有 0.338。
+ *
+ * 所以闸门不降，差一点点的改成**一行提示**（约 90 字符 vs 完整块约 1000 字符），
+ * 并且提示必须**看起来就不像已确认的知识**：不给摘要、不给分类、明说"未达注入闸门"。
+ */
+test('P1 两档闸门：差一点点的进 nearMisses（不注入完整块），更低的才算被挡下', () => {
+  const cand = candidate({ id: 'mid', title: '盘符' })
+  // '盘符' 查标题 '盘符' = 0.55 × 2/3 × 1 = 0.3667
+  const mid = recallKnowledge({ query: '盘符', candidates: [cand], now: NOW })
+  assert.equal(mid.hits.length, 1, '0.367 > 0.34 → 完整命中')
+
+  // 把注入闸门抬到 0.40：同一个分数落进 [0.20, 0.40) → 提示档
+  const hinted = recallKnowledge({ query: '盘符', candidates: [cand], minScore: 0.4, now: NOW })
+  assert.equal(hinted.hits.length, 0, '没过注入闸门 → 不进 hits')
+  assert.equal(hinted.nearMisses.length, 1, '但落在提示档里 → 值得提一行')
+  assert.equal(hinted.nearMisses[0].id, 'mid')
+  assert.equal(hinted.droppedByScore, 0, '提示档不算被挡下（它确实留了一行痕迹）')
+
+  // 抬到 0.50：分数 0.367 < hintScore? 不 —— hintScore 仍是 0.20，所以**还是提示档**。
+  // 真正该被完全丢掉的是"连提示档都没够到"的（这里用 hintScore 显式抬高来构造）
+  const dropped = recallKnowledge({ query: '盘符', candidates: [cand], minScore: 0.4, hintScore: 0.4, now: NOW })
+  assert.equal(dropped.nearMisses.length, 0)
+  assert.equal(dropped.droppedByScore, 1, '连提示档都没够到 → 才算被挡下')
+})
+
+test('P1 提示行：只给 id + 标题 + 相关度，明确"未达闸门"，且绝不给摘要', () => {
+  const long = '这是一段很长的正文'.repeat(20)
+  const out = recallKnowledge({
+    query: '盘符',
+    candidates: [candidate({ id: 'k-1', title: '盘符根目录的坑', contentMd: long })],
+    minScore: 0.4,
+    now: NOW,
+  })
+  assert.equal(out.nearMisses.length, 1)
+  const text = formatHintText(out)
+  assert.match(text, /\[k-1\]/, '给 id（模型据此取全文）')
+  assert.match(text, /盘符根目录的坑/, '给标题')
+  assert.match(text, /未达注入闸门/, '必须自报"没到闸门"，否则模型会把提示当事实用')
+  assert.match(text, /可能/, '语气的落点在"可能相关"上')
+  assert.doesNotMatch(text, /摘要：/, '提示行绝不带摘要（那是完整块的待遇）')
+  assert.ok(text.length < 200, `提示行必须短（实测 ${text.length} 字符，完整块约 1000）`)
+  // 没有提示 → 空串（**不插占位**这条纪律对提示档同样成立）
+  assert.equal(formatHintText({ ...out, nearMisses: [] }), '')
+})
+
+test('P1 提示档也守条数上限与会话去重（不重复提示同一条）', () => {
+  const many = Array.from({ length: 6 }, (_, i) => candidate({ id: `m${i}`, title: '盘符' }))
+  const out = recallKnowledge({ query: '盘符', candidates: many, minScore: 0.4, now: NOW })
+  assert.equal(out.nearMisses.length, RECALL_DEFAULTS.maxHints, `提示最多 ${RECALL_DEFAULTS.maxHints} 条`)
+  const excluded = recallKnowledge({ query: '盘符', candidates: many, minScore: 0.4, excludeIds: ['m0'], now: NOW })
+  assert.ok(!excluded.nearMisses.some((hit) => hit.id === 'm0'), '已注入过的条目不再当"差一点点"')
+})
+
+test('P1 合并多句 query 时提示档也要按 id 去重、取高分、守上限', () => {
+  const a = recallKnowledge({ query: '盘符', candidates: [candidate({ id: 'x', title: '盘符' })], minScore: 0.4, now: NOW })
+  const b = recallKnowledge({ query: '盘符迁移', candidates: [candidate({ id: 'x', title: '盘符迁移' })], minScore: 0.9, now: NOW })
+  const merged = mergeRecallOutcomes([{ query: '盘符', outcome: a }, { query: '盘符迁移', outcome: b }])
+  assert.equal(merged.nearMisses.length, 1, '同一条只出现一次')
+  assert.equal(merged.nearMisses[0].score, Math.max(a.nearMisses[0].score, b.nearMisses[0].score), '取更高的那份')
+})
+
+test('P1 willInject：有提示也算"会在会话里留下东西"（否则日志与事实对不上）', () => {
+  const hit = recallKnowledge({ query: '盘符', candidates: [candidate({ id: 'a', title: '盘符' })], now: NOW })
+  const hint = recallKnowledge({ query: '盘符', candidates: [candidate({ id: 'a', title: '盘符' })], minScore: 0.4, now: NOW })
+  const none = recallKnowledge({ query: '盘符', candidates: [candidate({ id: 'a', title: '盘符' })], minScore: 0.4, hintScore: 0.4, now: NOW })
+  assert.equal(willInject(hit), true)
+  assert.equal(willInject(hint), true, '只有提示也必须算"会留下东西"')
+  assert.equal(willInject(none), false, '两级都没够到 → 真的什么都不插（不占位）')
+})
+
 
