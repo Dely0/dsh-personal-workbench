@@ -76,3 +76,35 @@ client split into `src/client/components/*`), so every item was re-implemented a
 current modules — with deliberate differences, e.g. an added legacy-path compatibility rule
 for task folders, and a rewritten decompression guard in the attachment parser.
 
+## SnowNight777/dsh-personal-workbench (contributor, v1.15.3)
+
+- Contributor: https://github.com/SnowNight777
+- Reports: issues #4 / #5 / #7 · Pull requests #6 / #8
+- License: MIT (same as this project) — the changes were accepted as upstream contributions
+
+Accepted contributions (v1.15.3). These are **contributed changes, not adapted third-party
+material** — they are listed here so every piece of externally-authored code in this repository
+is traceable from one place:
+
+- **Task-reminder creation for three missing paths.** `addReminder` had only two call sites
+  (the parent task at draft confirmation, and the manual `POST /tasks/:id/reminders` route), so
+  subtasks produced by `walkChildren`, tasks created through `POST /api/workbench/tasks`, and
+  tasks whose due date was set later via `PATCH /api/workbench/tasks/:id` never got a reminder
+  row — and the scheduler only reads `task_reminders`, so those tasks could never fire.
+  The contributed patch adds the same "explicit offset → type default → priority default"
+  resolution used for the parent task, and guards the `PATCH` path against duplicates.
+- **Delivery-target cache.** `GET /api/workbench/reminders/channel` now resolves the target
+  before reporting status, so a bound target is no longer mis-reported as "not configured"
+  after a restart.
+- **Reusable-session availability predicate.** New pure module `src/client/aiSessionReuse.ts`
+  (`isAiSessionReusable`) plus table-driven tests, applied to five places that previously opened
+  a stored `session_id` without checking whether it was still usable (registry reuse, the report
+  row's own `sessionId` fallback, "enter review session", the task-detail session tab, and the
+  draft banner). When the predicate does not hold, those paths fall back to creating a new
+  session or surface an explicit notice instead of failing silently.
+
+One maintainer revision on top of the contribution (`c78416e`): the last branch of
+`isTargetConfigured` was tightened from `return adapter.available()` to `return false`, so users
+who never bound a delivery target keep the previous "do nothing" behaviour instead of repeatedly
+attempting and failing delivery. See [`docs/releases/v1.15.3.md`](docs/releases/v1.15.3.md) §3.
+

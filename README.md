@@ -333,6 +333,7 @@ v1.13.3 的再次根治；v1.13.1 的标题栏入口则是因为直接读 `ctx.s
 
 | 版本 | 要点 |
 |---|---|
+| **1.15.4** | **文档版**（与 v1.15.3 功能完全相同）：把 v1.15.3 的贡献者在 [致谢](#致谢) 里补全（中英双段），并在 [`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md) 增加对应条目 —— 让"外部作者写的代码"在一个地方可追溯。之所以要单独发一个版本：**npm 页面渲染的是包内 README**，而 npm 不允许覆盖已发布版本，所以文档修正在 npm 上只能靠新版本号送达。无代码改动。 |
 | **1.15.3** | **合入社区反馈的三个缺陷修复**（来自 [@SnowNight777](https://github.com/SnowNight777) 的 #4 / #5 / #7 与 PR #6 / #8，提交作者署名保留）。**任务提醒**：原先只有"草稿确认时的父任务"与"手动接口"两条路径建提醒记录，于是**草稿拆出的子任务 / `POST` 建任务 / `PATCH` 改截止时间**建出来的任务**永远不会提醒** —— 现在三处统一按「显式 offset → 类型默认 → 优先级默认」补建，`PATCH` 只在没有生效中提醒时补，避免重复（提醒按 `offset_minutes` 存、按 `dueAt − offset` 现算，不是存绝对时间，所以不会留下过期时间戳）。**投递目标缓存**：`status().configured` 读的是只在 `resolveTarget()` 里填充的内存缓存，而 `GET /reminders/channel` 只调 `listOptions()` ⇒ 重启后设置页把已绑定目标误报「未配置」，且 `isTargetConfigured` 为假让**包括启动补发在内的所有任务提醒被静默跳过** —— 现在改为「缓存命中 → 数据库有显式绑定」两级（**末行不要用 `available()` 兜底**：那会让没绑过目标的用户从"安静地不做事"变成"安静地反复投递失败"，由 `test/reminderWiring.test.mjs` 钉住）。**复用型会话**（计划 / 日报周报 / 点子关联 / 点子头脑风暴）：登记或引用的会话被**归档或删除**后，点下去没有任何反应、且那行陈旧引用**永不更新**（该链路从此开不出会话）—— 根因是客户端拿着旧 `session_id` 直接切、不验可用性；新增纯判据 `aiSessionReuse.ts#isAiSessionReusable()`（归档集命中 / 列表 ready 却查不到 → 不可复用；列表 `pending` 或旧宿主缺快照 → **不下结论**，零回归），覆盖**五处**裸切（含**报告行自己的 `sessionId` 回退**这条独立路径），不成立时落回新建或给明确提示。用例 521 → 534。 |
 | **1.15.2** | **今日容量的算法被摆到台面上**：原先「已排 0 min」是个黑盒（内联在 4987 行组件里、无测试、逾期完全不参与），现在抽出**纯函数唯一权威源** `capacity.ts`，界面给出**七条口径 + 逐条账本**（表尾合计 = 已排）、**逾期单独成区并可一键计入**（默认不计入）、**每条任务可自定义耗时**（改完不刷新即见效）、没填耗时按**可配置的默认耗时**（缺省 30）计入并逐条标注、全天任务只影响显示与重复锚点。服务端 PATCH 补上同构夹取（原先"库里 99999、界面按 30 算"）。**知识库被会话 AI 自动调用**（四个时机；命中的条目在会话里可见、可关闭、有召回日志与"是否被引用"回报；打分口径被两轮实测逼出来，含**两档闸门**让没达注入阈门的条目也留一行提示）。**知识库列表改版**（分类 Tab + 搜索/标签筛选/排序/分页、自适应时间分组）与**点子页卡片瀑布**。修：**知识草稿覆盖不再静默**（回执与界面都说清"已更新本会话已有草稿"并列出被替换的标题）、**快速录入的默认工作区被上一次执行的任务污染**（根因：从"当前选中任务"派生默认值）、**快速录入的模型选择框被弹窗滚动容器裁掉**（真浏览器实测常见窗口仅 48% 可见）、「选择文件」出不了 C 盘（盘符根 `parent=null` 把用户困在根目录）。用例 240 → 521。 |
 | **1.15.1** | **任务资料夹改用 `<任务ID>-<标题片段>`**（旧口径按标题：改标题成孤儿、同名挤一个目录、特殊字符变目录名），澄清阶段**先预留任务 ID** 并复用它落库；**不再为每个任务注册 AI 工作区**（会话用当前工作区 + 提示词声明资料夹，避免宿主工作区列表被任务撑爆）；**老路径兼容**判据必须带"位于默认根目录之下"这条旁证（否则手填目录会被当成自动路径改写，且本机 3 条标题型老路径会永远不再迁移）。新增：快速录入**图片（走宿主原生多模态）与 PDF/DOCX 附件**（不收的文件逐条给原因）、**模型选择器**（未声明 image 的模型在**发送前**给可读拒绝，而不是让宿主静默把图换成占位文字）、**`/workbench` 斜杠命令**（进原生 `/` 菜单，执行后当前会话进入澄清流程）。修：**任务没填路径时会话挂到无关工作区**（原 `ws.items[0]`，最坏会把文件建进别的任务目录）、**PDF 文本抽取的 O(n²) 灾难性回溯**（3 KB 恶意 pdf 可让整个 dsh web 无响应，由独立审查发现）、解压超限回 zlib 英文原文、预分配任务 id 不校验（非法 id 落库 / 重复 id 抛英文 SQL）、`/workbench` 侧未做 WSL 路径归一化。四份重复的请求围栏合并成一份并加 `no-store` / `nosniff`。用例 168 → 240。 |
@@ -388,6 +389,22 @@ v1.13.3 的再次根治；v1.13.1 的标题栏入口则是因为直接读 `ctx.s
 - [@tujunwenjie](https://github.com/tujunwenjie) —— issue #3 的诊断报告与本地修复分支，
   帮我们看清了"用 DOM 注入参与非官方家族约定"这条路的根因（v1.14.53 据此整条腿删除）。
 - [@lhmhz](https://github.com/lhmhz) —— issue #1（关联对话显示对话名 / 添加已有对话到任务）。
+- **[@SnowNight777](https://github.com/SnowNight777)** —— v1.15.3 的三项修复全部来自其报告
+  （issue [#4](https://github.com/Dely0/dsh-personal-workbench/issues/4) /
+  [#5](https://github.com/Dely0/dsh-personal-workbench/issues/5) /
+  [#7](https://github.com/Dely0/dsh-personal-workbench/issues/7) 与 PR
+  [#6](https://github.com/Dely0/dsh-personal-workbench/pull/6) /
+  [#8](https://github.com/Dely0/dsh-personal-workbench/pull/8)，提交作者署名保留）：
+  ① **三条建任务路径不建提醒记录**（草稿拆出的子任务 / `POST` 建任务 / `PATCH` 改截止时间）
+  ——它们建出来的任务**永远不会提醒**；② **投递目标内存缓存引发的两个连锁缺陷**
+  （重启后设置页把已绑定目标误报「未配置」，且 `isTargetConfigured` 为假让**包括启动补发在内
+  的所有任务提醒被静默跳过**）——报告里引用 `draft-notify.ts` 那段"早就绕开同一个坑"的注释作为旁证，
+  一句话说清了"为什么只有任务提醒坏了"；③ **复用型会话的陈旧引用**（登记或引用的会话被归档/删除后
+  点下去没有任何反应，且那行陈旧引用永不更新，该链路从此开不出会话）——不仅给了**纯判据 + 表驱动单测**，
+  还自己补出了"报告行自己的 `sessionId` 回退"这条**独立的第二条复用路径**。
+  我们逐条对着代码核实过，三条全部成立；其中"列表 `pending` / 旧宿主缺快照时**不下结论**"
+  这个取舍尤其稳（避免了"启动瞬间凭空多开一个会话"），我们一个字没改。
+  详见 [`docs/releases/v1.15.3.md`](docs/releases/v1.15.3.md)。
 
 ### 并行会话开发的隔离做法（1.15.2 起）
 
@@ -528,6 +545,24 @@ Does **not** depend on `dsh-web-ui`.
 - [@tujunwenjie](https://github.com/tujunwenjie) — the diagnosis and fix branch in issue #3 that
   showed the root cause of participating in a non-official sidebar family via DOM injection.
 - [@lhmhz](https://github.com/lhmhz) — issue #1.
+- **[@SnowNight777](https://github.com/SnowNight777)** — all three v1.15.3 fixes come from their
+  reports (issues [#4](https://github.com/Dely0/dsh-personal-workbench/issues/4) /
+  [#5](https://github.com/Dely0/dsh-personal-workbench/issues/5) /
+  [#7](https://github.com/Dely0/dsh-personal-workbench/issues/7) and PRs
+  [#6](https://github.com/Dely0/dsh-personal-workbench/pull/6) /
+  [#8](https://github.com/Dely0/dsh-personal-workbench/pull/8); commit authorship preserved):
+  ① **three task-creation paths never wrote a reminder row** (subtasks from a draft, `POST /tasks`,
+  `PATCH /tasks/:id`) — so those tasks **could never fire a reminder**; ② **an in-memory delivery-target
+  cache caused two linked defects** (after a restart the settings page mis-reported a bound target as
+  "not configured", and `isTargetConfigured` being false made the scheduler **silently skip every due
+  reminder, including the startup catch-up**) — their report cites the `draft-notify.ts` comment that
+  had already worked around the same trap, which explains in one line why only task reminders broke;
+  ③ **stale session references in reusable AI sessions** (after the referenced session was archived or
+  deleted, clicking did nothing and the stale registry row was never updated, permanently wedging that
+  chain) — they shipped a **pure predicate with table-driven tests**, and also found the **independent
+  second reuse path** (the report row's own `sessionId` fallback).
+  We verified every claim against the code and all three held. See
+  [`docs/releases/v1.15.3.md`](docs/releases/v1.15.3.md).
 
 ## License
 
