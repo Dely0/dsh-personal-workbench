@@ -52,10 +52,11 @@ git worktree remove E:\Code\dsh-personal-workbench\capacity-wt
 
 - `src/client/capacity.ts` —— 容量算法唯一权威源（纯函数）
 - `src/client/components/CapacityRulePanel.tsx` —— 规则 / 账本 / 开关面板
-- `test/capacity.test.mjs`、`test/capacityWiring.test.mjs`
+- `test/capacity.test.mjs`、`test/capacityWiring.test.mjs`、`test/capacityPanel.test.mjs`
 - `test/fixtures/capacityFixture.mjs`
 - `scripts/repro/probe-capacity-mutations.mjs`、`verify-capacity-fixed-dataset.mjs`、
-  `measure-capacity-baseline.mjs`、`verify-capacity-review-claims.mjs`、`repro-task-estimate.mjs`
+  `measure-capacity-baseline.mjs`、`verify-capacity-review-claims.mjs`、
+  `compare-capacity-before-after.mjs`、`repro-task-estimate.mjs`
 - `docs/design/2026-09-25-capacity-rules.md`（交付文档；`-plan.md` 是咨询会话留下的方案，两边都别改）
 
 ### 会话 B 独占（本会话一行不改）
@@ -92,15 +93,15 @@ git worktree remove E:\Code\dsh-personal-workbench\capacity-wt
 ## 三、本会话（A）的进度台账
 
 见 `docs/design/2026-09-25-capacity-rules.md` 的「实施进度」一节（每个阶段完成即更新），
-以及任务共享记忆里的 `[summary]` 记录。**提交策略**：每阶段一个提交，提交信息写清阶段号与验收命令。
-
-| 阶段 | 状态 |
+以及任务共享记忆里的 `[summary]` 记录。**提交策略**：每阶段一个提交，提交信息写清阶段号与验收命令。| 阶段 | 状态 |
 |---|---|
-| P1 纯函数 + 基准/等价性测试 + 变异探针 | 进行中 |
-| P2 规则面板（规则/账本/开关）+ 接线测试 + harness **容量批** | 待办 |
-| P3 编辑弹窗耗时/全天 + 校验 + 乐观更新 + 详情行 + 新建表单 + 服务端夹取 | 待办 |
-| P4 设置页两偏好（默认耗时 / 逾期口径） | 待办 |
-| P5 修前修后对照 + 交付文档 + 门禁 | 待办 |
+| P1 纯函数 + 基准/等价性测试 + 变异探针 | ✅ 完成（提交 `4803417`） |
+| P2 规则面板（规则/账本/开关）+ 接线测试 + harness **容量批** | ✅ 完成（提交 `5825037`） |
+| P3 编辑弹窗耗时/全天 + 校验 + 乐观更新 + 详情行 + 新建表单 + 服务端夹取 | ✅ 完成（界面部分在 `4803417`；真机脚本 `8c15179`） |
+| P4 设置页两偏好（默认耗时 / 逾期口径） | ✅ 完成（在 `4803417` 内） |
+| P5 修前修后对照 + 交付文档 + 门禁 | ✅ 完成（对照脚本 + `docs/design/2026-09-25-capacity-rules.md`） |
+| 门禁 | typecheck 0；`pnpm test` **505/505**；变异探针 **19/19 全红**；harness `--case all` **51/51** |
+| **未做** | 装盘（需用户授权）、重启（绝不自行）、真机端到端 `repro-task-estimate.mjs` 的完整断言（依赖前两项） |
 
 > `scripts/repro/harness-real-browser.mjs` 是**两边都可能想改**的文件（B 的知识库列表也用它）：
 > 本会话只做**参数化（加 `--case`）+ 新增容量批**，不改既有用例；B 若要加自己的批，
