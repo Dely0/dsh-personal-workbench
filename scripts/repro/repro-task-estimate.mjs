@@ -272,14 +272,32 @@ try {
    * 这样即使默认耗时被用户改成别的值，断言依然成立。
    */
   const readLedgerMinutes = async (title) => await evaluate(`(() => {
+    const TITLE = ${JSON.stringify(title)}
+    const pick = () => {
+      const rows = Array.from(document.querySelectorAll('.wb-cap-audit tbody tr'))
+      if (rows.length === 0) return undefined   // 还没渲染出来
+      const hit = rows.find((r) => (r.querySelector('td.t')?.textContent ?? '') === TITLE)
+      if (hit === undefined) return null        // 渲染好了但这条不在账本里
+      const cell = hit.querySelector('td.m')?.textContent ?? ''
+      return /^\\d+$/.test(cell.trim()) ? Number(cell.trim()) : null
+    }
     const toggle = document.querySelector('.wb-cap-rule-toggle')
     if (toggle === null) return null
+    // 已展开就直接读；没展开就点一下并**等它真渲染出来**再读。
+    // 第一次跑栽在这里：点完立刻查 DOM，表格还不存在，于是"账本里这条 = null"，
+    // 进而算出"期望 153"这种不可能的值 —— 看起来像产品错了，其实是脚本抢跑。
     if (toggle.getAttribute('aria-expanded') !== 'true') toggle.click()
-    const rows = Array.from(document.querySelectorAll('.wb-cap-audit tbody tr'))
-    const hit = rows.find((r) => (r.querySelector('td.t')?.textContent ?? '') === ${JSON.stringify(title)})
-    if (hit === undefined) return null
-    const cell = hit.querySelector('td.m')?.textContent ?? ''
-    return /^\\d+$/.test(cell.trim()) ? Number(cell.trim()) : null
+    return new Promise((resolve) => {
+      let tries = 0
+      const tick = () => {
+        tries += 1
+        const value = pick()
+        if (value !== undefined) return resolve(value)
+        if (tries > 60) return resolve(null)
+        requestAnimationFrame(tick)
+      }
+      requestAnimationFrame(tick)
+    })
   })()`)
   /** 在弹窗里写 input 值：必须走原生 setter + input 事件，否则 React 收不到。 */
   const setInputValue = async (selector, value) => await evaluate(`(() => {
