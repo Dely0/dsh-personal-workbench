@@ -181,6 +181,14 @@ dsh plugin --profile web add link:/path/to/dsh-workbench
 
 本插件为社区项目，与 DeepSeek 官方无关，不提供任何担保。安装即表示你信任该代码会以你的 DSH 用户权限在本机运行。执行类 AI 操作可能修改工作区文件、消耗 API 额度，请先阅读代码并谨慎使用。
 
+## 致谢
+
+本项目的起点是 [**Dely0/dsh-personal-workbench**](https://github.com/Dely0/dsh-personal-workbench)：上游作者 **Du Penglai**（GitHub [@Dely0](https://github.com/Dely0)）在 2026 年 8 月把 `dsh-workbench` v0.5.2 首次开源（提交 `5306ae1`，MIT 许可）。本仓库直接建立在那一份工作之上——任务树与日历、AI 澄清 / 咨询 / 拆解 / 执行 / 复盘、每日智能排序与日报周报、知识库与点子、微信提醒、归档与任务工作区，都源自上游。
+
+也感谢上游作者持续迭代并继续开源：Skill 选择器、验收「暂存」与驳回反馈、草稿通知、提醒状态语义、UI 视觉刷新与点子文件夹等能力，都是通过上游提交合并进本仓库的（如 `32aadde`、`ea1bbcc`、`802d1f3`、`d39cc3d`，由合并提交 `c217dd6` 带入本仓库）。上游的许可与版权署名（MIT License，Copyright (c) 2026 Du Penglai）继续保留在 [LICENSE](./LICENSE) 中。
+
+同时感谢 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 提供的插件体系，以及 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md) 中列出的开源项目。
+
 ## License
 
 本项目代码使用 [MIT License](./LICENSE)。
@@ -230,6 +238,14 @@ Then restart `dsh web` and hard-refresh the browser.
 - [x] V2: Custom prompt input before AI sessions (except quick intake; append user input after the default prompt) (1.5.0)
 - [x] V2: Manual editing for today/calendar plan panel (reorder, edit notes, add/remove plan items; keep AI generate + confirm + complete/defer) (1.5.0)
 - [ ] Future: scheduled automation, multi-device sync, drag-and-drop, import/export
+
+## Acknowledgements
+
+This project began with [**Dely0/dsh-personal-workbench**](https://github.com/Dely0/dsh-personal-workbench). Upstream author **Du Penglai** ([@Dely0](https://github.com/Dely0)) first open-sourced `dsh-workbench` v0.5.2 in August 2026 (commit `5306ae1`). The task tree and calendar, the AI clarify / consult / breakdown / execute / review sessions, daily prioritization and reports, the knowledge base and ideas, WeChat reminders, archive and per-task workspaces all build on that work.
+
+Thanks as well to the upstream author for continuing to develop and open-source it: the skill selector, deferred acceptance with rejection feedback, draft notifications, reminder status semantics, the visual refresh and idea folders all reached this repository through upstream commits (for example `32aadde`, `ea1bbcc`, `802d1f3`, `d39cc3d`, brought in by the merge commit `c217dd6`). The upstream MIT license and copyright notice (Copyright (c) 2026 Du Penglai) are retained in [LICENSE](./LICENSE).
+
+Thanks also to the [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) project for the plugin system, and to the open-source projects listed in [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md).
 
 ## License
 
