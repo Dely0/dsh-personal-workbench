@@ -308,20 +308,32 @@ function applyReady(ctx: Context, db: DatabaseSync, config: Config): void {
      *
      * 不能直接读 `adapter.status().configured` —— 它读的是适配层内存缓存 `cachedTarget`，
      * 而该缓存只在 `resolveTarget()` 里填充。进程刚启动（或插件热重载）时缓存为空，
-     * 调度器会在 `channelReady` 处早退，把包括启动补发在内的\**所有任务提醒静默跳过**，
+     * 调度器会在 `channelReady` 处早退，把包括启动补发在内的**所有任务提醒静默跳过**，
      * 直到有人手动保存一次提醒设置页。
      * （草稿通知侧早已绕开这一点，见 reminder/draft-notify.ts 的注释；任务提醒侧漏修。）
      *
-     * 改为「缓存 → 数据库显式绑定 → 乐观放行并异步补解析」三级判定；
-     * 真解析不到目标时 `send()` 会失败并照常入队退避，不会丢提醒。
+     * 两级判定：**缓存命中 → 数据库有显式绑定**。两者都不成立时返回 false
+     * （维持"不尝试投递、不写 fired_at、留给前端"的既有语义）。
+     *
+     * ⚠️ **不要**在这里用 `adapter.available()` 兜底（即"装了 dsh-im 就放行"）：
+     * 那会让**从未绑定过投递目标**的用户，每条到期提醒都去尝试投递 → 失败
+     * （`reason: 'not-configured'`）→ 入队退避，并反复写 `reminder_channel_unavailable`
+     * 事件 —— 把"安静地不做事"变成"安静地反复失败"。
+     * 而 PR 原稿正是这么写的（`return adapter.available()`），本轮合入时收紧了。
+     *
+     * 另外注意 `resolveTarget()` 是**异步**的：这里的 `void` 调用只是顺手补一次缓存，
+     * 不影响本次返回值 —— 所以"没显式绑、但恰好只有一个 bot + 一个 user target"
+     * 这种自动发现场景，第一次仍返回 false（下一轮 tick 缓存命中后即恢复），
+     * 这是刻意的保守取舍：宁可晚一轮，也不要给没绑目标的用户制造噪声。
      */
     isTargetConfigured: () => {
       if (adapter.status().configured) return true
       const botId = readMeta(db, 'reminder_bot_id')
       const targetId = readMeta(db, 'reminder_target_id')
       if (typeof botId === 'string' && botId.trim() !== '' && typeof targetId === 'string' && targetId.trim() !== '') return true
+      // 没绑过：顺手补一次解析（可能自动发现到目标），但本次按"未就绪"处理。
       void adapter.resolveTarget().catch(() => { })
-      return adapter.available()
+      return false
     },
     readInboundCount: () => readWeixinInboundCount(ctx),
     log: (message) => { ctx.logger?.info?.(message) },
