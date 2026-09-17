@@ -563,9 +563,17 @@ export class KnowledgeRecallManager {
       : hints.length > 0
         // 有提示没命中：日志要写成"提示 N 条"，不能写成"零命中"—— 会话里确实留了一行
         ? `未达注入闸门，但提示 ${hints.length} 条"可能相关"`
-        : outcome.matched > 0
-          ? `命中 ${outcome.matched} 条但全部被阈值 ${this.options.minScore ?? RECALL_DEFAULTS.minScore} 挡下`
-          : '零命中（知识库里没有相关条目）'
+        /**
+         * ⚠️ **去重与"分数不够"是两件事**，日志必须分开说。
+         * 曾经这里只有 `matched > 0 → 全部被阈值挡下` 一条兜底，于是
+         * "两条都命中过、但都已在之前的回合注入过"会被记成"分数不够" ——
+         * 一句读起来合理、实际指错方向的账（排查时会被带偏）。
+         */
+        : outcome.droppedAsSeen > 0
+          ? `命中 ${outcome.matched} 条，但全部已注入过（会话去重跳过 ${outcome.droppedAsSeen} 条）`
+          : outcome.matched > 0
+            ? `命中 ${outcome.matched} 条但全部被阈值 ${this.options.minScore ?? RECALL_DEFAULTS.minScore} 挡下`
+            : '零命中（知识库里没有相关条目）'
     const detail = outcome.hits.length > 0
       ? outcome.hits.map((hit) => `${hit.id.slice(0, 8)}(${formatRelevance(hit.score)})`).join(' ')
       : hints.map((hit) => `${hit.id.slice(0, 8)}(${formatRelevance(hit.score)})`).join(' ')
@@ -725,6 +733,9 @@ export class KnowledgeRecallManager {
    *    保提示前缀缓存，也保证"装配多次只算一次检索"（账不被装配次数放大）；
    * 2. **不插占位**：没有内容返回空串；
    * 3. **不静默**：读取失败、没有消息、跳过检索都留一行可读日志或一条召回日志。
+   * 4. **失败不留假状态**：换键先作废旧文本；这次没算成就要把键还原，
+   *    否则"这一回合已经装配过"会被永久记住 —— 表现是后续装配拿到上一回合的文本
+   *    （串味）或永远拿到空串（静默不召回）。这两种都比"这一次没注入"糟得多。
    */
   assemblyInjection(sessionId: string, cwd: string | undefined, agent: unknown): string {
     if (!this.sessionEnabled(sessionId)) return ''
@@ -733,23 +744,32 @@ export class KnowledgeRecallManager {
     const queries = currentTurnQueries(agent)
     const key = assemblyKeyOf(turn, queries)
     if (state.assemblyKey === key) return state.cachedText
+    const previousKey = state.assemblyKey
     state.assemblyKey = key
-
-    if (queries.length > 0) {
-      this.recallForTurn(sessionId, cwd, queries)
+    // 换了键就把旧文本作废：算不完也绝不能把上一回合的内容当成本回合的
+    state.cachedText = ''
+    try {
+      if (queries.length > 0) {
+        this.recallForTurn(sessionId, cwd, queries)
+        const text = this.injectionFor(sessionId, turn)
+        state.cachedText = text
+        return text
+      }
+      /**
+       * 本回合还没有用户消息（罕见：装配早于 `user/message` 落进事件）。
+       * **不写 assemblyKey 的终态** —— 否则那条消息到达后这一回合就再也不会被检索，
+       * 正好复现我们要修的那个 bug。所以这里把键还原成"未装配过"。
+       */
       const text = this.injectionFor(sessionId, turn)
       state.cachedText = text
+      state.assemblyKey = ''
       return text
+    } catch (error) {
+      // 这次没算成 → 把键还原（下一次装配必须重算，不能当成"已装配"）
+      state.assemblyKey = previousKey
+      state.cachedText = ''
+      throw error
     }
-    /**
-     * 本回合还没有用户消息（罕见：装配早于 `user/message` 落进事件）。
-     * **不写 assemblyKey 的终态** —— 否则那条消息到达后这一回合就再也不会被检索，
-     * 正好复现我们要修的那个 bug。所以这里把键还原成"未装配过"。
-     */
-    const text = this.injectionFor(sessionId, turn)
-    state.cachedText = text
-    state.assemblyKey = ''
-    return text
   }
 
   /**

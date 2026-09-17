@@ -24,11 +24,17 @@ import { isLoopbackRequest, KNOWLEDGE_RECALL_PREFIX, readJsonBody, writeJson } f
 export function formatRecallLogLine(entry: RecallLogEntry): string {
   const when = entry.createdAt.replace('T', ' ').slice(0, 19)
   const skip = entry.skippedReason !== null && entry.skippedReason !== '' ? `跳过（${entry.skippedReason}）` : ''
+  /**
+   * 账要分开说：**"分数不够"与"已注入过去重跳过"是两件不同的事**。
+   * 混成一句"全部低于阈值"会把"这条其实命中过、只是上一回合已经给过了"读成"不相关"。
+   */
   const tail = entry.hits.length > 0
     ? `命中 ${entry.hits.length} 条` + (entry.droppedByScore > 0 ? `（另有 ${entry.droppedByScore} 条低于阈值）` : '')
-    : entry.matched > 0
-      ? `命中 ${entry.matched} 条但全部低于阈值`
-      : entry.skippedReason !== null ? '' : '零命中'
+    : entry.droppedAsSeen > 0
+      ? `命中 ${entry.matched} 条，但全部已注入过（会话去重跳过 ${entry.droppedAsSeen} 条）`
+      : entry.matched > 0
+        ? `命中 ${entry.matched} 条但全部低于阈值`
+        : entry.skippedReason !== null ? '' : '零命中'
   const cited = entry.citedIds.length > 0 ? `｜被引用 ${entry.citedIds.length} 条` : ''
   return `${when} [${entry.trigger}] ${skip}「${entry.query}」关键词=[${entry.terms.join(' ')}] → ${tail}${cited}`
 }

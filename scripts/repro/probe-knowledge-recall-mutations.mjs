@@ -330,6 +330,20 @@ const MUTATIONS = [
     to: 'return text;',
     expect: '宿主会对注入文本做模板插值，`{{` 必须先拆开',
   },
+  {
+    name: 'M37 装配失败后不还原键（这一回合被永久标成"已装配" → 重试返回空/串味）',
+    file: MANAGER,
+    from: /state\.assemblyKey = previousKey;/,
+    to: 'void previousKey;',
+    expect: '失败不得留下假状态：没算成就要允许重算',
+  },
+  {
+    name: 'M38 日志把"已注入过去重"说成"分数不够"（账指错方向）',
+    file: MANAGER,
+    from: /: outcome\.droppedAsSeen > 0\r?\n\s*\? `命中 \$\{outcome\.matched\} 条，但全部已注入过（会话去重跳过 \$\{outcome\.droppedAsSeen\} 条）`/,
+    to: ': false\n            ? `命中 ${outcome.matched} 条，但全部已注入过（会话去重跳过 ${outcome.droppedAsSeen} 条）`',
+    expect: '"分数不够"与"去重跳过"必须分开说',
+  },
 ]
 
 const run = () => spawnSync(process.execPath, ['--test', ...TEST_FILES], { cwd: ROOT, encoding: 'utf8' })

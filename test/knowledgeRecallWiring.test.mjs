@@ -291,6 +291,80 @@ test('开关权威源：meta（用户显式动作）优先于官方 config', () 
   })
 })
 
+/**
+ * 装配期**失败不得留下假状态**（这把 v1.15.7 自己引入的风险钉住）。
+ *
+ * `assemblyInjection` 用"键"记住"这一回合装配过了"。如果**先写键、后计算**，
+ * 那么计算抛异常时这一回合就被永久标记成"装配过"，而缓存里还留着**上一回合**的文本 ——
+ * 后续装配会拿着上一回合的知识当本回合的（串味），或者永远拿到空串（静默不召回）。
+ * 两种都比"这一次没注入"糟得多：前者把错的知识塞进上下文，后者回到本版要修的静默状态。
+ */
+test('P1 装配失败不留假状态：抛异常后同回合重试必须重算（不能拿上一回合的文本）', () => {
+  withDb((db) => {
+    createKnowledge(db, { title: 'AAA 甲甲甲 专属主题', contentMd: 'AAA 的做法' })
+    createKnowledge(db, { title: 'BBB 乙乙乙 专属主题', contentMd: 'BBB 的做法' })
+    const { ctx, contextText, logs } = fakeCtx()
+    const manager = installKnowledgeRecall(ctx, db, { log: (m) => logs.push(m) })
+    const agentFor = (turn, question) => ({
+      session: {
+        header: { id: 'sess-throw', cwd: 'E:\\Code\\x' },
+        snapshotEvents: () => [
+          { type: 'turn/start', seq: 1, time: 1, data: { turn: { turn } } },
+          { type: 'user/message', seq: 2, time: 2, data: { content: [{ type: 'text', text: question }], source: { kind: 'user' } } },
+        ],
+      },
+    })
+
+    // ① 第 3 回合正常装配一次（留下真实缓存：AAA）。两句提问刻意不交叉命中 ——
+    //    否则第 4 回合会被**会话去重**挡下，那测到的就是另一件事了。
+    const third = agentFor(3, 'AAA 甲甲甲')
+    assert.match(contextText(third), /AAA 甲甲甲 专属主题/)
+
+    // ② 第 4 回合装配期**抛异常**（故障注入：候选集读取抛错，模拟库挂了/被关了）
+    const fourth = agentFor(4, 'BBB 乙乙乙')
+    const original = manager.candidates
+    manager.candidates = () => { throw new Error('boom: candidates 读取失败') }
+    assert.equal(contextText(fourth), '', '失败时这一次不注入（且必须留痕）')
+    assert.ok(logs.some((line) => line.includes('注入失败')), '失败要留下可读日志，不能静默')
+
+    // ③ 恢复后**同一回合重试**：必须重算（拿到 BBB），而不是上一回合的 AAA / 也不是空占位
+    manager.candidates = original
+    const retry = contextText(fourth)
+    assert.match(retry, /BBB 乙乙乙 专属主题/, '同回合重试必须重算 —— 键没被失败那次占住')
+    assert.doesNotMatch(retry, /AAA 甲甲甲/, '绝不能把上一回合的文本当本回合的（串味）')
+  })
+})
+
+/**
+ * 「账要对得上」的一条：**命中过但都已在之前的回合注入过** ≠ **分数不够**。
+ *
+ * 实测踩到：`logOutcome` 的兜底分支只写了"全部被阈值挡下"，于是同一句提问问第二次
+ * （两条都命中、但都被会话去重跳过）会被记成"分数不够" —— 排查时把人带向打分，
+ * 而真正发生的是去重。两件事必须分别写。
+ */
+test('P1 日志要分开说"分数不够"与"已注入过去重"（账指错方向最贵）', () => {
+  withDb((db) => {
+    createKnowledge(db, { title: '盘符根目录的坑', contentMd: '盘符 parent null' })
+    const { ctx, contextText, logs } = fakeCtx()
+    installKnowledgeRecall(ctx, db, { log: (m) => logs.push(m) })
+    const agentFor = (turn) => ({
+      session: {
+        header: { id: 'sess-account', cwd: 'E:\\Code\\x' },
+        snapshotEvents: () => [
+          { type: 'turn/start', seq: 1, time: 1, data: { turn: { turn } } },
+          { type: 'user/message', seq: 2, time: 2, data: { content: [{ type: 'text', text: '盘符根目录 出不去' }], source: { kind: 'user' } } },
+        ],
+      },
+    })
+    assert.match(contextText(agentFor(1)), /盘符根目录的坑/)
+    logs.length = 0
+    assert.equal(contextText(agentFor(2)), '', '第二次同一句提问：已在 seenIds 里 → 不再注入')
+    const line = logs.find((item) => item.includes('[turn]')) ?? ''
+    assert.match(line, /已注入过/, `日志要说明是去重，而不是"分数不够"：${line}`)
+    assert.doesNotMatch(line, /全部被阈值/, '不能把去重说成阈值')
+  })
+})
+
 /** 只借一个管理器实例（不注册钩子），避免每个断言都装一遍钩子。 */
 function installKnowledgeRecallGuard(db, options) {
   const { ctx } = fakeCtx()
