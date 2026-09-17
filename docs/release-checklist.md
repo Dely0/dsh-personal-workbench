@@ -93,8 +93,15 @@ node scripts/dev-install.mjs --apply    # 真装：自动备份 + 零增量 diff
 
 ## 5. 发布
 
+- [ ] ⚠️ **只改文档/配置/测试等"非编译内容"时，不要单独发版** ——
+      把改动留在工作区，**跟随下一个有代码改动的版本一起发布**。
+      理由：npm 的版本号是给用户消费的，为一句致谢或一段说明单独占一个版本号没有意义；
+      而且 `lib/` 产物不变时发版对用户是零收益。
+      （2026-09-17 因为 README 漏了致谢而单独发了 `v1.15.4`，属于判断失误；
+      用户明确要求：**非编译内容跟随后面的版本一起更新发布**。）
 - [ ] `git tag v<version>` + 提交信息里写清"本版本子任务清单"。
 - [ ] 发布 Release Notes，包含：新增/修复/破坏性变更/已知问题/**验收方式**。
+      本版若夹带了此前积累的文档修正，在 Release Notes 里**一并说明**（别让它静默搭车）。
 - [ ] ⚠️ **GitHub Release 的 Title 只写版本号**（`v1.15.4`），**不要**加破折号与描述。
       内容全部放 body。用户 2026-09-17 明确要求过这条（v1.15.2 / v1.15.3 当时带了描述，
       已发布的没改；从 v1.15.4 起按此执行）。
@@ -103,9 +110,11 @@ node scripts/dev-install.mjs --apply    # 真装：自动备份 + 零增量 diff
       只能由网页「Draft a new release」或 `POST /repos/{o}/{r}/releases` 创建；
       只推 tag 时那一页会停在上一版（v1.15.2 就这么漏过一次）。
       验收判据是 `GET /releases/latest` 指向新版本。
-- [ ] **README 的改动只靠新版本号才能到 npm**：npm 页面渲染的是**包内 `README.md`**，
-      而 npm 不允许覆盖已发布版本。所以"发布后才发现致谢/文档漏了"只能发一个 patch 版本
-      （v1.15.4 就是这种"零代码改动的文档版"）。**发版前先确认 README 与致谢都写完了。**
+- [ ] ⚠️ **发版前确认 README / 致谢 / THIRD_PARTY_NOTICES 都写完了**。
+      它们是**编译产物之外**的东西，而 npm 页面渲染的是**包内 `README.md`**，
+      npm 又不允许覆盖已发布版本 —— 一旦发布后才发现漏了，npm 上就只剩两条路：
+      发一个多余的 patch 版本（**不推荐**，见本节第一条），或者**等到下一个版本才送达**。
+      所以正确做法是**在发版前把文档核对干净**，而不是事后补发版本。
 - [ ] 若目标是 npm：`pnpm publish`（`files` 白名单已含 `lib`、`cordis.patch.yml`、`README.md`、
       `LICENSE`、`THIRD_PARTY_NOTICES.md`、`screenshot`；**确认 `lib/` 是最新构建产物**）。
 - [ ] 发布后再跑一次 `node scripts/check-installed-version.mjs`（防止发布动作本身改了 profile）。
@@ -116,6 +125,7 @@ node scripts/dev-install.mjs --apply    # 真装：自动备份 + 零增量 diff
 
 - [ ] 把本版本的**经验教训**沉淀：`docs/issues/` 或 `workbench_submit_knowledge`（知识草稿）。
 - [ ] 相关 issue 关闭并打标签，评论里链接对应 Release。
-- [ ] **外部贡献的致谢要在发版前就位**（v1.15.3 漏过一次，只能靠 v1.15.4 补）：
+- [ ] **外部贡献的致谢在合入时就写上，不要留到发版**（v1.15.3 漏过一次）：
       `README.md` 的致谢段（中英双段）补上贡献者与具体贡献，
       `THIRD_PARTY_NOTICES.md` 登记可追溯信息（报告/PR 链接、许可证、逐项说明）。
+      源头解决就不会出现"发布后才发现致谢漏了"这种被动局面。
