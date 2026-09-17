@@ -233,6 +233,18 @@ test('agent tools write pending drafts and update tasks', async () => {
     // 历史落进 payload —— 界面靠它显示"这是替换、不是新增"
     assert.equal(getDraftBySession(db, 'sess-know').payload.revision, 2)
     assert.deepEqual(getDraftBySession(db, 'sess-know').payload.replacedTitles, ['经验：先验证再开发'])
+    /**
+     * 第三次：**内容与上一次逐字相同**（模型重试工具调用 / 存完再确认一遍）。
+     * 这时不能报"前一次的内容已被本次替换"——那是**假的丢件告警**。
+     */
+    const kOut3 = await submitKnowledge.execute(
+      { title: '经验：换个主题的覆盖测试', content_md: '# 结论 v2', kind_code: 'lesson', tags: ['流程'] },
+      { agent: { session: { id: 'sess-know' } } },
+    )
+    assert.match(kOut3, /内容与本次完全一致/)
+    assert.match(kOut3, /没有覆盖任何内容/)
+    assert.equal(/已被本次替换/.test(kOut3), false, '内容没变就不能说"被替换"')
+    assert.equal(getDraftBySession(db, 'sess-know').payload.revision, 2, '重复提交不得虚增历史')
     // 非法 file_link 会被工具拒绝，不写入草稿
     const badLink = await submitKnowledge.execute(
       { title: '坏链接', content_md: '# x', kind_code: 'note', file_link: 'relative/path.md' },

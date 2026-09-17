@@ -150,6 +150,27 @@ const MUTATIONS = [
     to: 'const notice = null',
     expect: 'KnowledgeDraftBody 必须真的调用提示生成',
   },
+  {
+    name: 'M16 内容完全相同也判成"被覆盖"（重复提交时给出假的丢件告警）',
+    file: MODULE,
+    from: /if \(input\.draftIdProvided === undefined && sameKnowledgeDraftContent\(input\.existing\.payload, input\.nextContent\)\) \{/,
+    to: 'if (false) {',
+    expect: '重复提交相同内容必须单独成一类（unchanged），不得虚报覆盖',
+  },
+  {
+    name: 'M17 unchanged 判据太宽：不比正文（只要标题一样就说"内容没变"）',
+    file: MODULE,
+    from: /\n        && String\(record\.contentMd \?\? ''\) === next\.contentMd/,
+    to: '',
+    expect: '正文换了就必须仍算覆盖',
+  },
+  {
+    name: 'M18 unchanged 判据把历史字段也算进去（首次覆盖后永远判"变了"）',
+    file: MODULE,
+    from: /return String\(record\.title \?\? ''\)\.trim\(\) === next\.title\.trim\(\)/,
+    to: "if (record.revision !== 1) return false;\n    return String(record.title ?? '').trim() === next.title.trim()",
+    expect: '比较只允许看内容字段，不允许看 revision/replacedTitles 这类历史字段',
+  },
 ]
 
 const run = () => spawnSync(process.execPath, ['--test', ...TEST_FILES], { cwd: ROOT, encoding: 'utf8' })

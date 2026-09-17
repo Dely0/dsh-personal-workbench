@@ -67,8 +67,27 @@ export type KnowledgeDraftWriteMode =
   | 'created'
   /** 没传 draft_id，但本会话已有一份 pending 知识草稿 → **静默覆盖**（本次要修的那一半）。 */
   | 'replaced-session-draft'
+  /**
+   * 没传 draft_id，但本会话已有草稿且**内容与本次逐字相同** → 重复提交、没有丢东西。
+   *
+   * 为什么要单独分一类：模型重试一次工具调用、或"存完再确认一遍"是很常见的动作，
+   * 这时若报"前一次的内容已被本次替换"，会给出一个**假的丢件告警** ——
+   * 模型可能因此以为数据被破坏了。内容没变就说内容没变。
+   */
+  | 'unchanged-session-draft'
   /** 传了 draft_id：调用方显式指定了要改哪一份 → 意图明确，不算静默。 */
   | 'updated-draft'
+
+/** 本次要写入的**内容**（不含 revision / replacedTitles 这类历史字段）。 */
+export interface KnowledgeDraftContent {
+  title: string
+  contentMd: string
+  kindCode: string
+  tags: string[]
+  sourceTaskId: string | null
+  sourceReviewId: string | null
+  fileLink: string | null
+}
 
 export interface KnowledgeDraftWritePlan {
   mode: KnowledgeDraftWriteMode
@@ -98,21 +117,64 @@ export function readKnowledgeDraftHistory(payload: unknown): KnowledgeDraftHisto
   return { revision, replacedTitles }
 }
 
+function normalizedTagKey(tags: unknown): string {
+  return (Array.isArray(tags) ? tags : [])
+    .filter((tag): tag is string => typeof tag === 'string')
+    .map((tag) => tag.trim())
+    .filter((tag) => tag !== '')
+    .sort()
+    .join('\u0000')
+}
+
+function nullableText(value: unknown): string | null {
+  return typeof value === 'string' && value !== '' ? value : null
+}
+
+/**
+ * 本会话已有草稿的内容与本次要写的**是不是同一份**。
+ *
+ * 只比内容字段（标题/正文/类型/标签/关联/文件链接），**不比历史字段** ——
+ * 否则第一次覆盖写进去的 `revision` 会让第二次比较永远判定为"变了"。
+ * 标签按集合比（顺序不算差异）。
+ */
+export function sameKnowledgeDraftContent(payload: unknown, next: KnowledgeDraftContent): boolean {
+  const record = (typeof payload === 'object' && payload !== null ? payload : {}) as Record<string, unknown>
+  return String(record.title ?? '').trim() === next.title.trim()
+    && String(record.contentMd ?? '') === next.contentMd
+    && String(record.kindCode ?? 'note') === next.kindCode
+    && normalizedTagKey(record.tags) === normalizedTagKey(next.tags)
+    && nullableText(record.sourceTaskId) === (next.sourceTaskId ?? null)
+    && nullableText(record.sourceReviewId) === (next.sourceReviewId ?? null)
+    && nullableText(record.fileLink) === (next.fileLink ?? null)
+}
+
 /**
  * 判定这次写入是哪一种，并算出写进 payload 的历史。
  *
  * @param input.draftIdProvided 调用方传的 `draft_id`（未传为 `undefined`）
  * @param input.existing 命中的那份草稿（`{ id, payload }`）；未命中为 `undefined`
+ * @param input.nextContent 本次要写入的内容（用于识别"重复提交、内容没变"）
  * @param input.replacedTitle 被覆盖掉的那条标题（`replaced-session-draft` 时用）
  */
 export function planKnowledgeDraftWrite(input: {
   draftIdProvided: string | undefined
   existing: { id: string; payload: unknown } | undefined
+  nextContent: KnowledgeDraftContent
   replacedTitle?: string | null
 }): KnowledgeDraftWritePlan {
   const history = readKnowledgeDraftHistory(input.existing?.payload)
   if (input.existing === undefined) {
     return { mode: 'created', existingDraftId: null, revision: 1, replacedTitles: [], replacedTitle: null }
+  }
+  if (input.draftIdProvided === undefined && sameKnowledgeDraftContent(input.existing.payload, input.nextContent)) {
+    // 重复提交相同内容：没有覆盖掉任何东西，历史原样不动（也不要虚报一次"覆盖"）。
+    return {
+      mode: 'unchanged-session-draft',
+      existingDraftId: input.existing.id,
+      revision: history.revision,
+      replacedTitles: history.replacedTitles,
+      replacedTitle: null,
+    }
   }
   const revision = history.revision + 1
   if (input.draftIdProvided !== undefined) {
@@ -167,6 +229,11 @@ export function knowledgeDraftWriteMessage(plan: KnowledgeDraftWritePlan, draftI
       `被替换的内容用户已经看不到了（本会话第 ${plan.revision} 次提交）。\n` +
       `${KNOWLEDGE_DRAFT_SESSION_CONSTRAINT}\n` +
       '等待用户在工作台确认后入库（入库的将是当前这份）。请勿声称已存入知识库。'
+  }
+  if (plan.mode === 'unchanged-session-draft') {
+    return `本会话已有草稿的内容与本次完全一致（重复提交，没有覆盖任何内容）：id=${draftId}，草稿仍是这一份。\n` +
+      `${KNOWLEDGE_DRAFT_SESSION_CONSTRAINT}\n` +
+      '等待用户在工作台确认后入库。请勿声称已存入知识库。'
   }
   return `知识草稿已更新（id=${draftId}，第 ${plan.revision} 次写入，调用方显式指定了 draft_id），等待用户在工作台确认后入库。请勿声称已存入知识库。`
 }

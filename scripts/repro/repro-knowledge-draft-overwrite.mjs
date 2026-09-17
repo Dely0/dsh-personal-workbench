@@ -113,6 +113,19 @@ check('草稿 payload 里落了覆盖历史（界面靠它显示"这是替换"�
 check('草稿里现在只剩第二次的内容（第一次的内容已被替换掉）',
   draftRow.payload.title === SECOND.title && String(draftRow.payload.contentMd) === SECOND.content_md)
 
+/**
+ * 第三次：内容与第二次**逐字相同**（模型重试工具调用 / 存完再确认一遍）。
+ * 这时不能报"前一次的内容已被本次替换"——那是**假的丢件告警**，会让模型以为数据被破坏了。
+ */
+const out3 = await tool.execute({ ...SECOND, kind_code: 'lesson' }, { agent: { session: { id: SESSION } } })
+console.log('\n===== 第三次提交的工具回执（内容与第二次逐字相同）=====')
+console.log(out3)
+console.log('')
+check('第三次回执说明"内容完全一致 / 没有覆盖任何内容"', /内容与本次完全一致/.test(out3) && /没有覆盖任何内容/.test(out3))
+check('第三次回执不说"已被本次替换"（内容没变就不许报丢件）', /已被本次替换/.test(out3) === false)
+check('第三次没有虚增历史（revision 仍是 2）', getDraft(db, draft).payload.revision === 2,
+  `revision=${String(getDraft(db, draft).payload.revision)}`)
+
 // ---------------------------------------------------------------- 2. 界面：真组件 + 真样式 + 真浏览器
 
 console.log('')

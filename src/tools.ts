@@ -549,9 +549,11 @@ export function submitKnowledgeTool(db: DatabaseSync) {
        * `shared/knowledgeDraftOverwrite.ts`（工具回执与界面提示共用同一份口径，
        * 不许在这里再算一遍）。被替换掉的标题必须**先读出来**再更新，
        * 否则回执只能说"更新了 xxx"，用户仍然不知道没了什么。
+       * `nextContent` 传进去是为了识别"重复提交、内容没变"——
+       * 那种情况不能报"前一次已被替换"（那是假的丢件告警）。
        */
       const previousTitle = existing === undefined ? null : str((existing.payload as Record<string, unknown>).title) ?? null
-      const plan = planKnowledgeDraftWrite({ draftIdProvided: draftId, existing, replacedTitle: previousTitle })
+      const plan = planKnowledgeDraftWrite({ draftIdProvided: draftId, existing, nextContent: payload, replacedTitle: previousTitle })
       const draft = existing !== undefined
         ? updateDraft(db, existing.id, withKnowledgeDraftHistory(payload, plan))
         : createDraft(db, { kindCode: 'knowledge', sessionId, payload: withKnowledgeDraftHistory(payload, plan) })

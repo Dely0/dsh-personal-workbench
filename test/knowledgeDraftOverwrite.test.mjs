@@ -33,8 +33,13 @@ import { readFileSync } from 'node:fs'
 import {
   KNOWLEDGE_DRAFT_REPLACED_TITLES_LIMIT, KNOWLEDGE_DRAFT_SESSION_CONSTRAINT,
   knowledgeDraftOverwriteNotice, knowledgeDraftWriteMessage, planKnowledgeDraftWrite,
-  readKnowledgeDraftHistory, withKnowledgeDraftHistory,
+  readKnowledgeDraftHistory, sameKnowledgeDraftContent, withKnowledgeDraftHistory,
 } from '../lib/shared/knowledgeDraftOverwrite.js'
+
+/** 一份"本次要写入的内容"（判定表用；`planKnowledgeDraftWrite` 必须收到它才能认出重复提交）。 */
+const content = (over = {}) => ({
+  title: 't', contentMd: 'c', kindCode: 'lesson', tags: [], sourceTaskId: null, sourceReviewId: null, fileLink: null, ...over,
+})
 
 const toolsSource = readFileSync(new URL('../src/tools.ts', import.meta.url), 'utf8')
 const indexSource = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8')
@@ -45,7 +50,7 @@ const bodySource = readFileSync(new URL('../src/client/components/KnowledgeDraft
 
 test('planKnowledgeDraftWrite: 本会话没有草稿 → created（第 1 次，无替换记录）', () => {
   assert.deepEqual(
-    planKnowledgeDraftWrite({ draftIdProvided: undefined, existing: undefined }),
+    planKnowledgeDraftWrite({ draftIdProvided: undefined, existing: undefined, nextContent: content() }),
     { mode: 'created', existingDraftId: null, revision: 1, replacedTitles: [], replacedTitle: null },
   )
 })
@@ -53,7 +58,8 @@ test('planKnowledgeDraftWrite: 本会话没有草稿 → created（第 1 次，�
 test('planKnowledgeDraftWrite: 没传 draft_id 但本会话已有草稿 → replaced-session-draft（这就是静默覆盖）', () => {
   const plan = planKnowledgeDraftWrite({
     draftIdProvided: undefined,
-    existing: { id: 'd1', payload: { title: '第一条', revision: 1, replacedTitles: [] } },
+    existing: { id: 'd1', payload: { title: '第一条', contentMd: '旧正文', revision: 1, replacedTitles: [] } },
+    nextContent: content({ title: '第二条', contentMd: '新正文' }),
     replacedTitle: '第一条',
   })
   assert.equal(plan.mode, 'replaced-session-draft')
@@ -63,12 +69,62 @@ test('planKnowledgeDraftWrite: 没传 draft_id 但本会话已有草稿 → repl
   assert.equal(plan.replacedTitle, '第一条')
 })
 
+test('planKnowledgeDraftWrite: 重复提交**完全相同**的内容 → unchanged（不能虚报"前一次已被替换"）', () => {
+  const plan = planKnowledgeDraftWrite({
+    draftIdProvided: undefined,
+    existing: {
+      id: 'd1',
+      payload: { title: '同一条', contentMd: '同正文', kindCode: 'lesson', tags: ['a', 'b'], revision: 2, replacedTitles: ['更早那条'] },
+    },
+    nextContent: content({ title: '同一条', contentMd: '同正文', tags: ['b', 'a'] }), // 标签顺序不算差异
+    replacedTitle: '同一条',
+  })
+  assert.equal(plan.mode, 'unchanged-session-draft')
+  assert.equal(plan.revision, 2, '没覆盖掉任何东西，历史不得虚增')
+  assert.deepEqual(plan.replacedTitles, ['更早那条'], '历史原样保留')
+  assert.equal(plan.replacedTitle, null)
+  const message = knowledgeDraftWriteMessage(plan, 'd1')
+  assert.match(message, /内容与本次完全一致/)
+  assert.match(message, /没有覆盖任何内容/)
+  assert.equal(/已被本次替换/.test(message), false, '内容没变就不能说"被替换"，那是假的丢件告警')
+})
+
+test('planKnowledgeDraftWrite: 内容有实质差异（逐个字段）仍算覆盖', () => {
+  const baseContent = { title: '同一条', contentMd: '同正文', kindCode: 'lesson', tags: ['a'], sourceTaskId: null, sourceReviewId: null, fileLink: null }
+  const base = { ...baseContent, revision: 1, replacedTitles: [] }
+  /**
+   * **逐字段**列出差异：每个用例只改**一个**字段，其余与 `baseContent` 逐字相同。
+   *
+   * 为什么必须这样构造："某个字段没参与比较"这种缺陷，只有拿该字段**单独**做差异才会暴露。
+   * 第一版几个用例顺便改了标签，于是"把正文比较删掉"照样全绿
+   * —— 被变异探针 M17 抓出来后才改成现在这样。
+   */
+  const differing = [
+    ['正文', { ...baseContent, contentMd: '换了正文' }],
+    ['类型', { ...baseContent, kindCode: 'decision' }],
+    ['标签（加）', { ...baseContent, tags: ['a', 'b'] }],
+    ['标签（去）', { ...baseContent, tags: [] }],
+    ['关联任务', { ...baseContent, sourceTaskId: 'task-1' }],
+    ['来源复盘', { ...baseContent, sourceReviewId: 'review-1' }],
+    ['本地文件', { ...baseContent, fileLink: 'D:\\a.md' }],
+    ['标题', { ...baseContent, title: '换了个标题' }],
+  ]
+  for (const [field, nextContent] of differing) {
+    const plan = planKnowledgeDraftWrite({ draftIdProvided: undefined, existing: { id: 'd1', payload: { ...base } }, nextContent })
+    assert.equal(plan.mode, 'replaced-session-draft', `${field}变了就必须判成覆盖`)
+    assert.equal(sameKnowledgeDraftContent({ ...base }, nextContent), false, `${field}变了：sameKnowledgeDraftContent 必须为 false`)
+  }
+  // 反例：只有标签顺序不同，算同一份内容
+  assert.equal(sameKnowledgeDraftContent({ ...base, tags: ['b', 'a'] }, { ...baseContent, tags: ['a', 'b'] }), true)
+  assert.equal(sameKnowledgeDraftContent({ ...base }, baseContent), true)
+})
+
 test('planKnowledgeDraftWrite: 连续覆盖会累计历史（revision 递增、标题按时间先后入列）', () => {
-  const first = planKnowledgeDraftWrite({ draftIdProvided: undefined, existing: undefined })
-  const p1 = withKnowledgeDraftHistory({ title: 'A' }, first)
-  const second = planKnowledgeDraftWrite({ draftIdProvided: undefined, existing: { id: 'd1', payload: p1 }, replacedTitle: 'A' })
-  const p2 = withKnowledgeDraftHistory({ title: 'B' }, second)
-  const third = planKnowledgeDraftWrite({ draftIdProvided: undefined, existing: { id: 'd1', payload: p2 }, replacedTitle: 'B' })
+  const first = planKnowledgeDraftWrite({ draftIdProvided: undefined, existing: undefined, nextContent: content({ title: 'A' }) })
+  const p1 = withKnowledgeDraftHistory(content({ title: 'A' }), first)
+  const second = planKnowledgeDraftWrite({ draftIdProvided: undefined, existing: { id: 'd1', payload: p1 }, nextContent: content({ title: 'B' }), replacedTitle: 'A' })
+  const p2 = withKnowledgeDraftHistory(content({ title: 'B' }), second)
+  const third = planKnowledgeDraftWrite({ draftIdProvided: undefined, existing: { id: 'd1', payload: p2 }, nextContent: content({ title: 'C' }), replacedTitle: 'B' })
   assert.equal(third.revision, 3)
   assert.deepEqual(third.replacedTitles, ['A', 'B'])
   // 界面提示要能一眼看出"前两次都没了"
@@ -81,6 +137,7 @@ test('planKnowledgeDraftWrite: 传了 draft_id 是显式修订（updated-draft�
   const plan = planKnowledgeDraftWrite({
     draftIdProvided: 'd1',
     existing: { id: 'd1', payload: { title: '第一条', revision: 1, replacedTitles: [] } },
+    nextContent: content({ title: '第一条' }),
     replacedTitle: '第一条',
   })
   assert.equal(plan.mode, 'updated-draft')
@@ -112,7 +169,8 @@ test('回执：三种模式措辞必须不同，覆盖那条要说清"不是新�
 
   const replaced = knowledgeDraftWriteMessage(planKnowledgeDraftWrite({
     draftIdProvided: undefined,
-    existing: { id: 'd1', payload: { title: '旧标题' } },
+    existing: { id: 'd1', payload: { title: '旧标题', contentMd: '旧正文' } },
+    nextContent: content({ title: '新标题', contentMd: '新正文' }),
     replacedTitle: '旧标题',
   }), 'd1')
   assert.match(replaced, /已更新本会话已有草稿（id=d1）/)
@@ -121,7 +179,8 @@ test('回执：三种模式措辞必须不同，覆盖那条要说清"不是新�
 
   const updated = knowledgeDraftWriteMessage(planKnowledgeDraftWrite({
     draftIdProvided: 'd1',
-    existing: { id: 'd1', payload: { title: '旧标题' } },
+    existing: { id: 'd1', payload: { title: '旧标题', contentMd: '旧正文' } },
+    nextContent: content({ title: '新标题', contentMd: '新正文' }),
   }), 'd1')
   assert.match(updated, /知识草稿已更新（id=d1/)
   assert.notEqual(created, replaced)
@@ -129,7 +188,7 @@ test('回执：三种模式措辞必须不同，覆盖那条要说清"不是新�
 })
 
 test('回执：新建那条也要写明"一个会话只产生 1 条"与绕行路由（提示第一条就可能被覆盖）', () => {
-  const created = knowledgeDraftWriteMessage(planKnowledgeDraftWrite({ draftIdProvided: undefined, existing: undefined }), 'd1')
+  const created = knowledgeDraftWriteMessage(planKnowledgeDraftWrite({ draftIdProvided: undefined, existing: undefined, nextContent: content() }), 'd1')
   assert.match(created, /一个会话最多产出 1 条知识/)
   assert.match(created, /POST \/api\/workbench\/drafts/)
   assert.match(KNOWLEDGE_DRAFT_SESSION_CONSTRAINT, /一个会话最多产出 1 条知识/)
@@ -160,7 +219,7 @@ test('界面提示：只有显式修订（没有 replacedTitles）时不冒充"�
 // ---------------------------------------------------------------- 接线（源码级）
 
 test('接线：工具必须用唯一实现，且旧措辞「知识草稿已保存」不得回来', () => {
-  assert.match(toolsSource, /planKnowledgeDraftWrite\(\{ draftIdProvided: draftId, existing/)
+  assert.match(toolsSource, /planKnowledgeDraftWrite\(\{ draftIdProvided: draftId, existing, nextContent: payload, replacedTitle: previousTitle \}\)/)
   assert.match(toolsSource, /withKnowledgeDraftHistory\(payload, plan\)/)
   assert.match(toolsSource, /knowledgeDraftWriteMessage\(plan, draftIdOut\)/)
   assert.equal(/知识草稿已保存/.test(toolsSource), false, '旧措辞会把"覆盖"读成"新建"，必须删掉')
