@@ -74,6 +74,12 @@ export interface DraftBannerProps {
   /** 确认后的补充提示（例如"复盘已写入团队记忆 2 条"/"记忆库不可达，本地已留档待补传"）。 */
   onNotice?: (message: string, tone: 'success' | 'warning') => void
   /**
+   * 这条会话**现在还能不能切过去**（宿主归档集 / 会话列表判定）。
+   *
+   * 由外层注入（只有它拿得到宿主服务），本组件负责"不可用就别裸切、给一句明确提示"。
+   */
+  isSessionUsable?: (sessionId: string) => boolean
+  /**
    * 这份草稿已经被"处理过"了（确认 / 放弃 / 存在性已被服务端终结）。
    *
    * 与 `onDone` 的区别：`onDone` 只表示"UI 可以收起来了"，而这个是告诉外层
@@ -261,7 +267,7 @@ export function reviewMemoryNotes(payload: Record<string, unknown>): string[] {
   ))
 }
 
-export function DraftBanner({ draft, onDone, runtime, closePanel, kindName, onProblems, onNotice, onDismissed, onClose, onConfirmed, onSettled, switchedFrom, memoryAvailable = false }: DraftBannerProps): ReactNode {
+export function DraftBanner({ draft, onDone, runtime, closePanel, kindName, onProblems, onNotice, isSessionUsable, onDismissed, onClose, onConfirmed, onSettled, switchedFrom, memoryAvailable = false }: DraftBannerProps): ReactNode {
   const [busy, setBusy] = useState(false)
   /**
    * 复盘的团队记忆可见性（v1.14.0：复盘确认时自动写入团队记忆库）。
@@ -387,6 +393,10 @@ export function DraftBanner({ draft, onDone, runtime, closePanel, kindName, onPr
   const openSession = (): void => {
     if (presentation.sessionId === '') {
       onNotice?.('这份草稿没有关联会话（可能是手动创建的），无法跳回。', 'warning')
+      return
+    }
+    if (isSessionUsable !== undefined && !isSessionUsable(presentation.sessionId)) {
+      onNotice?.('这条会话已被归档或删除，无法跳回；可在工作台重新发起同一件事。', 'warning')
       return
     }
     let failure = ''
