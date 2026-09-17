@@ -248,13 +248,32 @@ export function recencyFactor(updatedAt: string, now: Date): number {
 /**
  * 打分一条候选。返回 `undefined` 表示**没有任何字段命中** ——
  * 调用方据此区分"库里根本没有"与"有但分数低"。
- *
- * 聚焦输入（`q.query` 只给"任务标题"这类短文本）时，正文/标签命中**也算过线**，
- * 以便"开工前只拿得到任务标题"的那一次召回不至于零命中。
  */
 export interface ScoreContext {
   terms: readonly string[]
   now: Date
+}
+
+/**
+ * **单字段**打分（v1.15.4 修的 F5：三个字段各自算分，取最高，不混用）。
+ *
+ * 修之前的写法是"权重取命中的最高一档，覆盖率取**所有字段的并集**"，
+ * 于是在真实库上出现了这样一条：某篇泛化长文（正文 3000+ 字）与提问只共享
+ * **标题里的 1 个字**，却因为正文命中了 8 个字，覆盖率被抬到 0.9，
+ * 最终拿到 `0.55 × 1 × 0.95 ≈ 0.52` —— 在「四时机」的 4 次不同提问里有 3 次都挤进 top-3。
+ * 这正是验收标准第 5 条「无明显不相关条目被反复注入」要拦的现象。
+ *
+ * 现在：**一个字段自成一个分数**，覆盖率与长度因子都只在该字段内部计算，
+ * 最后取三者最大。同一例子里标题档只剩 `0.55 × 1/3 × 0.59 ≈ 0.11`，正文档 `≈ 0.22`，
+ * 双双低于阈值。
+ */
+function fieldScore(weight: number, hits: number, totalTerms: number): number {
+  if (hits <= 0) return 0
+  // 长度因子：命中 3 个词就到顶（中文逐字抽词下，"盘符根"这种共享 3 个字已相当具体）
+  const lengthFactor = Math.min(1, hits / LENGTH_SATURATION)
+  // 覆盖率：命中数 / 本次检索的关键词总数，半量起步（短提问不被过度惩罚）
+  const coverage = totalTerms === 0 ? 0 : Math.min(1, hits / totalTerms)
+  return weight * lengthFactor * (0.5 + 0.5 * coverage)
 }
 
 export function scoreCandidate(candidate: RecallCandidate, context: ScoreContext): RecallHit | undefined {
@@ -266,41 +285,27 @@ export function scoreCandidate(candidate: RecallCandidate, context: ScoreContext
   const titleTerms = termsIn(title, context.terms)
   const tagTerms = context.terms.filter((term) => tags.some((tag) => tag.includes(term)))
   const bodyTerms = termsIn(body, context.terms)
-  const hitTermCount = new Set([...titleTerms, ...tagTerms, ...bodyTerms]).size
-  if (hitTermCount === 0) return undefined
+  if (titleTerms.length + tagTerms.length + bodyTerms.length === 0) return undefined
 
-  const weight = Math.max(
-    titleTerms.length > 0 ? WEIGHT.title : 0,
-    tagTerms.length > 0 ? WEIGHT.tag : 0,
-    bodyTerms.length > 0 ? WEIGHT.body : 0,
-  )
-  /**
-   * 归一化：除以**本次检索的关键词总数**，而不是给每个命中词发奖金。
-   *
-   * 见文件头那段实测教训 —— 长提问逐字命中很容易，"按词数加分"会让阈值与排序同时失效。
-   * `total = 0` 在调用链上不可能（关键词为空时 `recallKnowledge` 已经跳过），
-   * 这里仍然守住，免得将来有人直接调 `scoreCandidate` 时得到 NaN。
-   */
   const totalTerms = context.terms.length
-  const coverage = totalTerms === 0 ? 0 : Math.min(1, hitTermCount / totalTerms)
-  /**
-   * 长度因子：命中 3 个词就到顶（`LENGTH_SATURATION`）。
-   *
-   * 为什么是 3：中文逐字抽词下，一条短标题与提问共享 3 个字已经相当具体
-   * （"盘符根"）；再往上加对"是不是同一件事"几乎没有增量信息，
-   * 却会让长正文靠体量白拿分。见文件头那段实测。
-   */
-  const lengthFactor = Math.min(1, hitTermCount / LENGTH_SATURATION)
-  const score = clamp01(weight * lengthFactor * (0.5 + 0.5 * coverage))
+  const titleScore = fieldScore(WEIGHT.title, titleTerms.length, totalTerms)
+  const tagScore = fieldScore(WEIGHT.tag, tagTerms.length, totalTerms)
+  const bodyScore = fieldScore(WEIGHT.body, bodyTerms.length, totalTerms)
+  const score = clamp01(Math.max(titleScore, tagScore, bodyScore))
 
+  /**
+   * 命中的字段（用于理由与展示）：取**得分最高**的那一档。
+   * 三个字段的并集仍作为 `terms` 返回（便于人看"到底碰了哪些字"），
+   * 但**分数只由胜出的那个字段决定** —— 这是 F5 的修复点。
+   */
+  const winner = score === titleScore && titleScore > 0
+    ? { label: '标题', terms: titleTerms, weight: WEIGHT.title }
+    : score === tagScore && tagScore > 0
+      ? { label: '标签', terms: tagTerms, weight: WEIGHT.tag }
+      : { label: '正文', terms: bodyTerms, weight: WEIGHT.body }
   const terms = [...new Set([...titleTerms, ...tagTerms, ...bodyTerms])]
-  const cover = `${hitTermCount}/${totalTerms}`
-  const where = [
-    titleTerms.length > 0 ? `标题命中「${titleTerms.join('、')}」` : '',
-    tagTerms.length > 0 ? `标签命中「${tagTerms.join('、')}」` : '',
-    bodyTerms.length > 0 ? `正文命中「${bodyTerms.join('、')}」` : '',
-  ].filter((item) => item !== '')
-  const reason = `${candidate.fromTask ? '本任务' : '全库'} · ${where.join(' + ')}（覆盖 ${cover}）→ ${score.toFixed(2)}`
+  const reason = `${candidate.fromTask ? '本任务' : '全库'} · ${winner.label}命中「${winner.terms.join('、')}」`
+    + `（该字段命中 ${winner.terms.length}/${totalTerms} 个关键词）→ ${score.toFixed(2)}`
 
   // 片段：优先取正文里第一个命中词的上下文；正文没命中就取开头。
   const raw = String(entry.contentMd ?? '').replace(/\s+/g, ' ').trim()
@@ -402,9 +407,17 @@ export function recallKnowledge(input: RecallInput): RecallOutcome {
  * - 按 id 去重，保留**分数更高**的那次（同分保留先出现的，于是结果稳定）；
  * - `matched` / `droppedByScore` 也按 id 去重后计数 —— 否则同一篇条目会在两句话里
  *   各算一次"命中过"，日志里的账会虚高一倍；
- * - 每条命中带上 `query`（哪句话带出来的），日志才能如实回显。
+ * - 每条命中带上 `query`（哪句话带出来的），日志才能如实回显；
+ * - **合并后必须重新施加单回合上限**（`maxEntries`）并把截掉的条数记进 `droppedByLimit`。
+ *   不这么做的话，两句 query 各自命中 3 条、去重后互不重叠 → 一次注入 6 条，
+ *   上限被绕过（线上实测出现过「注入 5 条」，见 `.review-evidence/live-log-hits.txt`）；
+ *   而 `droppedByLimit` 还是 0，日志的账也对不上。
  */
-export function mergeRecallOutcomes(inputs: Array<{ query: string; outcome: RecallOutcome }>): RecallOutcome {
+export function mergeRecallOutcomes(
+  inputs: Array<{ query: string; outcome: RecallOutcome }>,
+  options: { maxEntries?: number } = {},
+): RecallOutcome {
+  const maxEntries = Math.max(1, options.maxEntries ?? RECALL_DEFAULTS.maxEntries)
   const skippedReasons = inputs.map((item) => item.outcome.skippedReason).filter((reason): reason is string => reason !== undefined)
   const base: RecallOutcome = {
     query: inputs.map((item) => item.query).join(' ／ '),
@@ -424,9 +437,11 @@ export function mergeRecallOutcomes(inputs: Array<{ query: string; outcome: Reca
   const order: string[] = []
   let matched = 0
   let droppedByScore = 0
+  let droppedAsSeen = 0
   for (const { query, outcome } of inputs) {
     matched += outcome.matched - outcome.hits.length
     droppedByScore += outcome.droppedByScore
+    droppedAsSeen += outcome.droppedAsSeen
     for (const hit of outcome.hits) {
       const seen = best.get(hit.id)
       if (seen === undefined) {
@@ -438,10 +453,11 @@ export function mergeRecallOutcomes(inputs: Array<{ query: string; outcome: Reca
       if (hit.score > seen.score) best.set(hit.id, { ...hit, query })
     }
   }
-  const hits = order
+  const ranked = order
     .map((id) => best.get(id)!)
     .sort((a, b) => b.score - a.score || Number(b.fromTask) - Number(a.fromTask) || a.id.localeCompare(b.id))
-  return { ...base, hits, matched, droppedByScore }
+  const hits = ranked.slice(0, maxEntries)
+  return { ...base, hits, matched, droppedByScore, droppedByLimit: ranked.length - hits.length, droppedAsSeen }
 }
 
 /**

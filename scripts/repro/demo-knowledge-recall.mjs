@@ -109,6 +109,28 @@ const TIMINGS = [
 ]
 
 const timings = []
+/**
+ * 时机 ① 的**自动路径**：`agent/session-start` → `prime()`（拿任务标题 + 描述检索）。
+ * 这里显式跑一次 `prime`，因为它是"开工前"真正的自动入口；
+ * 下面的循环演示的是"按提问检索"（`prefetch`，对应 `agent/turn-stopping`）。
+ */
+{
+  const sessionId = sessionFor('before')
+  manager.drainLogs()
+  const primed = manager.prime(sessionId, undefined)
+  const text = manager.injectionFor(sessionId, 0)
+  say('─'.repeat(78))
+  say(`【① 执行任务前 · session-start 自动召回】用任务标题 + 描述分句检索`)
+  for (const line of manager.drainLogs()) say(`  ${line.replace('[workbench-knowledge] ', '')}`)
+  for (const hit of primed?.hits ?? []) say(`  ✔ [${hit.id.slice(0, 8)}] ${hit.title}  相关度 ${hit.score.toFixed(2)}｜${hit.reason}`)
+  say(`  会话里可见的注入文本：${text === '' ? '(无)' : `【工作台知识库】… ${text.split('\n').filter((l) => l.startsWith('- [')).length} 条`}`)
+  if (primed !== undefined && primed.hits.length > 0) {
+    const report = manager.reportUsage(sessionId, [primed.hits[0].id])
+    const rows = listRecallLog(db, { sessionId, limit: 1 })
+    say(`  日志行（落库）：trigger=${rows[0]?.trigger} injected=${rows[0]?.injected} cited=${JSON.stringify(rows[0]?.citedIds ?? [])}（回报命中 ${report.updated} 行）`)
+  }
+}
+
 for (const spec of TIMINGS) {
   const sessionId = sessionFor(spec.suffix)
   let chosen = null
@@ -146,7 +168,12 @@ console.log('')
 for (const timing of timings) {
   check(`${timing.label} → 有可见的检索结论（命中 ${timing.hits.length} 条，query=「${timing.query}」）`, timing.hits.length > 0)
 }
-check('四个时机各留下一条落库日志（关键词/命中/是否被引用可回看）', timings.every((t) => listRecallLog(db, { sessionId: t.sessionId }).length === 1))
+check('四个时机各留下落库日志（关键词/命中/是否被引用可回看）',
+  timings.every((t) => listRecallLog(db, { sessionId: t.sessionId }).length >= 1))
+check('①「开工前」走的是 session-start 自动路径（trigger=session_start）',
+  listRecallLog(db, { sessionId: sessionFor('before') }).some((row) => row.trigger === 'session_start'))
+check('②③④ 走的是回合预取路径（trigger=turn）',
+  ['error', 'code', 'accept'].every((suffix) => listRecallLog(db, { sessionId: sessionFor(suffix) }).some((row) => row.trigger === 'turn')))
 
 // ------------------------------------------------------------------ ② 开关关闭后不再注入
 console.log('\n=== 开关：关掉后不再注入 ===')
@@ -214,6 +241,30 @@ for (let index = 0; index + 2 < outside.length && index < 8; index += 3) {
   say(`  [B 完全无关] 「${query}」→ 命中 ${outcome.hits.length} 条（候选池匹配 ${outcome.matched}）`)
 }
 check('B 完全无关型诱饵**零命中**（库外字捞不到任何条目）', outsideHits === 0, `${outsideQueries} 条查询共命中 ${outsideHits} 条、候选池匹配 ${outsideMatched} 条`)
+
+/**
+ * **C. 跨提问重复注入**（v1.15.4 补的断言 —— 这是上一版 demo 的盲区）。
+ *
+ * 独立审查者指出：A/B 两类诱饵都太容易过 ——
+ * A 只验"不比真实提问更宽"，B 用库外字（命中它的前提是零命中）。
+ * 真正会让人烦的噪声是**同一篇泛化长文在多次不同提问里反复出现**，
+ * 而 v1.15.3 确实在真实库上发作了：一篇 3000+ 字的经验贴在 4 次提问里进了 3 次 top-3。
+ * 成因：权重取"命中最高的字段"、覆盖率却取三字段并集 → 标题碰巧共享 1 个字就解锁 0.55。
+ */
+const QUERIES_FOR_REPEAT = ['知识库 自动调用 会话 注入', '方向图 内存溢出 卡死', '证据链 反向验证 变异测试', '复盘 根因分析 多轮返工']
+const repeatCounts = new Map()
+for (const query of QUERIES_FOR_REPEAT) {
+  const outcome = manager.recallToText({ taskId: taskWithKnowledge, query })
+  for (const hit of outcome.hits) {
+    repeatCounts.set(hit.id, { title: hit.title, n: (repeatCounts.get(hit.id)?.n ?? 0) + 1 })
+  }
+}
+const repeated = [...repeatCounts.entries()].filter(([, value]) => value.n >= 3)
+for (const [id, value] of repeatCounts) {
+  if (value.n >= 2) say(`  [C 重复] ${value.title.slice(0, 36)} 在 ${value.n}/${QUERIES_FOR_REPEAT.length} 次提问里进 top-3 (${id.slice(0, 8)})`)
+}
+check('C 没有条目在 ≥3 次不同提问里反复进入 top-3（验收第 5 条）', repeated.length === 0,
+  repeated.length === 0 ? `${QUERIES_FOR_REPEAT.length} 次提问无重复项` : `反复出现：${repeated.map(([, v]) => v.title).join(' / ')}`)
 
 const batch = ['知识库自动调用', '迁移颜色', 'plugin add ENOENT', '历史经验', '触发时机']
 let totalHits = 0

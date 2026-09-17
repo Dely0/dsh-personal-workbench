@@ -161,11 +161,29 @@ export function listRecallLog(db: DatabaseSync, options: { sessionId?: string; l
 export function citeRecallLog(db: DatabaseSync, input: { sessionId: string; ids: string[]; at?: string }): number {
   const ids = [...new Set(input.ids.filter((id) => typeof id === 'string' && id.trim() !== ''))]
   if (ids.length === 0) return 0
-  const rows = db.prepare('SELECT id, hits_json, cited_ids_json FROM knowledge_recall_log WHERE session_id = ? ORDER BY id DESC LIMIT 200')
-    .all(input.sessionId) as unknown as Array<{ id: number; hits_json: string; cited_ids_json: string }>
+  /**
+   * **按 id 反查行**，不做"最近 N 行"的截断（v1.15.4 修的自查 F5）。
+   *
+   * 原实现是 `ORDER BY id DESC LIMIT 200`：一个长会话（每回合 1 行 + 每次工具检索 1 行）
+   * 很容易超过 200 行，此时模型回报的引用会落到"记忆里带过、但日志里查不到"的旧行上，
+   * 调用方拿到的 `updated = 0` 还会被工具话术说成"没有匹配到本会话的召回记录" ——
+   * 把"日志没扫到"说成"你没查过"。实测：251 行时最旧那行的引用被静默丢弃。
+   *
+   * 现在按每个 id 精确反查（`hits_json LIKE '%id%'`；id 是 uuid，不会误命中），
+   * 那个 1000 只是"异常多行"时的性能兜底，不再偷偷决定"谁可以被标记"。
+   */
+  const select = db.prepare(
+    'SELECT id, hits_json, cited_ids_json FROM knowledge_recall_log WHERE session_id = ? AND hits_json LIKE ? ORDER BY id DESC LIMIT 1000',
+  )
+  const rows = new Map<number, { id: number; hits_json: string; cited_ids_json: string }>()
+  for (const id of ids) {
+    for (const row of select.all(input.sessionId, `%${id}%`) as unknown as Array<{ id: number; hits_json: string; cited_ids_json: string }>) {
+      rows.set(row.id, row)
+    }
+  }
   const update = db.prepare('UPDATE knowledge_recall_log SET cited_ids_json = ? WHERE id = ?')
   let affected = 0
-  for (const row of rows) {
+  for (const row of rows.values()) {
     /**
      * 只认**这一行真的把该条目带给过模型**的那些 id。
      *

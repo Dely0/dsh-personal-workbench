@@ -19,19 +19,26 @@ import { dirname, join } from 'node:path'
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
 const CORE = join(ROOT, 'lib', 'shared', 'knowledgeRecall.js')
 const MANAGER = join(ROOT, 'lib', 'knowledge-recall.js')
+const LOG = join(ROOT, 'lib', 'knowledge-recall-log.js')
+const REPO_KNOWLEDGE = join(ROOT, 'lib', 'db', 'repo', 'knowledge.js')
 const TEST_FILES = [
   'test/knowledgeRecallPure.test.mjs',
   'test/knowledgeRecallManager.test.mjs',
   'test/knowledgeRecallRoutes.test.mjs',
+  'test/knowledgeRecallWiring.test.mjs',
 ]
 
 const MUTATIONS = [
   {
-    name: 'M1 打分退回第一版"逐字加分"（0.55 + 0.06×命中词数）→ 长正文堆字就能到 1.00',
+    name: 'M1 打分退回"字段混用"：权重取最高档、覆盖率取三字段并集（v1.15.3 的噪声根因）',
     file: CORE,
-    from: /const score = clamp01\(weight \* lengthFactor \* \(0\.5 \+ 0\.5 \* coverage\)\)/,
-    to: 'const score = clamp01(weight + 0.06 * (hitTermCount - 1))',
-    expect: '分数 = 权重 × 长度因子 × 覆盖率',
+    from: /const score = clamp01\(Math\.max\(titleScore, tagScore, bodyScore\)\);/,
+    to: [
+      'const allHits = new Set([...titleTerms, ...tagTerms, ...bodyTerms]).size;',
+      '    const weight = Math.max(titleTerms.length > 0 ? WEIGHT.title : 0, tagTerms.length > 0 ? WEIGHT.tag : 0, bodyTerms.length > 0 ? WEIGHT.body : 0);',
+      '    const score = clamp01(weight * Math.min(1, allHits / LENGTH_SATURATION) * (0.5 + 0.5 * Math.min(1, allHits / totalTerms)));',
+    ].join('\n    '),
+    expect: '权重与覆盖率必须来自同一个字段',
   },
   {
     name: 'M2 长度因子不封顶（长正文靠体量白拿分）',
@@ -43,8 +50,8 @@ const MUTATIONS = [
   {
     name: 'M3 去掉覆盖率因子（只共享一个字也拿满分权重）',
     file: CORE,
-    from: /weight \* lengthFactor \* \(0\.5 \+ 0\.5 \* coverage\)/,
-    to: 'weight * lengthFactor',
+    from: /return weight \* lengthFactor \* \(0\.5 \+ 0\.5 \* coverage\);/,
+    to: 'return weight * lengthFactor;',
     expect: '命中覆盖率必须参与打分',
   },
   {
@@ -64,8 +71,8 @@ const MUTATIONS = [
   {
     name: 'M6 时间重新进分数（"新旧"污染相关性档位 —— 实测踩过的原形态）',
     file: CORE,
-    from: /const score = clamp01\(weight \* lengthFactor \* \(0\.5 \+ 0\.5 \* coverage\)\)/,
-    to: 'const score = clamp01(weight * lengthFactor * (0.5 + 0.5 * coverage) + 0.04 * recencyFactor(entry.updatedAt, context.now))',
+    from: /return weight \* lengthFactor \* \(0\.5 \+ 0\.5 \* coverage\);/,
+    to: 'return weight * lengthFactor * (0.5 + 0.5 * coverage) + 0.04;',
     expect: '新旧只做同分排序，不进分数',
   },
   {
@@ -82,14 +89,62 @@ const MUTATIONS = [
     to: 'return false;',
     expect: '纯汉字查询至少要两个字才算有信息量',
   },
+  {
+    name: 'M14 合并后不重新施加单回合上限（两句 query → 最多 6 条）',
+    file: CORE,
+    from: /const hits = ranked\.slice\(0, maxEntries\);/,
+    to: 'const hits = ranked;',
+    expect: '合并后必须仍受单回合上限约束',
+  },
+  {
+    name: 'M15 事件解包退回顶层字段（真实事件在 data 信封里 → 每回合召回静默失效）',
+    file: MANAGER,
+    from: /return shaped\?\.data !== null && typeof shaped\?\.data === 'object' && !Array\.isArray\(shaped\?\.data\)/,
+    to: 'return false && shaped?.data !== null && typeof shaped?.data === \'object\' && !Array.isArray(shaped?.data)',
+    expect: '必须解包 data 信封（团队记忆实测过的坑）',
+  },
+  {
+    name: 'M16 不过滤插件注入的消息（把运行时快照当成用户提问 → 自激）',
+    file: MANAGER,
+    from: /if \(kind === 'plugin'\)\r?\n\s*return false;/,
+    to: "if (kind === 'plugin') return true;",
+    expect: '只认用户本人写的消息',
+  },
+  {
+    name: 'M17 开关退回"config 优先"（设置页开关被静默架空 = 假控件）',
+    file: MANAGER,
+    from: /const stored = readMeta\(this\.db, AUTO_RECALL_KEY\);\r?\n\s*if \(stored !== undefined\)\r?\n\s*return stored !== '0';\r?\n\s*return this\.options\.enabled \?\? true;/,
+    to: "if (this.options.enabled !== undefined)\n            return this.options.enabled;\n        return (readMeta(this.db, AUTO_RECALL_KEY) ?? '1') !== '0';",
+    expect: 'meta（用户显式动作）是唯一权威源',
+  },
+  {
+    name: 'M18 候选集退回 500（全库超 500 条时静默少召回）',
+    file: MANAGER,
+    from: /listKnowledge\(this\.db, \{ limit: RECALL_MAX_CANDIDATES \}\)/,
+    to: 'listKnowledge(this.db, { limit: 500 })',
+    expect: '候选集必须是全量',
+  },
+  {
+    name: 'M19 引用回报退回"只扫最近 200 行"（长会话旧行的引用被静默丢弃）',
+    file: LOG,
+    from: /const rows = new Map\(\);\r?\n\s*for \(const id of ids\) \{\r?\n\s*for \(const row of select\.all\(input\.sessionId, `%\$\{id\}%`\)\) \{\r?\n\s*rows\.set\(row\.id, row\);\r?\n\s*\}\r?\n\s*\}/,
+    to: "const rows = new Map();\n    const legacy = db.prepare('SELECT id, hits_json, cited_ids_json FROM knowledge_recall_log WHERE session_id = ? ORDER BY id DESC LIMIT 200').all(input.sessionId);\n    for (const row of legacy) rows.set(row.id, row);",
+    expect: '引用要能回填到会话里最旧的那一行',
+  },
+  {
+    name: 'M20 关联晚到时不再补做「开工前」（新会话的开工前召回静默消失）',
+    file: MANAGER,
+    from: /if \(!state\.primed\) \{/,
+    to: 'if (false) {',
+    expect: '关联到手后要补一次开工前召回',
+  },
   /**
    * ⚠️ 两条**刻意不收录**的变异，记在这里免得下次重复试：
    * 1. 「关掉开关时不清 pendingText」（加注释但不清也一样全绿）——
    *    `injectionFor` 的闸门会把那一份兜住，所以是**等价变异**；
    * 2. 「删掉 injectionFor 里的开关闸门」—— 也全绿，因为 `setSessionEnabled`
    *    在写开关时已经清空了 pendingText（两道防线互为兜底）。
-   * 两条都是等价变异，不是"没有断言守"。真正守这个行为的是下面 M10 那条
-   * （清空 + 闸门同时撤掉 → 复现"关了还在带出"）。
+   * 两条都是等价变异，不是"没有断言守"。
    */
   {
     name: 'M9 重新打开时不去重（清掉的 seenIds 不还原成空集 → 打开了也不带出东西）',
@@ -110,6 +165,7 @@ const MUTATIONS = [
     file: MANAGER,
     from: /const queries = \[task\?\.title \?\? '', task\?\.description \?\? ''\]/,
     to: "const queries = [[task?.title ?? '', task?.description ?? ''].filter((part) => part.trim() !== '').join(' ')]",
+    expect: '多句 query 必须分句检索后合并',
   },
   {
     name: 'M12 合并时不再按 id 取最高分（同一篇被两句话各算一次）',
@@ -119,10 +175,27 @@ const MUTATIONS = [
     expect: '按 id 去重并保留分数更高的那次',
   },
   {
-    name: 'M13 引用回报不比对 hits（把引用写到"什么都没带出来"的日志行上）',
-    file: join(ROOT, 'lib', 'knowledge-recall-log.js'),
-    from: /const mine = ids\.filter\(\(id\) => delivered\.includes\(id\)\);/,
-    to: 'const mine = ids;',
+    name: 'M13 引用回报的两道防线一起撤掉（把引用写到"什么都没带出来"的日志行上）',
+    /**
+     * ⚠️ 必须**同时**撤掉两道才可观测：单独把 `mine = ids.filter(delivered)` 换成 `mine = ids`
+     * 是**等价变异** —— SQL 已经用 `hits_json LIKE %id%` 把"没带出过该条目"的行筛掉了。
+     * 所以这里用 `edits`（多处编辑）：既去掉 LIKE 预筛，又去掉 delivered 判定。
+     */
+    file: LOG,
+    edits: [
+      {
+        from: /WHERE session_id = \? AND hits_json LIKE \? ORDER BY id DESC LIMIT 1000/,
+        to: 'WHERE session_id = ? ORDER BY id DESC LIMIT 1000',
+      },
+      {
+        from: /for \(const id of ids\) \{\r?\n\s*for \(const row of select\.all\(input\.sessionId, `%\$\{id\}%`\)\) \{/,
+        to: 'for (const id of ids) {\n        for (const row of select.all(input.sessionId, `%${id}%`)) {',
+      },
+      {
+        from: /const mine = ids\.filter\(\(id\) => delivered\.includes\(id\)\);/,
+        to: 'const mine = ids;',
+      },
+    ],
     expect: '只有真的把该条目带给过模型的那一行才配记引用',
   },
 ]
@@ -140,13 +213,18 @@ console.log(`基线：${TEST_FILES.join(' + ')} 全绿\n`)
 let failures = 0
 for (const mutation of MUTATIONS) {
   const original = readFileSync(mutation.file, 'utf8')
-  if (!mutation.from.test(original)) {
+  // 支持 `edits: [{from,to}, …]`（有些缺陷必须同时撤掉两道防线才可观测）
+  const edits = mutation.edits ?? [{ from: mutation.from, to: mutation.to }]
+  const unmatched = edits.filter((edit) => !edit.from.test(original))
+  if (unmatched.length > 0) {
     console.error(`✖ ${mutation.name}\n    变异点没匹配上（源码结构变了，需要同步本探针）`)
     failures += 1
     continue
   }
   try {
-    writeFileSync(mutation.file, original.replace(mutation.from, mutation.to))
+    let mutated = original
+    for (const edit of edits) mutated = mutated.replace(edit.from, edit.to)
+    writeFileSync(mutation.file, mutated)
     const result = run()
     const firstFail = (result.stdout.match(/✖ ([^\n]*)/g) ?? [])[0]?.trim() ?? '(无失败行)'
     if (result.status === 0) {

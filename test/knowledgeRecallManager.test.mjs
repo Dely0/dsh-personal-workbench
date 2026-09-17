@@ -210,6 +210,46 @@ test('关掉开关后清空"已算好但还没注入"的那一份（PendingInjec
   })
 })
 
+test('候选集要覆盖全库：超过 500 条时不得静默少召回（v1.15.4 修的自查 F3）', () => {
+  withDb((db) => {
+    /**
+     * 原先写死 `limit: 500` 而仓储层把上限也夹在 500 → 第 501 条起永远召不回来，
+     * 且**一个字都不说**（静默截断是本仓明令禁止的一类）。
+     */
+    const TOTAL = 523
+    for (let i = 0; i < TOTAL; i += 1) createKnowledge(db, { title: `批量条目 ${i} 探针主题`, contentMd: `探针主题 内容 ${i}` })
+    const manager = new KnowledgeRecallManager(db, { log: () => {} })
+    assert.equal(manager.candidates(null).length, TOTAL, '候选集必须是全量，不是 500')
+    const deep = manager.recallToText({ taskId: null, query: '批量条目 探针主题' })
+    assert.ok(deep.hits.length > 0, '批量条目必须可召回')
+  })
+})
+
+test('引用回报要能回填**最旧**那一行（v1.15.4 修的自查 F5：长会话 >200 行）', () => {
+  withDb((db) => {
+    /**
+     * 原实现只扫"最近 200 行"：一个长会话很容易超过 200 行，旧行上的引用被静默丢弃，
+     * 工具还会回一句"没有匹配到本会话的召回记录" —— 把"日志没扫到"说成"你没查过"。
+     * 断言必须落在**最旧那一行**上，否则会被"新行也有这个 id"糊弄过去。
+     */
+    const entry = createKnowledge(db, { title: '盘符根目录的坑', contentMd: '盘符 parent null' })
+    const manager = new KnowledgeRecallManager(db, { log: () => {} })
+    const sid = 'sess-deep'
+    manager.prefetch(sid, undefined, '盘符根目录')
+    for (let i = 0; i < 250; i += 1) {
+      manager.logSearch({ sessionId: sid, taskId: null, query: `无关噪声 ${i}`, terms: ['噪'], hits: [] })
+    }
+    const rows = listRecallLog(db, { sessionId: sid, limit: 500 })
+    assert.ok(rows.length > 200, `前置：行数要超过 200，实测 ${rows.length}`)
+    assert.equal(rows[rows.length - 1].hits[0].id, entry.id, '前置：最旧那行确实带出过该条目')
+
+    const reported = manager.reportUsage(sid, [entry.id])
+    assert.ok(reported.updated > 0, '回报必须落地')
+    const refreshed = listRecallLog(db, { sessionId: sid, limit: 500 })
+    assert.deepEqual(refreshed[refreshed.length - 1].citedIds, [entry.id], '最旧那行的引用也要回填')
+  })
+})
+
 test('召回日志：关键词 / 命中 / 是否注入 / 跳过原因 / 引用回报全部落库', () => {
   withDb((db) => {
     const entry = createKnowledge(db, { title: '盘符根目录的坑', contentMd: '盘符 parent null' })

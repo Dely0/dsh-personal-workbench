@@ -38,3 +38,9 @@ _tonight-changes-*/
 # 各类临时备份（改配置 / 改依赖 / 改源码前的快照）
 *.bak-*
 src/**/*.bak-*
+
+# ── 独立审查（fresh-eyes-review）的本地证据：报告 / 探针输出 / 审查者脚本 ──────
+# 结论与修法已写进 docs/design/2026-09-17-knowledge-recall.md；可重跑的探针在
+# scripts/repro/knowledge-recall/（那才是入库的那一份）。这里只留本机原始凭据。
+.review-evidence/
+

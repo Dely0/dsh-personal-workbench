@@ -108,7 +108,12 @@ export function listKnowledge(db: DatabaseSync, opts: { q?: string; kindCode?: s
     params.push(like, like, like, like)
   }
   const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
-  const limit = Math.max(1, Math.min(opts.limit ?? 200, 500))
+  /**
+   * 上限 5000（v1.15.4 从 500 提上来）：知识库自动召回需要**全量**候选，
+   * 500 会让第 501 条起永远召不回来（实测 523 条时静默少 23 条）。
+   * 没有调用方传过 >500，所以这次放宽不改变既有行为。
+   */
+  const limit = Math.max(1, Math.min(opts.limit ?? 200, 5000))
   const rows = db.prepare(`SELECT * FROM knowledge_entries ${where} ORDER BY updated_at DESC, created_at DESC LIMIT ?`).all(...params, limit) as unknown as RawKnowledgeRow[]
   return rows.map((row) => parseKnowledge(row)).filter((entry): entry is KnowledgeRow => entry !== undefined)
 }

@@ -79,6 +79,8 @@ export const KNOWLEDGE_GUIDE = [
 interface SessionState {
   /** 显式开关（`undefined` = 跟随全局）。 */
   override?: 'off' | 'on'
+  /** 「开工前」这一时机是否已经成功做过（没成功就允许在关联到手后补一次）。 */
+  primed: boolean
   /** 已算好、等下一回合注入的文本。 */
   pendingText: string
   /** 已注入文本（同一回合内保持稳定 —— 保前缀缓存）。 */
@@ -93,6 +95,15 @@ interface SessionState {
 
 /** 知识候选快照的缓存时长：题目是"每个回合算一次"，但同一回合内可能装配多次。 */
 const CANDIDATE_TTL_MS = 15_000
+
+/**
+ * 候选集上限（v1.15.4 从写死的 500 提上来）。
+ *
+ * 500 是本机仓库层对 `listKnowledge` 的默认夹取上限，而召回需要**全量**候选 ——
+ * 一个 60 条的库看不出差别，涨到 523 条就会静默丢掉 23 条（自查 F3 实测）。
+ * 5000 对"逐字打分 + 本地 SQLite"仍是毫秒级（1000 条实测 P95 < 2ms）。
+ */
+export const RECALL_MAX_CANDIDATES = 5000
 
 export interface KnowledgeRecallOptions {
   /** 全局缺省是否开自动召回（配置项；`false` 时仍可用工具手动查）。 */
@@ -119,11 +130,19 @@ export class KnowledgeRecallManager {
     this.options = options
   }
 
-  /** 全局开关：配置项显式给了就听它，否则读 meta（缺省开）。 */
+  /**
+   * 全局开关：**meta 是唯一权威源**，`Config.knowledgeRecallEnabled` 只在 meta 还没被
+   * 写过时当缺省值。
+   *
+   * 修的是什么（v1.15.4，独立审查者 F2）：原来是 `config 优先`，
+   * 于是部署方一旦写了 `enabled`，用户在设置页勾选/取消就**完全不起作用** ——
+   * 界面显示的状态与真实行为相反，是个假控件（本项目已经罚过一次"排序方向按钮是假控件"）。
+   * 现在的优先级：用户显式动作（meta）> 部署缺省（config）> 出厂值（开）。
+   */
   autoEnabled(): boolean {
-    if (this.options.enabled === false) return false
-    if (this.options.enabled === true) return true
-    return (readMeta(this.db, AUTO_RECALL_KEY) ?? '1') !== '0'
+    const stored = readMeta(this.db, AUTO_RECALL_KEY)
+    if (stored !== undefined) return stored !== '0'
+    return this.options.enabled ?? true
   }
 
   setAutoEnabled(enabled: boolean): void {
@@ -172,7 +191,7 @@ export class KnowledgeRecallManager {
   private state(sessionId: string): SessionState {
     let state = this.sessions.get(sessionId)
     if (state === undefined) {
-      state = { pendingText: '', cachedText: '', injectedTurn: -1, lastQuery: '', seenIds: new Set() }
+      state = { primed: false, pendingText: '', cachedText: '', injectedTurn: -1, lastQuery: '', seenIds: new Set() }
       this.sessions.set(sessionId, state)
     }
     return state
@@ -227,7 +246,18 @@ export class KnowledgeRecallManager {
     if (this.candidateCache !== undefined && now - this.candidateCache.at < CANDIDATE_TTL_MS) return this.candidateCache.rows
     let rows: KnowledgeRow[] = []
     try {
-      rows = listKnowledge(this.db, { limit: 500 })
+      rows = listKnowledge(this.db, { limit: RECALL_MAX_CANDIDATES })
+      /**
+       * 候选集被上限截断时**必须留痕**（v1.15.4，自查 F3）。
+       *
+       * 原先写死 `limit: 500` 而 `listKnowledge` 又把上限夹在 500：
+       * 知识库涨到 523 条时，第 501 条起**永远召不回来**，而且一个字都不说 ——
+       * 静默截断是本仓明令禁止的一类（"标签超过 12 个点不到"就是被当 bug 修掉的）。
+       * 现在上限提到 5000，真撞上也只是"日志里说清楚"，不假装没事。
+       */
+      if (rows.length >= RECALL_MAX_CANDIDATES) {
+        this.log(`知识库条目数达到候选集上限 ${RECALL_MAX_CANDIDATES}，超出部分本次不参与召回（请上调 RECALL_MAX_CANDIDATES）`)
+      }
     } catch (error) {
       // 读失败**不静默**：那一回合就是"没检索"，日志里要能看出来。
       this.log(`读取知识库失败（本回合不召回）：${error instanceof Error ? error.message : String(error)}`)
@@ -405,26 +435,43 @@ export class KnowledgeRecallManager {
    * ⚠️ 但**绝不能把两句拼成一句**：拼起来覆盖率的分母翻倍，最相关的那条会从
    * 0.18 一路掉到阈值以下（实测踩到过）。`mergeRecallOutcomes` 的注释里有完整推导。
    */
+  /**
+   * 「开工前」那几句 query（任务标题 + 任务描述）+ 解析到的任务。
+   *
+   * 抽出来是因为它有两个调用点：会话开始（正常路径）与**回合收尾的补做**
+   * （关联晚到时，见 `prefetch`）。判据只能有一处实现。
+   */
+  private primeQueries(sessionId: string, cwd?: string): { taskId: string | null; queries: string[] } {
+    const taskId = this.resolveTaskId(sessionId, cwd)
+    const task = taskId === null ? undefined : getTask(this.db, taskId)
+    const queries = [task?.title ?? '', task?.description ?? ''].map((part) => part.trim()).filter((part) => part !== '')
+    return { taskId, queries }
+  }
+
   prime(sessionId: string, cwd?: string): RecallOutcome | undefined {
     if (!this.sessionEnabled(sessionId)) {
       this.log(`会话 ${sessionId} 自动召回已关闭 → 跳过开工前检索`)
       return undefined
     }
-    const taskId = this.resolveTaskId(sessionId, cwd)
-    const task = taskId === null ? undefined : getTask(this.db, taskId)
-    const queries = [task?.title ?? '', task?.description ?? ''].map((part) => part.trim()).filter((part) => part !== '')
+    const { taskId, queries } = this.primeQueries(sessionId, cwd)
     if (queries.length === 0) {
-      // 没有任务/标题就没有 query —— 不编一个。"开工前"这一时机交给引导层让模型主动查。
-      this.log(`会话 ${sessionId} 未关联到任务（或任务无标题）→ 开工前不自动检索，改由模型按引导层主动查`)
+      /**
+       * 没有任务/标题就没有 query —— 不编一个。
+       *
+       * 但**不把 `primed` 置真**：会话开始时 `task_sessions` 往往还没建立
+       * （客户端是先 `sessions.prompt()`、随后才 POST 关联），所以这里要留着
+       * 让 `prefetch` 在**关联到手之后补做一次**。这一行日志就是"这次没检索"的凭据。
+       */
+      this.log(`会话 ${sessionId} 未关联到任务（或任务无标题）→ 开工前不自动检索，改由模型按引导层主动查（关联到手后会补一次）`)
       return undefined
     }
     const state = this.state(sessionId)
-    const candidates = this.candidates(taskId)
     const outcome = mergeRecallOutcomes(queries.map((query) => ({
       query,
-      outcome: this.recallWith({ sessionId, taskId, query, candidates, trigger: 'session_start', seen: state.seenIds }),
-    })))
+      outcome: this.recallWith({ sessionId, taskId, query, candidates: this.candidates(taskId), trigger: 'session_start', seen: state.seenIds }),
+    })), { maxEntries: this.maxEntries() })
     this.logOutcome({ trigger: 'session_start', query: outcome.query, outcome, injected: outcome.hits.length > 0, sessionId, taskId })
+    state.primed = true
     state.lastOutcome = outcome
     state.lastQuery = outcome.query
     state.pendingText = formatRecallText(outcome)
@@ -433,19 +480,50 @@ export class KnowledgeRecallManager {
     return outcome
   }
 
+  /** 单回合条数上限（config > 缺省）。 */
+  private maxEntries(): number {
+    return Math.max(1, this.options.maxEntries ?? RECALL_DEFAULTS.maxEntries)
+  }
+
   /**
    * 回合收尾预取：拿这一回合的用户提问检索，结果**下一回合**注入。
    *
    * 为什么不在装配时算：装配在模型步之前的关键路径上，任何查询/打分都在"用户等待"里；
    * 而且团队记忆踩过更狠的一条 —— 在装配期做重活会破坏提示前缀缓存。预取与之同构。
+   *
+   * 另外它顺带补一件事：**「开工前」还没成功过就补做一次**
+   * （`state.primed === false`）。会话开始那一刻通常还没有 `task_sessions` 关联，
+   * 于是 `prime()` 只能空手而归（v1.15.4 修的 F4：那时它既不检索也不注入，
+   * 整条"开工前"链路对新会话是断的）。补做与本次回合检索的结果**合并后一起注入**，
+   * 但**各落一行日志**（`session_start` 与 `turn` 分开记账，账才对得上）。
    */
   prefetch(sessionId: string, cwd: string | undefined, query: string): RecallOutcome | undefined {
     if (!this.sessionEnabled(sessionId)) return undefined
-    const taskId = this.resolveTaskId(sessionId, cwd)
-    const outcome = this.recall({ sessionId, taskId, query, trigger: 'turn' })
     const state = this.state(sessionId)
+    const parts: Array<{ query: string; outcome: RecallOutcome }> = []
+
+    if (!state.primed) {
+      const late = this.prime(sessionId, cwd)
+      if (late !== undefined && late.hits.length > 0) parts.push({ query: late.query, outcome: late })
+    }
+
+    const { taskId } = this.primeQueries(sessionId, cwd)
+    const turn = this.recallWith({
+      sessionId,
+      taskId,
+      query,
+      candidates: this.candidates(taskId),
+      trigger: 'turn',
+      seen: state.seenIds,
+    })
+    this.logOutcome({ trigger: 'turn', query, outcome: turn, injected: turn.hits.length > 0, sessionId, taskId })
+    parts.push({ query, outcome: turn })
+
+    const outcome = parts.length === 1
+      ? turn
+      : mergeRecallOutcomes(parts, { maxEntries: this.maxEntries() })
     state.lastOutcome = outcome
-    state.lastQuery = query
+    state.lastQuery = outcome.query
     state.pendingText = formatRecallText(outcome)
     state.injectedTurn = -1
     for (const hit of outcome.hits) state.seenIds.add(hit.id)
@@ -553,7 +631,73 @@ export class KnowledgeRecallManager {
   }
 }
 
-/** 本回合的 turn 号（与团队记忆同一套取法：最后一个 turn/start 或 turn/end）。 */
+/**
+ * 会话事件解包（**权威依据**见下），三个助手一起用，缺一不可。
+ *
+ * ## 为什么必须解包 `data` 信封
+ *
+ * 宿主交给监听器的不是解包后的载荷，而是**带 `data` 信封的完整事件**：
+ * `{ type: 'user/message', seq, time, data: <UserMessage> }`。
+ * 权威依据三处：
+ * 1. `@deepseek-ai/dsh-session` 的事件映射表写的是 `'user/message': UserMessage`、
+ *    `'turn/start': { turn: number }` —— 即 **`data` 是载荷本体**；
+ * 2. 宿主实现 `dsh-agent-loop` 读的是 `event.data` / `textOf(event.data)`；
+ * 3. `dsh-team-memory` 的实测注释（本机已装）：从顶层读 `event.turn` **恒为 undefined**
+ *    → 记录器永远是空的 → 自动捕获一直报"跳过"，**而且不报错**。
+ *
+ * v1.15.3 首次上线时我正是踩了这个坑：`latestUserMessage` 读 `event.data.message`
+ * 而真实是 `event.data` 本身 → query 恒为空 → 每回合召回**从未发生且不留日志**；
+ * `currentTurnOf` 读顶层 `event.turn` → 恒 0。两个独立审查者都复现了它。
+ */
+function bodyOf(event: unknown): Record<string, unknown> {
+  const shaped = event as { data?: unknown } | undefined
+  return shaped?.data !== null && typeof shaped?.data === 'object' && !Array.isArray(shaped?.data)
+    ? shaped.data as Record<string, unknown>
+    : (event as Record<string, unknown> ?? {})
+}
+
+/** 取回合号：兼容 `{turn:3}`、`{turn:{turn:3}}`、`event.data.turn.turn`。 */
+export function turnNumberOf(event: unknown): number {
+  const body = bodyOf(event)
+  const value = (body.turn ?? (event as { turn?: unknown } | undefined)?.turn)
+  if (value !== null && typeof value === 'object') return Number((value as { turn?: unknown }).turn ?? 0) || 0
+  return Number(value ?? 0) || 0
+}
+
+/** 取消息体：`data` 本身就是消息（当前宿主），或 `data.message`（历史形态）。 */
+export function messageOf(event: unknown): unknown {
+  const body = bodyOf(event)
+  const value = body.message ?? (event as { message?: unknown } | undefined)?.message
+  if (value !== null && typeof value === 'object' && (value as { message?: unknown }).message !== null
+    && typeof (value as { message?: unknown }).message === 'object') {
+    return (value as { message?: unknown }).message
+  }
+  return value ?? body
+}
+
+/**
+ * 这条消息是不是**用户本人**写的。
+ *
+ * 为什么必须有它：真实事件序列里最后一条 `user/message` **往往是插件注入的快照**
+ * （运行时上下文、团队记忆召回、**本插件自己的知识块**都是这个形态，
+ * `source.kind === 'plugin'`）。不筛掉它，修好信封之后就会把注入内容当成提问去检索 ——
+ * 自激：越注入越像，下一回合再拿它当查询。团队记忆用同一条判据（`isUserAuthored`），
+ * 这里保持一致（"一件事不能两套规则"）。
+ */
+export function isUserAuthored(message: unknown): boolean {
+  const kind = (message as { source?: { kind?: unknown } } | undefined)?.source?.kind
+  if (kind === undefined || kind === null) return true   // 真实用户消息：没有 source 字段
+  if (kind === 'plugin') return false                    // 插件注入（记忆 / 计划 / 本插件的知识块）
+  if (kind === 'tool') return false                      // 工具结果
+  return kind === 'user'
+}
+
+/**
+ * 本回合的 turn 号（与团队记忆同一套取法：最后一个 `turn/start` 或 `turn/end`）。
+ *
+ * 注意它**只是同回合内保持文本稳定的依据**；拿不到就退回 0，注入仍会发生
+ * （`prefetch` 每次把 `injectedTurn` 重置为 -1，所以恒 0 也不会卡住旧内容）。
+ */
 export function currentTurnOf(agent: unknown): number {
   try {
     const session = (agent as { session?: { snapshotEvents?: () => unknown[]; events?: unknown[] } } | undefined)?.session
@@ -561,12 +705,8 @@ export function currentTurnOf(agent: unknown): number {
       ? session.snapshotEvents() ?? []
       : session?.events ?? []
     for (let index = events.length - 1; index >= 0; index -= 1) {
-      const event = events[index] as { type?: string; turn?: unknown } | undefined
-      if (event?.type === 'turn/start') {
-        const raw = event.turn as { turn?: unknown } | undefined
-        return Number(raw?.turn ?? event.turn ?? 0) || 0
-      }
-      if (event?.type === 'turn/end') return Number(event.turn ?? 0) || 0
+      const event = events[index] as { type?: string } | undefined
+      if (event?.type === 'turn/start' || event?.type === 'turn/end') return turnNumberOf(event)
     }
   } catch { /* 拿不到 turn 号不是致命问题：退回 0，注入仍会发生 */ }
   return 0
@@ -697,11 +837,18 @@ function snapshotEvents(session: unknown): unknown[] {
   } catch { return [] }
 }
 
-/** 最后一条 user/message（本回合的提问）。 */
-function latestUserMessage(events: unknown[]): unknown {
+/**
+ * 最后一条**用户本人写的** `user/message`（本回合的提问）。
+ *
+ * ⚠️ 必须过 `isUserAuthored`：真实序列里最后一条 user 角色消息常常是插件注入的快照
+ * （含本插件自己上一回合注入的知识块），拿它当提问会自激。见 `bodyOf` 的注释。
+ */
+export function latestUserMessage(events: unknown[]): unknown {
   for (let index = events.length - 1; index >= 0; index -= 1) {
-    const event = events[index] as { type?: string; data?: { message?: unknown } } | undefined
-    if (event?.type === 'user/message') return event.data?.message
+    const event = events[index] as { type?: string } | undefined
+    if (event?.type !== 'user/message') continue
+    const message = messageOf(event)
+    if (isUserAuthored(message)) return message
   }
   return undefined
 }

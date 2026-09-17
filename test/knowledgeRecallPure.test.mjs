@@ -242,16 +242,32 @@ test('去重与条数上限各记各的账（注入条数能对上"命中 - 挡�
 })
 
 test('理由与片段：每条命中都要能解释"为什么是它"', () => {
+  /**
+   * ⚠️ 这条的 fixture 在 v1.15.4 被**换过**：原来是标题「选择文件出不了 C 盘」+
+   * 长正文含"盘符根目录"，靠"标题命中 1 个字 + 正文命中 2 个字"凑过阈值 ——
+   * 那正是被修掉的"权重来自一个字段、覆盖率来自另一个字段"。现在那种形态**不该命中**，
+   * 所以换成真正相关的 fixture（标题里就有"盘符"）。
+   */
   const outcome = recallKnowledge({
     query: '盘符',
-    candidates: [candidate({ id: 'a', title: '选择文件出不了 C 盘', contentMd: 'x'.repeat(300) + '盘符根目录的 parent 是 null' })],
+    candidates: [candidate({ id: 'a', title: '盘符根目录的坑', contentMd: 'x'.repeat(300) + '盘符根目录的 parent 是 null' })],
     now: NOW,
   })
   const hit = outcome.hits[0]
-  assert.match(hit.reason, /标题命中/, '理由要写出命中了哪个字段')
+  assert.match(hit.reason, /标题命中/, '理由要写出命中了哪个字段（得分最高的那一档）')
   assert.match(hit.reason, /盘/, '理由要写出命中了哪些词')
+  assert.match(hit.reason, /该字段命中 \d+\/\d+ 个关键词/, '理由要给出该字段的命中比例（可解释）')
   assert.match(hit.snippet, /盘符/, '片段要落在命中词附近，而不是永远取开头')
   assert.equal(hit.id, 'a')
+  // 旧 fixture 那种"跨字段凑分"的形态：不命中，且如实记成"命中过但被挡下"
+  const mixed = recallKnowledge({
+    query: '盘符',
+    candidates: [candidate({ id: 'b', title: '选择文件出不了 C 盘', contentMd: 'x'.repeat(300) + '盘符根目录的 parent 是 null' })],
+    now: NOW,
+  })
+  assert.equal(mixed.hits.length, 0, '标题 1 个字 + 正文 2 个字不足以过线')
+  assert.equal(mixed.matched, 1, '但 matched 要记下"确实命中过"')
+  assert.equal(mixed.droppedByScore, 1)
 })
 
 test('渲染：命中才产出文本；文本自带"检索词 + 逐条依据 + 下一步动作"', () => {
@@ -277,6 +293,44 @@ test('归一化：大小写与空白折叠对检索与打分是同一份（否�
   assert.equal(normalizeText('  Pointer   EVENTS '), 'pointer events')
   const outcome = recallKnowledge({ query: 'Pointer Events', candidates: [candidate({ title: 'pointer-events 不生效' })], now: NOW })
   assert.equal(outcome.matched, 1, '大小写不敏感命中')
+})
+
+test('合并后必须**重新施加**单回合条数上限（v1.15.4 修的 F5）', () => {
+  /**
+   * 两句 query 各自命中 3 条且**互不重叠** → 合并后不能变成 6 条。
+   * 线上同形实测过：`knowledge_recall_log` 里一行写着「注入 5 条」，而上限是 3。
+   */
+  const a = ['a1', 'a2', 'a3'].map((id) => candidate({ id, title: '知识库分页' }))
+  const b = ['b1', 'b2', 'b3'].map((id) => candidate({ id, title: '标签筛选' }))
+  const o1 = recallKnowledge({ query: '知识库分页', candidates: a, now: NOW })
+  const o2 = recallKnowledge({ query: '标签筛选', candidates: b, now: NOW })
+  const merged = mergeRecallOutcomes([{ query: '知识库分页', outcome: o1 }, { query: '标签筛选', outcome: o2 }])
+  assert.equal(merged.hits.length, RECALL_DEFAULTS.maxEntries, '合并后必须仍在上限内')
+  assert.equal(merged.droppedByLimit, 3, '被上限截掉的条数要如实记账')
+  assert.equal(merged.matched, 6, '命中过 6 条这件事仍要看得见')
+  const capped = mergeRecallOutcomes([{ query: 'x', outcome: o1 }, { query: 'y', outcome: o2 }], { maxEntries: 1 })
+  assert.equal(capped.hits.length, 1, '上限可被显式调小')
+})
+
+test('权重与覆盖率必须来自**同一个字段**（v1.15.4 修的噪声根因）', () => {
+  /**
+   * 真实库上发作过：一篇 3000+ 字的泛化长文，与提问只共享**标题里的 1 个字**，
+   * 却靠正文命中 8 个字把覆盖率抬到 0.9 → `0.55 × 1 × 0.95 ≈ 0.52`，
+   * 在四时机的 4 次不同提问里有 3 次都进 top-3（审查者 F3 / 我的 F6）。
+   *
+   * 修法：三个字段各自算分取最大。这里复刻那个形态：标题里只共享"工"，正文命中的是一大堆。
+   */
+  const body = `工程 ${'用法 同步 校验 计划 任务 变异 证据 链路 规则 坑 '.repeat(30)}`
+  const dangerous = candidate({ id: 'x', title: '代码审查 Agent 的 8 条工程经验', contentMd: body })
+  const query = '知识库 自动调用 会话 注入 计划 任务 变异 证据'
+  const outcome = recallKnowledge({ query, candidates: [dangerous], now: NOW })
+  assert.equal(outcome.matched, 1, '确实共享了若干字，所以算命中过')
+  assert.equal(outcome.hits.length, 0, '但"标题里 1 个字 + 正文一大堆"必须挡下')
+  const hit = scoreCandidate(dangerous, { terms: extractTerms(query), now: NOW })
+  assert.ok((hit?.score ?? 1) < 0.2, `实测 ${hit?.score?.toFixed(3)}（旧写法约 0.5）`)
+  // 反方向：同一篇长文，若提问**在标题上命中得多**，仍应正常召回（不能矫枉过正）
+  const good = recallKnowledge({ query: '代码审查 工程经验', candidates: [dangerous], now: NOW })
+  assert.equal(good.hits.length, 1, '标题真正相关时照样命中')
 })
 
 test('阈值是**严格大于**：分数正好等于 minScore 不算命中', () => {
