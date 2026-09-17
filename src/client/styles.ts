@@ -737,6 +737,119 @@ ${panelContainerCss({ view: VIEW_ATTR, official: OFFICIAL_ATTR, active: ACTIVE_A
 @media (prefers-reduced-motion: reduce) {
   .wb-overlay, .wb-dialog, .wb-toast, .wb-toast.leaving { animation: none; }
 }
+
+/* ===========================================================================
+   知识库（打样 2 号）：密集列表 + 自适应时间分组 + 编号分页
+   判定全在 listPresentation.ts；这里只负责长什么样。
+   =========================================================================== */
+.wb-kb-bar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:9px; }
+.wb-kb-search { flex:1; min-width:140px; background:var(--wb-sunk); border:1px solid var(--wb-line); color:inherit;
+  border-radius:var(--wb-r-1); padding:7px 10px; font:inherit; font-size:12.5px; }
+.wb-kb-sortkey, .wb-kb-pagesize { background:var(--wb-sunk); border:1px solid var(--wb-line); color:inherit;
+  border-radius:var(--wb-r-1); padding:7px 9px; font:inherit; font-size:12.5px; }
+.wb-kb-hit { font-size:11.5px; color:var(--wb-ink-3); font-variant-numeric:tabular-nums; white-space:nowrap; }
+
+.wb-kb-tabs { display:flex; gap:2px; overflow-x:auto; border-bottom:1px solid var(--wb-line); margin-bottom:9px; }
+.wb-kb-tab { border:none; background:transparent; color:var(--wb-ink-3); font:inherit; font-size:12.5px;
+  padding:8px 11px 9px; border-bottom:2px solid transparent; cursor:pointer; white-space:nowrap;
+  display:inline-flex; align-items:center; gap:6px; }
+.wb-kb-tab:hover { color:var(--wb-ink-1); }
+.wb-kb-tab.on { color:var(--wb-ink-1); font-weight:600; border-bottom-color:var(--wb-accent); }
+.wb-kb-dot { width:7px; height:7px; border-radius:50%; display:inline-block; flex:none; }
+.wb-kb-cnt { font-size:10.5px; background:color-mix(in srgb, var(--wb-ink-1) 8%, transparent);
+  border-radius:999px; padding:1px 6px; color:var(--wb-ink-3); font-variant-numeric:tabular-nums; }
+.wb-kb-tab.on .wb-kb-cnt { color:var(--wb-ink-1); background:var(--wb-accent-soft); }
+
+.wb-kb-tags { display:flex; gap:5px; flex-wrap:wrap; margin-bottom:10px; }
+.wb-kb-tag { border:1px solid var(--wb-line); background:transparent; color:var(--wb-ink-3);
+  border-radius:999px; padding:2px 9px; font:inherit; font-size:11px; cursor:pointer; white-space:nowrap; }
+.wb-kb-tag:hover { color:var(--wb-ink-1); }
+.wb-kb-tag.on { color:var(--wb-ink-1); border-color:var(--wb-accent-line); background:var(--wb-accent-soft); font-weight:600; }
+.wb-kb-tagcnt { margin-left:5px; opacity:.7; font-variant-numeric:tabular-nums; }
+
+.wb-kb-list { border:1px solid var(--wb-line-soft); border-radius:var(--wb-r-2); overflow:hidden; background:var(--wb-surface); }
+.wb-kb-group { display:block; }
+.wb-kb-ghead { display:flex; align-items:center; gap:8px; padding:9px 12px 4px; font-size:11px;
+  font-weight:600; color:var(--wb-ink-3); letter-spacing:.3px; }
+.wb-kb-gcnt { font-variant-numeric:tabular-nums; }
+.wb-kb-gline { flex:1; height:1px; background:var(--wb-line-soft); }
+.wb-kb-row { display:flex; align-items:flex-start; gap:10px; padding:8px 12px 8px 10px; cursor:pointer;
+  border-left:3px solid transparent; transition:background .12s ease; }
+.wb-kb-row:hover { background:color-mix(in srgb, var(--wb-ink-1) 5%, transparent); }
+.wb-kb-row.sel { background:var(--wb-accent-soft); border-left-color:var(--wb-accent); }
+.wb-kb-dot-sm { width:7px; height:7px; border-radius:50%; flex:none; margin-top:6px; }
+.wb-kb-body { flex:1; min-width:0; }
+.wb-kb-title { font-size:13px; font-weight:550; line-height:1.4; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.wb-kb-sum { font-size:11.5px; color:var(--wb-ink-3); line-height:1.5; margin-top:2px;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.wb-kb-meta { display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin-top:4px; }
+.wb-kb-chip { display:inline-flex; align-items:center; border-radius:5px; padding:1px 6px; font-size:10.5px; font-weight:600; white-space:nowrap; }
+.wb-kb-tg { font-size:11px; color:var(--wb-ink-3); }
+.wb-kb-stamp { flex:none; font-size:11px; color:var(--wb-ink-3); font-variant-numeric:tabular-nums; padding-top:2px; }
+
+.wb-kb-pager { display:flex; align-items:center; gap:9px; flex-wrap:wrap; padding:10px 2px 2px;
+  font-size:11.5px; color:var(--wb-ink-3); }
+.wb-kb-pages { display:flex; gap:3px; }
+.wb-kb-pnum { border:1px solid var(--wb-line); background:transparent; color:var(--wb-ink-2);
+  border-radius:7px; min-width:27px; padding:3px 6px; font:inherit; font-size:11.5px; cursor:pointer; }
+.wb-kb-pnum:hover:not(:disabled) { background:color-mix(in srgb, var(--wb-ink-1) 7%, transparent); }
+.wb-kb-pnum.on { border-color:var(--wb-accent-line); color:var(--wb-ink-1); background:var(--wb-accent-soft); font-weight:600; }
+.wb-kb-pnum:disabled { opacity:.35; cursor:default; }
+
+/* ===========================================================================
+   点子页（打样 1 号）：卡片瀑布。文件夹区沿用原有样式，未改。
+   =========================================================================== */
+.wb-idea-cards { display:grid; grid-template-columns:1fr 1fr; gap:11px; }
+.wb-idea-card2 { position:relative; display:flex; flex-direction:column; gap:8px; cursor:pointer;
+  padding:12px 13px 11px; border:1px solid var(--wb-line-soft); border-left:3px solid var(--wb-idea-color, var(--wb-ink-3));
+  border-radius:11px; background:var(--wb-surface); box-shadow:var(--wb-sh-1);
+  transition:border-color .14s ease, transform .14s ease, background .14s ease; }
+.wb-idea-card2:hover { background:color-mix(in srgb, var(--wb-ink-1) 5%, var(--wb-surface)); transform:translateY(-1px); }
+.wb-idea-card2.sel { border-color:var(--wb-accent-line); box-shadow:0 0 0 1px var(--wb-accent-line), var(--wb-sh-2); }
+.wb-idea-card2.picked { border-color:var(--wb-accent-line); background:var(--wb-accent-soft); }
+.wb-idea-title { font-size:13.5px; font-weight:600; line-height:1.45; padding-right:26px;
+  display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+.wb-idea-sum2 { font-size:11.5px; color:var(--wb-ink-3); line-height:1.6;
+  display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
+.wb-idea-foot2 { display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-top:auto; padding-top:2px; }
+.wb-idea-stamp { color:var(--wb-ink-3); font-size:11px; font-variant-numeric:tabular-nums; white-space:nowrap; margin-left:auto; }
+.wb-idea-pick { position:absolute; top:9px; right:9px; width:19px; height:19px; border-radius:6px;
+  border:1px solid var(--wb-line); background:var(--wb-sunk); color:transparent; font-size:11px; line-height:1;
+  cursor:pointer; opacity:0; transition:opacity .12s ease, background .12s ease; padding:0; }
+.wb-idea-card2:hover .wb-idea-pick,
+.wb-idea-card2.picked .wb-idea-pick,
+/* 键盘用户：Tab 焦点落在 ☑ 上时必须看得见（只靠 hover 显形 = 焦点落在隐形控件上） */
+.wb-idea-pick:focus-visible,
+.wb-idea-card2:focus-within .wb-idea-pick { opacity:1; }
+.wb-idea-pick:focus-visible { outline:2px solid var(--wb-accent); outline-offset:1px; }
+.wb-idea-pick[aria-pressed="true"] { color:var(--wb-ink-1); border-color:var(--wb-accent); background:var(--wb-accent); }
+.wb-idea-foldbtn { border:1px solid var(--wb-line); background:transparent; color:var(--wb-ink-3);
+  border-radius:7px; padding:2px 8px; font:inherit; font-size:11px; cursor:pointer; white-space:nowrap; }
+.wb-idea-foldbtn:hover:not(:disabled) { color:var(--wb-ink-1); background:color-mix(in srgb, var(--wb-ink-1) 7%, transparent); }
+.wb-idea-foldbtn:disabled { opacity:.45; cursor:default; }
+.wb-idea-empty { padding:22px; text-align:center; color:var(--wb-ink-3); font-size:12.5px;
+  border:1px dashed var(--wb-line); border-radius:11px; grid-column:1 / -1; }
+/* 菜单 portal 到 document.body（见 IdeaCardGrid.tsx）：网格/卡片/面板的 overflow 与层叠都裁不到它。
+   ⚠️ 两条坑都是 scripts/repro/harness-real-browser.mjs 的命中测试抓出来的（都是"看得见、点不动"）：
+   1. pointer-events 是**继承**属性：面板宿主 .wb-panel-host 是 pointer-events:none
+      （为了让左侧导航栏在面板铺开时仍可点）→ portal 到 body 的菜单连点击都收不到。
+      按「容器 none + 菜单本体 auto」两段写，与 .wb-toasts / .wb-toast 同一套办法。
+   2. z-index 必须**高于 .wb-panel-host 的 55**：否则面板里的卡片会盖在菜单上面，
+      菜单看得见但点到的还是卡片（实测 z-index:40 时 elementFromPoint 命中的是 .wb-idea-card2）。 */
+.wb-idea-foldmenu { position:fixed; z-index:60; min-width:200px; padding:4px;
+  background:var(--dsw-alias-bg-layer-2, #1c1c1f); border:1px solid var(--wb-line);
+  border-radius:10px; box-shadow:0 12px 32px rgba(0,0,0,.45);
+  pointer-events:none; overflow-y:auto; }
+.wb-idea-foldmenu > * { pointer-events:auto; }
+.wb-idea-foldmenu button { display:flex; align-items:center; gap:7px; width:100%; text-align:left;
+  border:none; background:transparent; color:var(--wb-ink-1); font:inherit; font-size:12.5px;
+  padding:7px 9px; border-radius:7px; cursor:pointer; }
+.wb-idea-foldmenu button:hover { background:color-mix(in srgb, var(--wb-ink-1) 8%, transparent); }
+.wb-idea-foldic { flex:none; }
+.wb-idea-foldnote { padding:5px 9px 7px; font-size:11px; color:var(--wb-ink-3); border-top:1px solid var(--wb-line-soft); margin-top:3px; }
+@media (max-width: 720px) {
+  .wb-idea-cards { grid-template-columns:1fr; }
+}
 `
 
 /**

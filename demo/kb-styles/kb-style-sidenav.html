@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>3 · 左导航树 + 双栏</title>
+<style>
+  /* 款式 3：左导航树（类型 = 分组，带条数）+ 中列列表 + 右列详情 */
+  .kbd-nav { flex: 0 0 190px; background: var(--sunken); border-right: 1px solid var(--line-soft);
+    display: flex; flex-direction: column; min-height: 0; }
+  .kbd-nav .nav-h { padding: 14px 13px 8px; font-size: 13px; font-weight: 700; display: flex; align-items: center; gap: 7px; }
+  .kbd-nav .nav-h .ic { color: var(--accent); }
+  .kbd-nav .kbd-scroll { padding: 2px 8px 12px; }
+  .nav-cap { font-size: 10.5px; color: var(--fg-3); font-weight: 600; letter-spacing: .4px;
+    padding: 10px 6px 5px; display: flex; align-items: center; gap: 6px; }
+  .nav-cap .ln { flex: 1; height: 1px; background: var(--line-soft); }
+  .nitem { display: flex; align-items: center; gap: 8px; width: 100%; border: none; background: transparent;
+    color: var(--fg-2); font: inherit; font-size: 12.5px; padding: 6px 8px; border-radius: 8px; cursor: pointer; text-align: left; }
+  .nitem:hover { background: rgba(255,255,255,.06); color: var(--fg); }
+  .nitem.on { background: color-mix(in srgb, var(--accent) 16%, transparent); color: #fff; font-weight: 600; }
+  .nitem .nd { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+  .nitem .nn { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .nitem .nc { font-size: 10.5px; color: var(--fg-3); font-variant-numeric: tabular-nums; }
+  .nitem.on .nc { color: #cfe0ff; }
+  .kbd-nav .nfoot { padding: 10px 12px; border-top: 1px solid var(--line-soft); font-size: 11px; color: var(--fg-3); flex: none; }
+
+  .kbd-mid { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; min-height: 0;
+    border-right: 1px solid var(--line-soft); }
+  .kbd-detail { flex: 0 0 38%; }
+  .kbar { display: flex; gap: 8px; align-items: center; padding: 12px 13px 10px; flex: none; }
+  .tags { display: flex; gap: 5px; flex-wrap: wrap; padding: 8px 13px 0; flex: none; }
+  .tchip { border: 1px solid var(--line); background: transparent; color: var(--fg-3); border-radius: 999px;
+    padding: 2px 9px; font: inherit; font-size: 11px; cursor: pointer; }
+  .tchip.on { color: #cfe0ff; border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+    background: color-mix(in srgb, var(--accent) 15%, transparent); font-weight: 600; }
+
+  .rows { padding: 6px 0 10px; }
+  .r { display: flex; gap: 9px; align-items: flex-start; padding: 8px 12px; cursor: pointer;
+    border-radius: 9px; margin: 1px 6px; transition: background .12s ease; }
+  .r:hover { background: rgba(255,255,255,.04); }
+  .r.sel { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+  .r .rb { flex: 1; min-width: 0; }
+  .r .rt { font-size: 12.5px; font-weight: 550; line-height: 1.45; }
+  .r .rm { display: flex; align-items: center; gap: 6px; margin-top: 3px; flex-wrap: wrap; }
+  .r .kchip { font-size: 10.5px; border-radius: 5px; padding: 1px 6px; font-weight: 600; }
+
+  /* 修前：左导航退化成一个普通下拉，中间列表更平 */
+  html[data-mode="before"] .kbd-nav .nitem.tabbed,
+  html[data-mode="before"] .kbd-nav .nav-cap { display: none; }
+  html[data-mode="before"] .kbd-mid .tags { display: none; }
+  html[data-mode="before"] .r .rm { display: none; }
+</style>
+</head>
+<body>
+<div class="kbd">
+  <aside class="kbd-nav">
+    <div class="nav-h"><span class="ic">◈</span>知识库</div>
+    <div class="kbd-scroll" data-nav></div>
+    <div class="nfoot" data-total></div>
+  </aside>
+  <div class="kbd-mid">
+    <div data-bar></div>
+    <div class="kbd-scroll"><div data-list></div></div>
+    <div data-pager></div>
+  </div>
+  <div class="kbd-detail" data-detail></div>
+</div>
+<script src="_shared.js"></script>
+<script>
+  // 左导航树：类型 = 分组（带条数）。修前退化成普通下拉，导航项不渲染。
+  const navBox = document.querySelector('[data-nav]');
+  const totalBox = document.querySelector('[data-total]');
+  function drawNav() {
+    const counts = { all: KB.ENTRIES.length };
+    for (const k of KB.KINDS) counts[k.code] = 0;
+    for (const e of KB.ENTRIES) counts[e.kindCode]++;
+    const mode = KB.state.mode;
+    navBox.innerHTML = `
+      <div class="nav-cap">分类 <span class="ln"></span></div>
+      <button class="nitem ${KB.state.kind === 'all' ? 'on' : ''} tabbed" data-kind="all">
+        <span class="nn">全部</span><span class="nc">${counts.all.toLocaleString('zh-CN')}</span>
+      </button>
+      ${KB.KINDS.map((k) => `
+        <button class="nitem ${KB.state.kind === k.code ? 'on' : ''} tabbed" data-kind="${k.code}">
+          <span class="nd" style="background:${k.color}"></span>
+          <span class="nn">${k.name}</span><span class="nc">${counts[k.code]}</span>
+        </button>`).join('')}
+      ${mode === 'before' ? `<div style="padding:6px 6px 0;font-size:11px;color:var(--fg-3)">
+        ← 现状：分类是中间那个下拉，左侧这一栏根本不存在
+      </div>` : ''}
+      <div class="nav-cap" ${mode === 'before' ? 'style="display:none"' : ''}>标签 <span class="ln"></span></div>
+      ${KB.TAGS.slice(0, 6).map((t) => `<button class="nitem tabbed ${KB.state.tag === t ? 'on' : ''}" data-tag="${t}">
+        <span class="nn">#${t}</span></button>`).join('')}`;
+  }
+  const origMount = KB.mount;
+  KB.mount(function (shown) {
+    drawNav();
+    totalBox.textContent = KB.state.mode === 'after' ? '共 ' + KB.ENTRIES.length.toLocaleString('zh-CN') + ' 条' : '';
+    return `<div class="rows">${shown.map((e) => {
+      const k = KB.kindOf(e.kindCode);
+      return `<div class="r ${KB.state.selectedId === e.id ? 'sel' : ''}" data-open="${e.id}">
+        <span class="rb">
+          <div class="rt ell">${e.title}</div>
+          <div class="rm">
+            <span class="kchip" style="background:${k.color}22;color:${k.color}">${k.name}</span>
+            <span class="tg">${e.tags.map((t) => '#' + t).join(' ')}</span>
+            ${e.fileLink ? '<span class="tg">📄</span>' : ''}
+            ${e.sourceTaskId ? '<span class="tg">🔗</span>' : ''}
+          </div>
+        </span>
+        <span class="stamp">${KB.fmtShort(e.updatedAt)}</span>
+      </div>`;
+    }).join('')}</div>`;
+  });
+  // 左导航改动后要重画（挂载内部已绑定事件，这里只订阅重画）
+  document.querySelector('.kbd').addEventListener('click', () => setTimeout(() => {
+    if (KB.state.mode === 'after') drawNav();
+  }, 0));
+  window.addEventListener('message', () => setTimeout(drawNav, 0));
+</script>
+</body>
+</html>

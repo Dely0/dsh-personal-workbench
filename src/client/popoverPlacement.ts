@@ -95,6 +95,15 @@ export function placePopover(input: {
   readonly viewport: PopoverViewport
   readonly gap?: number
   readonly margin?: number
+  /**
+   * 优先开在哪一侧。缺省 `'top'`（保持模型选择器原有的视觉习惯）。
+   *
+   * 为什么需要这个开关：**下拉菜单的直觉是"从按钮往下弹"**，而模型选择器在弹窗底部、
+   * 只能往上开。同一个算法服务两种场景时，"哪边优先"必须是调用方给的输入，
+   * 而不是算法偷偷猜的 —— 否则点子页的「归入文件夹」会莫名其妙往按钮上方弹。
+   * 只有在优先侧放不下时才会翻到另一侧。
+   */
+  readonly prefer?: 'top' | 'bottom'
 }): PopoverPlacement {
   const gap = finite(input.gap ?? POPOVER_GAP, POPOVER_GAP)
   const margin = Math.max(0, finite(input.margin ?? POPOVER_MARGIN, POPOVER_MARGIN))
@@ -114,11 +123,10 @@ export function placePopover(input: {
   const spaceBelow = Math.max(0, viewportHeight - anchorBottom - gap - margin)
   const fitsAbove = spaceAbove >= menuHeight
   const fitsBelow = spaceBelow >= menuHeight
-  const side: 'top' | 'bottom' = fitsAbove
-    ? 'top'
-    : fitsBelow
-      ? 'bottom'
-      : (spaceAbove >= spaceBelow ? 'top' : 'bottom')
+  const prefer = input.prefer === 'bottom' ? 'bottom' : 'top'
+  const side: 'top' | 'bottom' = prefer === 'bottom'
+    ? (fitsBelow ? 'bottom' : fitsAbove ? 'top' : (spaceBelow >= spaceAbove ? 'bottom' : 'top'))
+    : (fitsAbove ? 'top' : fitsBelow ? 'bottom' : (spaceAbove >= spaceBelow ? 'top' : 'bottom'))
 
   /** 三个上限里最小的那个：菜单自然高、该侧可用空间、**视口本身**。 */
   const height = Math.max(0, Math.min(menuHeight, side === 'top' ? spaceAbove : spaceBelow, viewportHeight - margin * 2))

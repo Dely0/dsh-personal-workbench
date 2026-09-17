@@ -46,6 +46,11 @@ import type {
 } from '../shared/contracts.js'
 import { Icon } from './components/Icon.js'
 import { Badge, MultiSelectDropdown, TaskTreeRows, countTaskTree } from './components/TaskList.js'
+import { KnowledgeList, KnowledgePager, KnowledgeToolbar, EMPTY_KNOWLEDGE_FILTERS, kindTabs, reconcileKnowledgeKinds, selectedKind, type KnowledgeFilters } from './components/KnowledgeList.js'
+import { IdeaCardGrid, type IdeaCardItem } from './components/IdeaCardGrid.js'
+import {
+  DEFAULT_SORT_DIR, buildListPage, normalizePageSize, normalizeSortDir, normalizeSortKey, toContentItem,
+} from './listPresentation.js'
 import { PlanPanel } from './components/PlanPanel.js'
 import {
   clientFileLinkToPath, draftKindLabel, eventIcon, eventLabel, fmtTime, localDateString,
@@ -110,6 +115,61 @@ function newTaskId(): string {
   const cryptoObj = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto
   if (typeof cryptoObj?.randomUUID === 'function') return cryptoObj.randomUUID()
   return `task-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+}
+
+/** 知识库列表状态的本地存储键（Tab 与排序要在刷新后保持，见验收项）。 */
+const KNOWLEDGE_FILTER_STORAGE_KEY = 'dsh.personal-workbench.knowledgeList'
+
+/**
+ * 读回知识库列表状态。
+ *
+ * 存储里的值**一律不可信**（分类可能被删、排序键可能改过、JSON 可能被手改）。
+ * ⚠️ 分类的合法性**必须拿到字典后才能判**（字典是异步来的），所以这里只做"形状"归一化，
+ * 真正"这个分类还在不在"由 `useEffect` 里的 `reconcileKnowledgeKinds` 收口 —— 否则删过分类的用户
+ * 下次打开会看到**空列表且没有任何 Tab 高亮**（v1.15.2 复审 F3）。
+ * localStorage 不可用（隐私模式）时静默降级为默认值。
+ */
+function readKnowledgeFilters(): KnowledgeFilters {
+  try {
+    const raw = localStorage.getItem(KNOWLEDGE_FILTER_STORAGE_KEY)
+    if (raw === null) return EMPTY_KNOWLEDGE_FILTERS
+    const saved = JSON.parse(raw) as Record<string, unknown>
+    const kinds = Array.isArray(saved.kinds) && saved.kinds.every((k) => typeof k === 'string') && saved.kinds.length > 0
+      ? saved.kinds as string[]
+      : ['all']
+    const tags = Array.isArray(saved.tags) ? saved.tags.filter((t): t is string => typeof t === 'string') : []
+    const sortKey = normalizeSortKey(saved.sortKey)
+    return {
+      keyword: '',
+      kinds,
+      tags,
+      sortKey,
+      sortDir: saved.sortDir === undefined ? DEFAULT_SORT_DIR : normalizeSortDir(saved.sortDir),
+      page: 0,
+      pageSize: normalizePageSize(saved.pageSize),
+    }
+  } catch {
+    return EMPTY_KNOWLEDGE_FILTERS
+  }
+}
+
+/**
+ * 分类合法性的唯一收口在 `KnowledgeList.tsx` 的 `reconcileKnowledgeKinds()` 里
+ * （可被 `node --test` 直接测；`index.tsx` 会碰 `window`，导入不了所以判定不放这儿）。
+ * 这里只负责在**拿到字典之后**调它。
+ */
+
+/** 只写"要在刷新后保持"的字段：关键词与页码是瞬时意图，不落盘。 */
+function writeKnowledgeFilters(filters: KnowledgeFilters): void {
+  try {
+    localStorage.setItem(KNOWLEDGE_FILTER_STORAGE_KEY, JSON.stringify({
+      kinds: filters.kinds,
+      tags: filters.tags,
+      sortKey: filters.sortKey,
+      sortDir: filters.sortDir,
+      pageSize: filters.pageSize,
+    }))
+  } catch { /* localStorage 不可用时静默降级：状态只在本次会话内有效 */ }
 }
 
 /** 读回上次选的模型（脏值一律当"没选过"，不让一个坏字符串把快速录入打挂）。 */
@@ -702,8 +762,13 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   const [pickedPlanSession, setPickedPlanSession] = useState<{ sessionId: string } | null>(null)
   const [planRefreshKey, setPlanRefreshKey] = useState(0)
   const [knowledgeEntries, setKnowledgeEntries] = useState<KnowledgeEntry[]>([])
-  const [knowledgeQuery, setKnowledgeQuery] = useState('')
-  const [knowledgeKind, setKnowledgeKind] = useState<string>('')
+  /**
+   * 知识库列表的筛选/排序/分页状态。
+   *
+   * 首屏从 localStorage 读回，保证「刷新 / 重开面板后 Tab 与排序还在」（验收项）。
+   * 判定全部交给 `listPresentation.ts`，这里只存状态、不存"哪些条目可见"。
+   */
+  const [knowledgeFilters, setKnowledgeFilters] = useState<KnowledgeFilters>(() => readKnowledgeFilters())
   const [selectedKnowledge, setSelectedKnowledge] = useState<KnowledgeEntry | null>(null)
   const [knowledgeDraft, setKnowledgeDraft] = useState<{ title: string; contentMd: string; kindCode: string; tags: string; sourceTaskId: string; sourceReviewId: string; fileLink: string } | null>(null)
   const [knowledgeEditId, setKnowledgeEditId] = useState<string | null>(null)
@@ -726,9 +791,9 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   const [selectedCluster, setSelectedCluster] = useState<IdeaClusterView | null>(null)
   const [ideaForm, setIdeaForm] = useState<{ title: string; contentMd: string; kindCode: string; tags: string } | null>(null)
   const [ideaEditId, setIdeaEditId] = useState<string | null>(null)
-  // 文件夹（= 点子王）管理：新建/改名表单，以及「归入文件夹」菜单展开的卡片
+  // 文件夹（= 点子王）管理：新建/改名表单
+  // 「归入文件夹」菜单的开合与摆放归 `IdeaCardGrid` 自己管（纯 UI 选择，页面不需要参与）
   const [folderForm, setFolderForm] = useState<{ mode: 'create' | 'rename'; id: string | null; title: string; summaryMd: string } | null>(null)
-  const [folderMenuIdeaId, setFolderMenuIdeaId] = useState<string | null>(null)
   const [ideaRefreshKey, setIdeaRefreshKey] = useState(0)
   const [reportRefreshKey, setReportRefreshKey] = useState(0)
   const [todayPlanSession, setTodayPlanSession] = useState<{ sessionId: string } | null>(null)
@@ -774,14 +839,11 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
     } finally { setSkillsLoading(false) }
   }, [])
 
+  // 知识库：一次取回后**全部在客户端**搜索/筛选/排序/分页 —— 千级规模下每次敲字都打库是不可接受的。
   const loadKnowledge = useCallback(async () => {
-    const params = new URLSearchParams()
-    if (knowledgeQuery.trim() !== '') params.set('q', knowledgeQuery.trim())
-    if (knowledgeKind !== '') params.set('kind_code', knowledgeKind)
-    const qs = params.toString()
-    const res = await api<{ entries: KnowledgeEntry[] }>(`/api/workbench/knowledge${qs === '' ? '' : `?${qs}`}`)
+    const res = await api<{ entries: KnowledgeEntry[] }>('/api/workbench/knowledge')
     setKnowledgeEntries(res.entries)
-  }, [knowledgeQuery, knowledgeKind])
+  }, [])
   useEffect(() => {
     if (view === 'knowledge') void loadKnowledge().catch(() => undefined)
   }, [view, loadKnowledge, knowledgeRefreshKey])
@@ -1706,6 +1768,57 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
     return filterTaskTree(buildTaskTree(source, undefined, taskSorter), (t) => matchesTaskFilter(t, taskFilter))
   }, [archivedMode, archivedTasks, tasks, taskSorter, taskFilter])
 
+  /**
+   * 知识库：把「条目 + 筛选状态」交给 `listPresentation.ts` 判定，组件只渲染结果。
+   *
+   * `now` 每次渲染现取：时间分组（今天/本周/…）本来就要跟着现实时间走，
+   * 而"判定输入是显式快照"这条约束要求它是显式传进去的，不是在判定模块里读 `Date.now()`。
+   */
+  const knowledgeDicts = useMemo(() => dictOf('knowledge_kind'), [dictOf])
+  const knowledgePage = useMemo(() => buildListPage({
+    items: knowledgeEntries.map(toContentItem),
+    query: {
+      tab: selectedKind(knowledgeFilters),
+      keyword: knowledgeFilters.keyword,
+      tags: knowledgeFilters.tags,
+      sortKey: knowledgeFilters.sortKey,
+      sortDir: knowledgeFilters.sortDir,
+      page: knowledgeFilters.page,
+      pageSize: knowledgeFilters.pageSize,
+    },
+    now: Date.now(),
+    tabOf: (entry) => entry.kindCode,
+    tabCodes: knowledgeDicts.map((d) => d.code),
+  }), [knowledgeEntries, knowledgeFilters, knowledgeDicts])
+  /** 唯一的筛选状态入口：改状态。落盘交给下面的 effect —— **不在 setState 更新函数里写存储**。 */
+  const updateKnowledgeFilters = useCallback((patch: Partial<KnowledgeFilters>) => {
+    setKnowledgeFilters((prev) => ({ ...prev, ...patch }))
+  }, [])
+  /**
+   * 持久化 + 分类合法性收口：只在筛选状态真的变化时写。
+   *
+   * 不写在 `setKnowledgeFilters` 的更新函数里是有原因的：那个函数是**渲染期计算**，
+   * React 可以重复调用它（并发渲染 / StrictMode 双调用），副作用放进去就会被执行多次。
+   * 放 effect 里既幂等也符合"副作用只在 effect 里"这条项目硬约束。
+   */
+  useEffect(() => {
+    writeKnowledgeFilters(knowledgeFilters)
+  }, [knowledgeFilters])
+  /**
+   * 字典到了之后校正一次存下来的分类（删过分类的用户不该看到"空列表 + 无 Tab 高亮"）。
+   * 字典是异步来的，所以这件事只能在 effect 里做，不能在读 localStorage 时做。
+   */
+  useEffect(() => {
+    const fixed = reconcileKnowledgeKinds(knowledgeFilters, knowledgeDicts.map((d) => d.code))
+    if (fixed !== null) setKnowledgeFilters(fixed)
+  }, [knowledgeFilters, knowledgeDicts])
+
+  /** 点子卡片网格的入参：附上"属于哪些文件夹"，组件不自己去翻 ideaClusters。 */
+  const ideaCardItems = useMemo<IdeaCardItem[]>(() => ideas.map((idea) => ({
+    ...toContentItem(idea),
+    clusterIds: ideaClusters.filter((cluster) => cluster.ideas.some((member) => member.id === idea.id)).map((cluster) => cluster.id),
+  })), [ideas, ideaClusters])
+
   const now = new Date()
   const todayStart = startOfDay(now)
   const todayEnd = new Date(todayStart); todayEnd.setDate(todayEnd.getDate() + 1)
@@ -1735,7 +1848,6 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
 
   const refreshIdeas = async (): Promise<void> => {
     setIdeaRefreshKey((value) => value + 1)
-    setFolderMenuIdeaId(null)
   }
 
   /** 新建空文件夹 / 文件夹改名。 */
@@ -2800,36 +2912,43 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                 <button className="wb-btn primary" disabled={busy} onClick={() => void summarizeLocalDoc()}><Icon name="file" />AI 总结本地文档</button>
               </div>
               <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
-                <input style={{ flex: 1, minWidth: 140, background: 'var(--dsw-alias-bg-base,#17171a)', border: '1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.15))', color: 'inherit', borderRadius: 8, padding: '7px 10px' }} placeholder="搜索标题 / 内容 / 标签" value={knowledgeQuery} onChange={(e) => setKnowledgeQuery(e.target.value)} />
-                <select style={{ background: 'var(--dsw-alias-bg-base,#17171a)', border: '1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.15))', color: 'inherit', borderRadius: 8, padding: '7px 10px' }} value={knowledgeKind} onChange={(e) => setKnowledgeKind(e.target.value)}>
-                  <option value="">全部分类</option>
-                  {dictOf('knowledge_kind').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}
-                </select>
                 <button className="wb-btn primary" onClick={() => { setKnowledgeEditId(null); setKnowledgeDraft({ title: '', contentMd: '', kindCode: 'note', tags: '', sourceTaskId: '', sourceReviewId: '', fileLink: '' }) }}><Icon name="plus" />新建</button>
               </div>
-              <div className="wb-list">
-                {knowledgeEntries.map((entry) => (
-                  <div key={entry.id} className={`wb-row ${selectedKnowledge?.id === entry.id ? 'selected' : ''}`} onClick={() => { setKnowledgeEditId(null); setKnowledgeDraft(null); setSelectedKnowledge(entry) }}>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontWeight: 600 }}>{entry.title}</div>
-                      <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', alignItems: 'center', marginTop: 3 }}>
-                        <Badge dict={dictOf('knowledge_kind')} code={entry.kindCode} />
-                        {entry.tags.map((tag) => <span key={tag} style={{ fontSize: 11, color: '#999' }}>#{tag}</span>)}
-                        {entry.fileLink !== null && entry.fileLink !== '' && <span title={entry.fileLink} style={{ fontSize: 11, color: '#999', display: 'inline-flex', alignItems: 'center', gap: 2 }}><Icon name="file" size={11} />文件</span>}
-                        <span style={{ fontSize: 11, color: '#999' }}>{new Date(entry.updatedAt).toLocaleString()}</span>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-                {knowledgeEntries.length === 0 && (
-                  <div className="wb-empty" style={{ padding: '28px 18px' }}>
-                    <div style={{ marginBottom: 6, color: 'var(--dsw-alias-state-business-primary, #4f8ef7)' }}><Icon name="book" size={30} /></div>
-                    <div style={{ fontWeight: 600, marginBottom: 4 }}>还没有知识条目</div>
-                    <div style={{ fontSize: 12, opacity: .8, marginBottom: 12 }}>沉淀经验教训、决策和可复用片段；也可以在 AI 复盘后一键写入</div>
-                    <button className="wb-btn primary" onClick={() => { setKnowledgeEditId(null); setKnowledgeDraft({ title: '', contentMd: '', kindCode: 'note', tags: '', sourceTaskId: '', sourceReviewId: '', fileLink: '' }) }}>新建知识</button>
-                  </div>
-                )}
-              </div>
+              <KnowledgeToolbar
+                filters={knowledgeFilters}
+                tabs={kindTabs(knowledgeDicts, knowledgePage.tabCounts)}
+                tagCounts={knowledgePage.tagCounts}
+                total={knowledgePage.total}
+                onChange={updateKnowledgeFilters}
+                onClear={() => updateKnowledgeFilters({ keyword: '', kinds: ['all'], tags: [], page: 0 })}
+              />
+              {knowledgeEntries.length === 0 ? (
+                <div className="wb-empty" style={{ padding: '28px 18px' }}>
+                  <div style={{ marginBottom: 6, color: 'var(--dsw-alias-state-business-primary, #4f8ef7)' }}><Icon name="book" size={30} /></div>
+                  <div style={{ fontWeight: 600, marginBottom: 4 }}>还没有知识条目</div>
+                  <div style={{ fontSize: 12, opacity: .8, marginBottom: 12 }}>沉淀经验教训、决策和可复用片段；也可以在 AI 复盘后一键写入</div>
+                  <button className="wb-btn primary" onClick={() => { setKnowledgeEditId(null); setKnowledgeDraft({ title: '', contentMd: '', kindCode: 'note', tags: '', sourceTaskId: '', sourceReviewId: '', fileLink: '' }) }}>新建知识</button>
+                </div>
+              ) : (
+                <>
+                  <KnowledgeList
+                    page={knowledgePage}
+                    dicts={knowledgeDicts}
+                    selectedId={selectedKnowledge?.id}
+                    onOpen={(item) => {
+                      const entry = knowledgeEntries.find((e) => e.id === item.id)
+                      if (entry === undefined) return
+                      setKnowledgeEditId(null); setKnowledgeDraft(null); setSelectedKnowledge(entry)
+                    }}
+                  />
+                  <KnowledgePager
+                    page={knowledgePage}
+                    pageSize={knowledgeFilters.pageSize}
+                    onPage={(page) => updateKnowledgeFilters({ page })}
+                    onPageSize={(pageSize) => updateKnowledgeFilters({ pageSize, page: 0 })}
+                  />
+                </>
+              )}
             </>
           )}
 
@@ -2889,44 +3008,34 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
               )}
               {ideaTab !== 'clusters' && (
                 <>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))', gap: 9 }}>
-                    {unfiledIdeas.map((idea) => (
-                      <div key={idea.id} className={`wb-card wb-idea-card ${selectedIdea?.id === idea.id || selectedIdeaIds.has(idea.id) ? 'selected' : ''}`} style={{ marginBottom: 0 }} onClick={() => { setSelectedCluster(null); setSelectedIdea(idea) }}>
-                        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6 }}>
-                          <input type="checkbox" checked={selectedIdeaIds.has(idea.id)} onClick={(e) => e.stopPropagation()} onChange={(e) => setSelectedIdeaIds((prev) => { const next = new Set(prev); if (e.target.checked) next.add(idea.id); else next.delete(idea.id); return next })} style={{ width: 16, height: 16, flex: 'none', cursor: 'pointer' }} />
-                          <b style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{idea.title}</b>
-                        </div>
-                        <div className="wb-idea-summary">{idea.contentMd.replace(/[#*`>]/g, '').slice(0, 80) || '（无内容）'}</div>
-                        <div className="wb-idea-foot">
-                          <Badge dict={dictOf('idea_kind')} code={idea.kindCode} />
-                          {idea.tags.slice(0, 3).map((tag) => <span key={tag} style={{ fontSize: 11, color: 'var(--dsw-alias-label-secondary)' }}>#{tag}</span>)}
-                        </div>
-                        <div style={{ marginTop: 8, position: 'relative' }} onClick={(e) => e.stopPropagation()}>
-                          <button className="wb-btn" style={{ fontSize: 11.5, padding: '3px 8px' }} disabled={ideaClusters.length === 0} title={ideaClusters.length === 0 ? '先在右上角新建一个文件夹' : '归入文件夹（一个点子可属于多个）'} onClick={() => setFolderMenuIdeaId((prev) => prev === idea.id ? null : idea.id)}>归入文件夹 ▾</button>
-                          {folderMenuIdeaId === idea.id && (
-                            <div style={{ position: 'absolute', zIndex: 30, top: '100%', left: 0, marginTop: 4, minWidth: 200, background: 'var(--dsw-alias-bg-layer-2, #1c1c1f)', border: '1px solid var(--wb-line, rgba(127,127,127,.26))', borderRadius: 10, boxShadow: '0 10px 30px rgba(0,0,0,.25)', padding: 4 }}>
-                              {ideaClusters.map((cluster) => (
-                                <button key={cluster.id} className="wb-btn" style={{ width: '100%', justifyContent: 'flex-start', border: 'none', background: 'transparent' }} onClick={() => void fileIdeaInto(idea.id, cluster.id)}>
-                                  <Icon name="folder" size={13} />{cluster.title}
-                                </button>
-                              ))}
-                              <button className="wb-btn" style={{ width: '100%', justifyContent: 'flex-start', border: 'none', background: 'transparent' }} onClick={() => { setFolderMenuIdeaId(null); setFolderForm({ mode: 'create', id: null, title: '', summaryMd: '' }) }}>
-                                <Icon name="plus" size={13} />新建文件夹…
-                              </button>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                    {unfiledIdeas.length === 0 && (
-                      <div className="wb-empty" style={{ gridColumn: '1 / -1', padding: '26px 18px' }}>
-                        <div className="wb-empty-ic"><Icon name="idea" size={17} /></div>
-                        <div style={{ fontWeight: 600, marginBottom: 4 }}>{ideas.length === 0 ? '还没有点子' : '所有点子都已归类'}</div>
-                        <div style={{ fontSize: 12, opacity: .8, marginBottom: 12 }}>{ideas.length === 0 ? '把一闪而过的灵感先记下来，之后可以 AI 找关联、头脑风暴' : '新记的点子会先出现在这里'}</div>
-                        <button className="wb-btn primary" onClick={() => { setIdeaEditId(null); setIdeaForm({ title: '', contentMd: '', kindCode: 'spark', tags: '' }); setSelectedIdea(null) }}>记个点子</button>
-                      </div>
-                    )}
-                  </div>
+                  {unfiledIdeas.length === 0 ? (
+                    <div className="wb-empty" style={{ padding: '26px 18px' }}>
+                      <div className="wb-empty-ic"><Icon name="idea" size={17} /></div>
+                      <div style={{ fontWeight: 600, marginBottom: 4 }}>{ideas.length === 0 ? '还没有点子' : '所有点子都已归类'}</div>
+                      <div style={{ fontSize: 12, opacity: .8, marginBottom: 12 }}>{ideas.length === 0 ? '把一闪而过的灵感先记下来，之后可以 AI 找关联、头脑风暴' : '新记的点子会先出现在这里'}</div>
+                      <button className="wb-btn primary" onClick={() => { setIdeaEditId(null); setIdeaForm({ title: '', contentMd: '', kindCode: 'spark', tags: '' }); setSelectedIdea(null) }}>记个点子</button>
+                    </div>
+                  ) : (
+                    <IdeaCardGrid
+                      ideas={ideaCardItems}
+                      dicts={dictOf('idea_kind')}
+                      selectedId={selectedIdea?.id}
+                      pickedIds={selectedIdeaIds}
+                      clusters={ideaClusters.map((c) => ({ id: c.id, title: c.title }))}
+                      onOpen={(item) => {
+                        const idea = ideas.find((x) => x.id === item.id)
+                        if (idea === undefined) return
+                        setSelectedCluster(null); setSelectedIdea(idea)
+                      }}
+                      onTogglePick={(id) => setSelectedIdeaIds((prev) => {
+                        const next = new Set(prev)
+                        if (next.has(id)) next.delete(id); else next.add(id)
+                        return next
+                      })}
+                      onFileInto={(ideaId, clusterId) => { void fileIdeaInto(ideaId, clusterId) }}
+                      onCreateFolder={() => setFolderForm({ mode: 'create', id: null, title: '', summaryMd: '' })}
+                    />
+                  )}
                 </>
               )}
               {ideaTab === 'clusters' && ideaClusters.length === 0 && (

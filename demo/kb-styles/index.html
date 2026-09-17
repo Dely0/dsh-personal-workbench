@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>知识库页面 · 4 款样式选型（设计打样）</title>
+<style>
+  :root {
+    --bg: #0f0f12;
+    --panel: #17171b;
+    --line: rgba(255,255,255,.12);
+    --line-soft: rgba(255,255,255,.07);
+    --text: #eceef1;
+    --muted: #9aa3ad;
+    --accent: #4f8ef7;
+    --good: #2e9b7b;
+    --warn: #f0a63c;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 22px 24px 70px; background: var(--bg); color: var(--text);
+    font: 13.5px/1.5 system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; }
+  .page { max-width: 1500px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 0 0 6px; }
+  h2 { font-size: 16px; margin: 0; }
+  .sub { color: var(--muted); font-size: 12.5px; line-height: 1.75; margin: 0 0 18px; max-width: 900px; }
+  .sub code { background: rgba(255,255,255,.07); border-radius: 4px; padding: 0 4px; }
+
+  .topbar { position: sticky; top: 0; z-index: 40; display: flex; gap: 10px; flex-wrap: wrap; align-items: center;
+    padding: 11px 13px; margin-bottom: 20px; border: 1px solid var(--line); border-radius: 12px;
+    background: color-mix(in srgb, var(--panel) 93%, transparent); backdrop-filter: blur(8px); }
+  .topbar .lbl { color: var(--muted); font-size: 12px; }
+  .btn { border: 1px solid var(--line); background: transparent; color: var(--text); border-radius: 8px;
+    padding: 7px 12px; font: inherit; font-size: 12.5px; cursor: pointer; white-space: nowrap; }
+  .btn:hover { background: rgba(255,255,255,.06); }
+  .btn.on { border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+    background: color-mix(in srgb, var(--accent) 17%, transparent); font-weight: 600; }
+  .seg { display: inline-flex; gap: 2px; padding: 3px; border-radius: 10px; background: #101014; border: 1px solid var(--line); }
+  .seg .btn { border: none; border-radius: 8px; }
+  .spacer { flex: 1; }
+
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+  @media (max-width: 1180px) { .grid { grid-template-columns: 1fr; } }
+  .option { border: 1px solid var(--line); border-radius: 14px; background: var(--panel); overflow: hidden; }
+  .option.only { grid-column: 1 / -1; }
+  .opt-head { padding: 13px 15px 11px; border-bottom: 1px solid var(--line-soft); position: relative; }
+  .opt-head .ready { position: absolute; top: 12px; right: 14px; font-size: 10.5px; color: var(--muted); }
+  .opt-head h2 { display: flex; align-items: center; gap: 8px; }
+  .opt-head .no { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px;
+    border-radius: 7px; background: color-mix(in srgb, var(--accent) 22%, transparent); color: #cfe0ff;
+    font-size: 12px; font-weight: 700; flex: none; }
+  .opt-head .why { color: var(--muted); font-size: 12px; margin-top: 6px; line-height: 1.7; }
+  .opt-head .why b { color: var(--text); font-weight: 600; }
+  .opt-head .ref { color: var(--muted); font-size: 11.5px; margin-top: 4px; }
+  .opt-head .ref a { color: var(--accent); text-decoration: none; }
+  .opt-head .ref a:hover { text-decoration: underline; }
+  .stage { padding: 16px; background: #101013; }
+  .stage-scaled { overflow: hidden; }
+  .stage-scaled iframe { border: 0; display: block; transform-origin: 0 0; background: #101013; }
+  iframe { width: 1180px; height: 660px; }
+  .tagline { display: inline-flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+  .pill { font-size: 11px; border: 1px solid var(--line); border-radius: 999px; padding: 2px 8px; color: var(--muted); }
+  .pill.hot { color: #ffd9a8; border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
+  .note { margin-top: 26px; border: 1px solid var(--line); border-radius: 14px; padding: 16px 18px; background: var(--panel); }
+  .note h2 { margin-bottom: 10px; }
+  .note table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  .note th, .note td { border: 1px solid var(--line-soft); padding: 8px 10px; text-align: left; vertical-align: top; }
+  .note th { color: var(--muted); font-weight: 600; background: rgba(255,255,255,.03); }
+  .note ul { margin: 8px 0 0; padding-left: 20px; color: var(--muted); line-height: 1.8; font-size: 12.5px; }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>知识库页面 · 4 款样式选型</h1>
+  <p class="sub">
+    同一个假数据集（1,000 条），同一块面板尺寸（左「列表」右「详情」，和现在插件的骨架一致）。
+    每款都做了 <b>修前 / 修后</b> 两个版本，默认展示<b>修前</b>（= 现在的下拉 + 无分页），
+    点卡片里的「修后」就能看到改造后的样子 —— 这样款式的差别不会被功能差别掩盖。
+    假数据里混了「一周内更新」与「本月更新」的条目，方便看分组效果。
+  </p>
+
+  <div class="topbar">
+    <span class="lbl">全部卡片一起切：</span>
+    <span class="seg" id="segAll">
+      <button class="btn on" data-all="before">修前（现状）</button>
+      <button class="btn" data-all="after">修后（新样式）</button>
+    </span>
+    <span class="spacer"></span>
+    <span class="lbl" id="hint">款式之间可以反复切，挑一个你顺眼的告诉我编号即可。</span>
+  </div>
+
+  <div class="grid" id="grid"></div>
+
+  <div class="note">
+    <h2>四款的差别，一句话各是什么</h2>
+    <table>
+      <tr><th style="width:44px">#</th><th style="width:200px">款式</th><th>视觉性格</th><th style="width:300px">适合什么</th></tr>
+      <tr><td>1</td><td>卡片瀑布（Bento / 画廊）</td><td>每条一张圆角卡片，彩色左边框标类型，2 列网格；像 Notion Gallery、Anytype</td><td>条目 50–300 条、以"翻看"为主；条目上千后信息密度偏低</td></tr>
+      <tr><td>2</td><td>密集列表 + 时间分组</td><td>单列行，左侧色条 + 类型点，按「今天 / 本周 / 本月 / 更早」分组，底部编号分页</td><td>条目上千仍好扫；最接近"专业工具"的观感</td></tr>
+      <tr><td>3</td><td>左导航树 + 双栏</td><td>类型变成左侧分组树（带条数），中间是紧凑列表，最右才是详情；像 SiYuan / Obsidian</td><td>分类多、想要固定分类入口；面板宽度够（≥1000px）时最好看</td></tr>
+      <tr><td>4</td><td>杂志式首屏 + 列表</td><td>顶部一排统计卡 + 一条「最近更新」大卡，下面才是列表；像 Outline 首页</td><td>想让知识库"有首页感"、能一眼看到最近沉淀了什么</td></tr>
+    </table>
+    <ul>
+      <li>四款都带：搜索框、类型入口（Tab 或左树）、底部编号分页（50/页）。款式 2 额外带时间分组，款式 4 额外带统计首屏。</li>
+      <li>四款都<b>没有</b>动数据结构：用的还是现有的 <code>title / kindCode / tags / fileLink / sourceTaskId / updatedAt</code>。</li>
+      <li>方向可混搭：比如"款式 2 的列表 + 款式 4 的统计首屏"、"款式 3 的左树 + 款式 1 的卡片"。</li>
+    </ul>
+  </div>
+</div>
+
+<script>
+const OPTIONS = [
+  {
+    id: 'gallery',
+    no: '1',
+    name: '卡片瀑布（Bento / 画廊）',
+    why: '每条一张卡片，**彩色左边框**标类型，2 列网格铺开。参考 Notion Gallery / Anytype 的"卡片墙"。',
+    pills: ['信息密度：中', '好看程度：高', '千条可扫性：中'],
+    ref: '参考：<a href="https://anytype.io/" target="_blank" rel="noreferrer">Anytype</a> · <a href="https://www.notion.com/" target="_blank" rel="noreferrer">Notion Gallery</a>',
+  },
+  {
+    id: 'dense',
+    no: '2',
+    name: '密集列表 + 时间分组',
+    why: '单列行，左侧 3px 色条 + 类型圆点，按 **今天 / 本周 / 本月 / 更早** 分组，底部编号分页。参考 Linear / Height 的列表质感。',
+    pills: ['信息密度：高', '好看程度：中高', '千条可扫性：高', '← 最推荐'],
+    ref: '参考：<a href="https://linear.app/" target="_blank" rel="noreferrer">Linear</a> · <a href="https://height.app/" target="_blank" rel="noreferrer">Height</a> 的列表视图',
+  },
+  {
+    id: 'sidenav',
+    no: '3',
+    name: '左导航树 + 双栏',
+    why: '类型升成**左侧分组树**（带条数），中间紧凑列表，最右详情。参考思源笔记 / Obsidian 的三栏。',
+    pills: ['信息密度：高', '好看程度：中高', '需要更宽面板'],
+    ref: '参考：<a href="https://b3log.org/siyuan/" target="_blank" rel="noreferrer">SiYuan 思源笔记</a> · <a href="https://obsidian.md/" target="_blank" rel="noreferrer">Obsidian</a>',
+  },
+  {
+    id: 'magazine',
+    no: '4',
+    name: '杂志式首屏 + 列表',
+    why: '顶部一排统计卡（总条数 / 本周新增 / 待关联），下面一条「最近更新」大卡，再下面才是列表。参考 Outline 首页。',
+    pills: ['信息密度：中', '好看程度：高', '有"首页感"'],
+    ref: '参考：<a href="https://www.getoutline.com/" target="_blank" rel="noreferrer">Outline</a> · <a href="https://github.com/blinkospace/blinko" target="_blank" rel="noreferrer">Blinko</a>',
+  },
+];
+
+const grid = document.getElementById('grid');
+for (const opt of OPTIONS) {
+  const el = document.createElement('section');
+  el.className = 'option';
+  el.dataset.id = opt.id;
+  el.innerHTML = `
+    <div class="opt-head">
+      <h2><span class="no">${opt.no}</span>${opt.name}</h2>
+      <div class="why">${opt.why.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')}</div>
+      <div class="ref">${opt.ref}</div>
+      <div class="tagline">${opt.pills.map((p) => `<span class="pill ${p.startsWith('←') ? 'hot' : ''}">${p}</span>`).join('')}</div>
+      <span class="ready"></span>
+    </div>
+    <div class="stage">
+      <div class="stage-scaled"><iframe src="kb-style-${opt.id}.html" scrolling="no" title="${opt.name}"></iframe></div>
+    </div>`;
+  grid.appendChild(el);
+}
+
+// file:// 下父页面读不到 iframe 的 DOM（跨源），所以打样页画完会 postMessage 自报行数
+const readyRows = new Map();
+window.addEventListener('message', (ev) => {
+  if (ev.data === null || typeof ev.data !== 'object' || ev.data.type !== 'kb-demo-ready') return;
+  const frames = [...document.querySelectorAll('.stage iframe')];
+  const idx = frames.findIndex((f) => f.contentWindow === ev.source);
+  if (idx < 0) return;
+  const opt = OPTIONS[idx];
+  if (opt === undefined) return;
+  readyRows.set(opt.id, ev.data.rows);
+  const badge = document.querySelector(`.option[data-id="${opt.id}"] .ready`);
+  if (badge !== null) badge.textContent = `✅ 已渲染 ${ev.data.rows} 行`;
+});
+
+// 整体缩放：把 1180px 宽的面板缩小到卡片宽度
+function fit() {
+  for (const stage of document.querySelectorAll('.stage-scaled')) {
+    const iframe = stage.querySelector('iframe');
+    if (iframe === null) continue;
+    const w = stage.clientWidth;
+    const scale = Math.max(.4, Math.min(1, w / 1180));
+    iframe.style.transform = `scale(${scale})`;
+    stage.style.height = (660 * scale) + 'px';
+  }
+}
+window.addEventListener('resize', fit);
+fit();
+
+// 统一切换所有卡片
+function broadcast(mode) {
+  for (const iframe of document.querySelectorAll('.stage iframe')) {
+    try { iframe.contentWindow.postMessage({ type: 'kb-demo-mode', mode }, '*'); } catch (e) { /* ignore */ }
+  }
+}
+document.getElementById('segAll').addEventListener('click', (ev) => {
+  const b = ev.target.closest('[data-all]');
+  if (b === null) return;
+  document.querySelectorAll('#segAll .btn').forEach((x) => x.classList.toggle('on', x === b));
+  broadcast(b.dataset.all);
+});
+
+// 卡片里点「只看这款」→ 占满整行
+grid.addEventListener('click', (ev) => {
+  const b = ev.target.closest('[data-only]');
+  if (b === null) return;
+  const target = b.closest('.option');
+  const isOnly = target.classList.contains('only');
+  for (const o of document.querySelectorAll('.option')) o.classList.remove('only');
+  if (!isOnly) target.classList.add('only');
+  fit();
+});
+</script>
+</body>
+</html>

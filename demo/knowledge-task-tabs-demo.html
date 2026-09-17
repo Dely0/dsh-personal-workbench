@@ -1,0 +1,885 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>知识库 / 任务列表：Tab 分类 + 搜索筛选排序分页 — 设计稿</title>
+<style>
+  :root {
+    --bg: #111114;
+    --panel: #18181c;
+    --panel-2: #1c1c1f;
+    --border: rgba(255,255,255,.14);
+    --border-soft: rgba(255,255,255,.08);
+    --text: #eee;
+    --muted: #9aa3ad;
+    --accent: #4f8ef7;
+    --good: #2e9b7b;
+    --warn: #f39c12;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 20px 22px 60px; background: var(--bg); color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; font-size: 13.5px; }
+  .page { max-width: 1320px; margin: 0 auto; }
+  h1 { font-size: 19px; margin: 0 0 4px; }
+  h2 { font-size: 15px; margin: 0 0 2px; }
+  .sub { color: var(--muted); font-size: 12.5px; margin: 0 0 16px; line-height: 1.7; }
+  .hint { color: var(--muted); font-size: 11.5px; line-height: 1.6; }
+
+  /* ---------- 顶部控制条 ---------- */
+  .topbar { position: sticky; top: 0; z-index: 60; display: flex; gap: 10px; flex-wrap: wrap; align-items: center;
+    padding: 11px 13px; margin: 0 0 16px; border: 1px solid var(--border); border-radius: 12px;
+    background: color-mix(in srgb, var(--panel) 92%, transparent); backdrop-filter: blur(8px); }
+  .topbar .group { display: inline-flex; align-items: center; gap: 6px; }
+  .topbar label { color: var(--muted); font-size: 12px; }
+  .spacer { flex: 1; }
+
+  button, select, input { font: inherit; }
+  .btn { border: 1px solid var(--border); background: transparent; color: var(--text); border-radius: 8px;
+    padding: 7px 12px; font-size: 12.5px; cursor: pointer; white-space: nowrap; }
+  .btn:hover { background: rgba(255,255,255,.06); }
+  .btn:disabled { opacity: .4; cursor: default; }
+  .btn.on { border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+    background: color-mix(in srgb, var(--accent) 16%, transparent); color: #fff; font-weight: 600; }
+  .btn.primary { border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+    background: color-mix(in srgb, var(--accent) 20%, transparent); font-weight: 600; }
+  input[type=search], select { background: #101014; border: 1px solid var(--border); color: var(--text);
+    border-radius: 8px; padding: 7px 10px; font-size: 12.5px; min-width: 0; }
+  input[type=search] { flex: 1; min-width: 150px; }
+  .seg { display: inline-flex; padding: 3px; border-radius: 10px; background: #101014;
+    border: 1px solid var(--border); gap: 2px; }
+  .seg .btn { border: none; border-radius: 8px; padding: 6px 12px; }
+  .seg .btn.on { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+
+  /* ---------- 视图容器 ---------- */
+  .view { border: 1px solid var(--border); border-radius: 14px; background: var(--panel);
+    padding: 14px; margin-bottom: 18px; }
+  .view-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+  .view-head .tag { font-size: 11px; color: var(--muted); border: 1px solid var(--border);
+    border-radius: 999px; padding: 2px 8px; }
+  .compare { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .compare-col { border: 1px dashed var(--border); border-radius: 12px; padding: 10px; min-width: 0; }
+  .compare-col > h3 { margin: 0 0 8px; font-size: 12.5px; color: var(--muted); font-weight: 600; }
+  .compare-col.old > h3 { color: var(--warn); }
+  .compare-col.new > h3 { color: var(--good); }
+
+  /* ---------- Tab 分类（方案 B） ---------- */
+  .tabs { display: flex; gap: 2px; overflow-x: auto; border-bottom: 1px solid var(--border);
+    padding: 0 0 0 2px; scrollbar-width: thin; }
+  .tabs::-webkit-scrollbar { height: 5px; }
+  .tabs::-webkit-scrollbar-thumb { background: rgba(255,255,255,.16); border-radius: 3px; }
+  .tab { position: relative; border: none; background: transparent; color: var(--muted); cursor: pointer;
+    padding: 9px 12px 10px; border-radius: 8px 8px 0 0; font-size: 13px; white-space: nowrap;
+    display: inline-flex; align-items: center; gap: 6px; border-bottom: 2px solid transparent; }
+  .tab:hover { color: var(--text); background: rgba(255,255,255,.04); }
+  .tab.on { color: var(--text); font-weight: 600; border-bottom-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 8%, transparent); }
+  .tab .cnt { font-size: 11px; color: var(--muted); background: rgba(255,255,255,.07);
+    border-radius: 999px; padding: 1px 6px; font-variant-numeric: tabular-nums; }
+  .tab.on .cnt { color: var(--text); background: color-mix(in srgb, var(--accent) 22%, transparent); }
+  .tab.over { display: none; } /* 更多 ▾ 展开 */
+  .tabs.open .tab.over { display: inline-flex; }
+
+  /* ---------- Tab 分类（现状：下拉） ---------- */
+  .legacy-select { width: 100%; }
+
+  /* ---------- 工具条 ---------- */
+  .bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 12px 0 8px; }
+  .bar .field { display: inline-flex; align-items: center; gap: 6px; }
+  .bar .field > span { color: var(--muted); font-size: 12px; }
+  .fchips { display: flex; gap: 5px; flex-wrap: wrap; align-items: center; }
+  .fchip { border: 1px solid var(--border); background: transparent; color: var(--muted);
+    border-radius: 999px; padding: 3px 9px; font-size: 11.5px; cursor: pointer; white-space: nowrap; }
+  .fchip:hover { color: var(--text); background: rgba(255,255,255,.05); }
+  .fchip.on { color: var(--chipcolor, #fff); border-color: color-mix(in srgb, var(--chipcolor, #8fa8c8) 60%, transparent);
+    background: color-mix(in srgb, var(--chipcolor, #8fa8c8) 16%, transparent); font-weight: 600; }
+  .fchip .n { opacity: .65; font-variant-numeric: tabular-nums; }
+
+  /* ---------- 置顶 / 最近 ---------- */
+  .pinzone { border: 1px solid color-mix(in srgb, var(--warn) 34%, transparent);
+    background: color-mix(in srgb, var(--warn) 7%, transparent); border-radius: 10px;
+    padding: 7px 9px; margin-bottom: 8px; }
+  .pinzone .pz-head { font-size: 11px; color: var(--warn); font-weight: 600; margin-bottom: 5px;
+    display: flex; gap: 8px; align-items: center; }
+  .pinzone .pz-head .clear { margin-left: auto; }
+  .pinrow { display: flex; gap: 7px; align-items: center; padding: 3px 0; font-size: 12.5px; cursor: pointer; }
+  .pinrow .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pinrow .go { color: var(--accent); font-size: 11.5px; }
+
+  /* ---------- 列表 ---------- */
+  .list { border: 1px solid var(--border-soft); border-radius: 11px; overflow: hidden;
+    background: color-mix(in srgb, #000 18%, transparent); }
+  .list.virtual { max-height: 430px; overflow-y: auto; position: relative; }
+  .vph { position: relative; }
+  .vwin { position: absolute; left: 0; right: 0; top: 0; will-change: transform; }
+  .row { display: flex; align-items: center; gap: 9px; padding: 9px 11px;
+    border-bottom: 1px solid var(--border-soft); cursor: pointer; }
+  .row:last-child { border-bottom: none; }
+  .row:hover { background: rgba(255,255,255,.04); }
+  .row.pinned { background: color-mix(in srgb, var(--warn) 7%, transparent); }
+  .row .grow { flex: 1; min-width: 0; }
+  .title { font-weight: 600; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row.matched .title { border-radius: 4px; box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent); }
+  .meta { display: flex; gap: 5px; flex-wrap: wrap; align-items: center; margin-top: 3px; }
+  .excerpt { color: var(--muted); font-size: 11.5px; margin-top: 3px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chip { display: inline-flex; align-items: center; border-radius: 6px; padding: 2px 7px;
+    font-size: 11px; white-space: nowrap; font-weight: 600; }
+  .tg { font-size: 11px; color: var(--muted); }
+  .stamp { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; flex: none; }
+  .acts { display: flex; gap: 4px; flex: none; }
+  .iconb { border: none; background: transparent; color: var(--muted); cursor: pointer;
+    border-radius: 6px; padding: 2px 5px; font-size: 12px; line-height: 1.4; }
+  .iconb:hover { background: rgba(255,255,255,.09); color: var(--text); }
+  .iconb.on { color: var(--warn); }
+  .twist { width: 20px; flex: none; border: none; background: transparent; color: var(--muted);
+    cursor: pointer; font-size: 11px; }
+  .bar-chip { display: inline-flex; gap: 6px; align-items: center; font-size: 11.5px;
+    color: var(--muted); background: rgba(255,255,255,.05); border-radius: 7px; padding: 3px 8px; }
+  .bar-chip b { color: var(--text); font-weight: 600; }
+  .empty { padding: 26px; text-align: center; color: var(--muted); }
+
+  /* ---------- 分页 ---------- */
+  .pager { display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+    padding: 9px 2px 2px; color: var(--muted); font-size: 12px; }
+  .pager > span { white-space: nowrap; }
+  .pager .pages { display: flex; gap: 3px; }
+  .pnum { border: 1px solid var(--border); background: transparent; color: var(--muted);
+    border-radius: 7px; min-width: 30px; padding: 4px 7px; font-size: 12px; cursor: pointer; }
+  .pnum.on { border-color: color-mix(in srgb, var(--accent) 55%, transparent); color: #fff;
+    background: color-mix(in srgb, var(--accent) 18%, transparent); font-weight: 600; }
+
+  /* ---------- 指标 ---------- */
+  .metric { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; padding: 7px 10px;
+    border: 1px solid var(--border); border-radius: 9px; background: #101014; margin-top: 9px;
+    font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .metric b { color: var(--text); }
+  .metric .ok { color: var(--good); }
+  .metric .warn { color: var(--warn); }
+
+  table.notes { width: 100%; border-collapse: collapse; margin: 8px 0 0; font-size: 12.5px; }
+  table.notes th, table.notes td { border: 1px solid var(--border-soft); padding: 7px 9px; text-align: left;
+    vertical-align: top; }
+  table.notes th { color: var(--muted); font-weight: 600; background: rgba(255,255,255,.03); }
+  .badge { font-size: 11px; border-radius: 999px; padding: 2px 8px; border: 1px solid var(--border); }
+  .badge.ask { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
+  .badge.dec { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+  .note-list { margin: 6px 0 0; padding-left: 18px; color: var(--muted); font-size: 12px; line-height: 1.75; }
+  .note-list code { color: #cfd8e3; background: rgba(255,255,255,.06); border-radius: 4px; padding: 0 4px; }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>知识库 / 任务列表：下拉分类改 Tab 页 + 搜索 / 筛选 / 排序 / 分页（设计稿）</h1>
+  <p class="sub">
+    这是**静态设计稿**（假数据，纯 HTML/CSS/JS），用来确认交互形态；确认后再改真实插件代码。
+    右下「指标」是真实测得的「筛选 + 排序 + 渲染」耗时。
+  </p>
+
+  <div class="topbar">
+    <span class="group">
+      <label>视图</label>
+      <span class="seg" id="segView">
+        <button class="btn on" data-view="knowledge">知识库</button>
+        <button class="btn" data-view="tasks">任务列表</button>
+      </span>
+    </span>
+    <span class="group">
+      <label>形态</label>
+      <span class="seg" id="segMode">
+        <button class="btn on" data-mode="after">Tab（新）</button>
+        <button class="btn" data-mode="before">下拉（现状）</button>
+        <button class="btn" data-mode="compare">并排对比</button>
+      </span>
+    </span>
+    <span class="group">
+      <label>数据量</label>
+      <span class="seg" id="segScale">
+        <button class="btn" data-scale="120">120</button>
+        <button class="btn" data-scale="1200">1200</button>
+        <button class="btn" data-scale="3000">3000</button>
+      </span>
+    </span>
+    <span class="group">
+      <label>长列表</label>
+      <span class="seg" id="segRender">
+        <button class="btn on" data-render="pagination">分页</button>
+        <button class="btn" data-render="virtual">虚拟滚动</button>
+      </span>
+    </span>
+    <span class="spacer"></span>
+    <button class="btn" id="btnReset">重置为默认</button>
+  </div>
+
+  <!-- ============ 知识库 ============ -->
+  <section class="view" id="view-knowledge">
+    <div class="view-head">
+      <h2>知识库</h2>
+      <span class="tag">分类维度 = 知识类型（笔记 / 经验教训 / 决策记录 / 片段模板）</span>
+      <span class="tag">搜索：标题 + 正文 + 标签</span>
+    </div>
+    <div id="kbRoot"></div>
+  </section>
+
+  <!-- ============ 任务列表 ============ -->
+  <section class="view" id="view-tasks" style="display:none">
+    <div class="view-head">
+      <h2>任务列表</h2>
+      <span class="tag">分类维度 = 任务类型（9 类，含「全部」共 10 个 Tab）</span>
+      <span class="tag">状态 / 优先级 仍为多选筛选（与类型筛选可叠加）</span>
+    </div>
+    <div id="tkRoot"></div>
+  </section>
+
+  <!-- ============ 设计决策 ============ -->
+  <section class="view">
+    <h2 style="margin-bottom:8px">设计决策（请重点看表里 ⚠ 的两条）</h2>
+    <table class="notes">
+      <thead><tr><th style="width:120px">项</th><th>方案</th><th style="width:150px">类型</th></tr></thead>
+      <tbody>
+        <tr><td>分类形态</td><td>知识库与任务列表统一改为 <b>Tab 页</b>（下划线式，带条数徽标）。知识库 = 4 个知识类型 + 「全部」；任务列表 = 9 个任务类型 + 「全部」，超过 10 个自动收进「更多 ▾」。</td><td><span class="badge dec">已定</span></td></tr>
+        <tr><td>Tab 状态保持</td><td>Tab 选择写本地存储（键 <code>dsh.personal-workbench.tab.&lt;view&gt;</code>），刷新 / 重开面板后保持；切走再回来也保持。</td><td><span class="badge dec">已定</span></td></tr>
+        <tr><td>搜索</td><td>标题 + 正文全文匹配（大小写不敏感），命中处高亮；任务列表再加描述。输入框 200ms 防抖，1000 级数据实时不卡。</td><td><span class="badge dec">已定</span></td></tr>
+        <tr><td>筛选</td><td>与 Tab、搜索 <b>可叠加</b>：知识库按标签 + 关联任务 / 有无本地文件；任务列表按状态 + 优先级 +（类型已升为 Tab）。筛选项显示各自条数。</td><td><span class="badge dec">已定</span></td></tr>
+        <tr><td>排序</td><td>知识库：更新时间（默认↓）/ 创建时间 / 标题。任务列表：更新时间（默认↓）/ 截止时间 / 优先级 / 创建时间 / 标题。切方向按钮 ↑↓。</td><td><span class="badge dec">已定</span></td></tr>
+        <tr><td>分页 / 虚拟滚动</td><td>两者都提供，工具条上可切：<b>分页</b>（默认 50 条 / 页，可选 50 / 100 / 200）+ <b>虚拟滚动</b>（只挂可视区 ± 6 行）。任务树形态下虚拟滚动为「冻结表头 + 窗口化行」。</td><td><span class="badge dec">已定</span></td></tr>
+        <tr><td>置顶 / 最近使用</td><td>每行一个 ★ 置顶（写本地存储，不改任务字段），置顶区固定在列表上方；「最近使用」= 最近打开过的 5 条，同样固定在顶部，用「清空」移除。</td><td><span class="badge dec">已定</span></td></tr>
+        <tr><td>⚠ 任务侧「标签」</td><td>任务表 <b>没有</b> tags 字段。本稿把任务上已有的 <b>类型 / 优先级 / 状态</b> 徽标当作「标签」并可点选筛选，不新增数据库字段。若你要自由标签（如「#内网」「#TTS」），需要一次 schema 迁移 16 + 编辑界面，请在这条上表态。</td><td><span class="badge ask">请确认</span></td></tr>
+        <tr><td>⚠ 任务树 × 筛选</td><td>命中子任务时保留父链作为「上下文行」（淡显、不计入条数），与现状一致；分页按 <b>顶层根节点</b> 计数，父任务与其子树不拆到两页（避免出现无父的孤儿行）。</td><td><span class="badge ask">请确认</span></td></tr>
+      </tbody>
+    </table>
+    <div class="note-list">
+      <div>性能与验收口径（写进实现阶段的证据）：① 工具条「指标」记录 filter / sort / render 三段耗时；② 1200 与 3000 条各做一次“输入关键词 → 出结果”的实测，取 P50/P95；③ 修前 / 修后对照 = 本页「并排对比」形态（左侧下拉、右侧 Tab，同一份数据）。</div>
+      <div>实现时的落点（与项目规范一致）：<code>src/client/taskFilterSort.ts</code> 之外新增纯函数模块 <code>src/client/listViewState.ts</code>（Tab / 筛选 / 排序 / 分页的唯一权威源）与 <code>src/client/components/ListToolbar.tsx</code>、<code>src/client/components/TabBar.tsx</code>、<code>src/client/components/PagedList.tsx</code>，判定不进组件、组件不放业务判定。</div>
+    </div>
+  </section>
+</div>
+
+<script>
+/* =========================================================================
+   0. 工具
+   ========================================================================= */
+const $ = (s, r = document) => r.querySelector(s)
+const $$ = (s, r = document) => Array.from(r.querySelectorAll(s))
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
+const fmtNum = (n) => n.toLocaleString('zh-CN')
+const pad = (n) => String(n).padStart(2, '0')
+
+function mulberry32(seed) { return function () { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296 } }
+const rnd = mulberry32(20260925)
+const pick = (arr) => arr[Math.floor(rnd() * arr.length)]
+
+/* =========================================================================
+   1. 字典与假数据
+   ========================================================================= */
+const KNOW_KINDS = [
+  { code: 'note', name: '笔记', color: '#4F86F7' },
+  { code: 'lesson', name: '经验教训', color: '#E74C3C' },
+  { code: 'decision', name: '决策记录', color: '#6C5CE7' },
+  { code: 'snippet', name: '片段/模板', color: '#2E9B7B' },
+]
+const TASK_TYPES = [
+  { code: 'client_meeting', name: '客户交流', color: '#4F86F7' },
+  { code: 'code_impl', name: '代码实现', color: '#2E9B7B' },
+  { code: 'feature_opt', name: '功能优化', color: '#6C5CE7' },
+  { code: 'solution_design', name: '方案设计', color: '#F39C12' },
+  { code: 'boss_request', name: '老板要求', color: '#E74C3C' },
+  { code: 'team_mgmt', name: '团队管理', color: '#16A085' },
+  { code: 'project_delivery', name: '项目交付', color: '#2980B9' },
+  { code: 'personal', name: '个人生活', color: '#95A5A6' },
+  { code: 'training', name: '培训学习', color: '#8E44AD' },
+]
+const TASK_STATUS = [
+  { code: 'backlog', name: '待规划', color: '#95A5A6' },
+  { code: 'todo', name: '待办', color: '#3498DB' },
+  { code: 'doing', name: '进行中', color: '#F39C12' },
+  { code: 'blocked', name: '被阻塞', color: '#E74C3C' },
+  { code: 'done', name: '已完成', color: '#2E9B7B' },
+]
+const TASK_PRIORITY = [
+  { code: 'p0', name: '紧急', color: '#E74C3C', weight: 0 },
+  { code: 'p1', name: '高', color: '#F39C12', weight: 1 },
+  { code: 'p2', name: '普通', color: '#3498DB', weight: 2 },
+  { code: 'p3', name: '低', color: '#95A5A6', weight: 3 },
+]
+const KB_TAGS = ['踩坑', 'TTS', 'DSH', '工作台', 'SQLite', 'React', '性能', '发布', '内网', '端口']
+const KB_HEAD = ['cloudflared 连 3081 被 WSL2 劫持', '插件装盘后必须重启才生效', 'SQLite STRICT 表加列的正确姿势',
+  'pnpm test 并发起端口会 ECONNRESET', '变异探针必须全红才算守住', 'Tab 状态要写本地存储', '列表分页与虚拟滚动怎么选',
+  '知识条目搜索要覆盖正文', '任务树筛选要保留父链', '同义文案与行为不符的隐患']
+const KB_BODY = ['现象：改完后看起来正常，重启才发现旧 bundle 还在服务。原因：宿主页面加载时固化 __DSH_BOOT__。解法：装盘后重启 + Ctrl+F5 硬刷新。',
+  '背景：知识库条目变多以后下拉列表难扫。结论：分类改 Tab 页，搜索/筛选/排序/分页一并补齐。可复用做法：判定抽成纯函数模块，组件只渲染。',
+  '现象：并发跑多个 node --test 文件时偶发 bad port。原因：多文件同时起 HTTP 服务。解法：对网络层错误重试一次并带上轮次上下文。',
+  '现象：搜索只匹配标题，正文里的关键词搜不到。原因：SQL 只 LIKE title。解法：title OR content_md OR tags_json 三列一起匹配，并在 UI 里高亮命中处。']
+
+function makeKnowledge(n) {
+  const out = []
+  for (let i = 0; i < n; i++) {
+    const kind = pick(KNOW_KINDS)
+    const tagCount = 1 + Math.floor(rnd() * 3)
+    const tags = []
+    while (tags.length < tagCount) { const t = pick(KB_TAGS); if (!tags.includes(t)) tags.push(t) }
+    const head = pick(KB_HEAD)
+    const updated = Date.parse('2026-09-25T18:00:00+08:00') - Math.floor(rnd() * 240) * 86400000 - Math.floor(rnd() * 86400000)
+    out.push({
+      id: 'k' + i, kindCode: kind.code, title: head + '（' + (i + 1) + '）',
+      contentMd: pick(KB_BODY), tags,
+      sourceTaskId: rnd() < .38 ? 't' + Math.floor(rnd() * n) : null,
+      fileLink: rnd() < .3 ? 'D:\\docs\\note-' + (i + 1) + '.md' : null,
+      createdAt: new Date(updated - Math.floor(rnd() * 60) * 86400000).toISOString(),
+      updatedAt: new Date(updated).toISOString(),
+    })
+  }
+  return out
+}
+
+function makeTasks(n) {
+  const out = []
+  for (let i = 0; i < n; i++) {
+    const type = pick(TASK_TYPES), status = pick(TASK_STATUS), pri = pick(TASK_PRIORITY)
+    // 约 30% 作为某条已有任务的子任务，形成 2 层树
+    const parentId = i > 20 && rnd() < .3 ? 't' + Math.floor(rnd() * (i - 10)) : null
+    const updated = Date.parse('2026-09-25T18:00:00+08:00') - Math.floor(rnd() * 300) * 86400000
+    const due = rnd() < .72 ? new Date(updated + Math.floor((rnd() - .4) * 20) * 86400000).toISOString() : null
+    out.push({
+      id: 't' + i, parentId, title: pick(KB_HEAD).replace('知识条目搜索要覆盖正文', '任务列表 Tab 分类落地') + ' #' + (i + 1),
+      description: pick(KB_BODY).slice(0, 70),
+      typeCode: type.code, statusCode: status.code, priorityCode: pri.code,
+      dueAt: due, completedAt: status.code === 'done' ? new Date(updated).toISOString() : null,
+      createdAt: new Date(updated - Math.floor(rnd() * 90) * 86400000).toISOString(),
+      updatedAt: new Date(updated).toISOString(),
+    })
+  }
+  return out
+}
+
+const ALL_KB = makeKnowledge(3000)
+const ALL_TK = makeTasks(3000)
+
+/* =========================================================================
+   2. 每个视图一个「控件状态」（Tab 之外还有筛选 / 排序 / 分页 / 置顶 / 最近）
+   ========================================================================= */
+const LS = {
+  get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v) } catch { return d } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)) } catch { /* ignore */ } },
+}
+
+const SORTS = {
+  knowledge: [
+    { key: 'updatedAt', name: '更新时间' }, { key: 'createdAt', name: '创建时间' }, { key: 'title', name: '标题' },
+  ],
+  tasks: [
+    { key: 'updatedAt', name: '更新时间' }, { key: 'dueAt', name: '截止时间' },
+    { key: 'priority', name: '优先级' }, { key: 'createdAt', name: '创建时间' }, { key: 'title', name: '标题' },
+  ],
+}
+const DEFAULT_SORT = { knowledge: 'updatedAt', tasks: 'updatedAt' }
+
+function newState(view) {
+  return {
+    view,
+    tab: LS.get('dsh.personal-workbench.tab.' + view, 'all'),
+    keyword: '',
+    filters: {},            // facetKey -> [codes]
+    sortKey: LS.get('dsh.personal-workbench.sort.' + view, DEFAULT_SORT[view]),
+    sortDir: LS.get('dsh.personal-workbench.sortDir.' + view, 'desc'),
+    page: 1,
+    pageSize: 50,
+    pinned: LS.get('dsh.personal-workbench.pinned.' + view, []),
+    recent: LS.get('dsh.personal-workbench.recent.' + view, []),
+    tabsOpen: false,
+    scrollTop: 0,
+  }
+}
+const S = { knowledge: newState('knowledge'), tasks: newState('tasks') }
+const UI = { view: 'knowledge', mode: 'after', scale: 1200, render: 'pagination' }
+
+const persistTab = (v) => LS.set('dsh.personal-workbench.tab.' + v, S[v].tab)
+const persistSort = (v) => { LS.set('dsh.personal-workbench.sort.' + v, S[v].sortKey); LS.set('dsh.personal-workbench.sortDir.' + v, S[v].sortDir) }
+const persistPinned = (v) => LS.set('dsh.personal-workbench.pinned.' + v, S[v].pinned)
+
+/* =========================================================================
+   3. 纯函数：过滤 / 排序 / 分页（真实实现会放到 listViewState.ts）
+   ========================================================================= */
+function matchesKeyword(entry, kw) {
+  if (kw === '') return true
+  const hay = (entry.title + '\n' + (entry.contentMd ?? entry.description ?? '') + '\n' + (entry.tags ?? []).join(' ')).toLowerCase()
+  return hay.includes(kw)
+}
+function matchesTab(entry, tab, view) {
+  if (tab === 'all') return true
+  return (view === 'knowledge' ? entry.kindCode : entry.typeCode) === tab
+}
+function matchesFacets(entry, filters, facets) {
+  for (const f of facets) {
+    const sel = filters[f.key]
+    if (!sel || sel.length === 0) continue
+    if (f.match === 'bool') { if (!f.test(entry)) return false; continue }
+    const val = entry[f.field]
+    const vals = Array.isArray(val) ? val : [val]
+    if (!sel.some((c) => vals.includes(c))) return false
+  }
+  return true
+}
+const weightOf = (code) => (TASK_PRIORITY.find((p) => p.code === code)?.weight ?? 99)
+function timeOf(t, key) {
+  if (key === 'dueAt') {
+    const d = t.dueAt ?? (t.statusCode === 'done' ? t.completedAt : null)
+    return d === null ? null : Date.parse(d)
+  }
+  const v = t[key]
+  return typeof v === 'string' ? Date.parse(v) : null
+}
+function compareBy(a, b, key, dir) {
+  const factor = dir === 'asc' ? 1 : -1
+  if (key === 'priority') { const d = weightOf(a.priorityCode) - weightOf(b.priorityCode); if (d !== 0) return d * factor }
+  else if (key === 'title') { const d = a.title.localeCompare(b.title, 'zh-Hans-CN'); if (d !== 0) return d * factor }
+  else {
+    const av = timeOf(a, key), bv = timeOf(b, key)
+    if (av === null && bv === null) { /* fallthrough */ }
+    else if (av === null) return 1
+    else if (bv === null) return -1
+    else { const d = av - bv; if (d !== 0) return d * factor }
+  }
+  return b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id)
+}
+/** 置顶优先 → 排序键 → 稳定兜底 */
+function orderList(items, st) {
+  const pinned = new Set(st.pinned)
+  return items.slice().sort((a, b) => {
+    const pa = pinned.has(a.id) ? 0 : 1, pb = pinned.has(b.id) ? 0 : 1
+    if (pa !== pb) return pa - pb
+    return compareBy(a, b, st.sortKey, st.sortDir)
+  })
+}
+function paginate(items, st) {
+  const total = items.length
+  const pages = Math.max(1, Math.ceil(total / st.pageSize))
+  const page = Math.min(Math.max(1, st.page), pages)
+  const start = (page - 1) * st.pageSize
+  return { total, pages, page, start, end: Math.min(start + st.pageSize, total), slice: items.slice(start, start + st.pageSize) }
+}
+
+/* =========================================================================
+   4. 每个视图的 facet（筛选维度）定义
+   ========================================================================= */
+function facetsOf(view) {
+  if (view === 'knowledge') {
+    return [
+      { key: 'tag', field: 'tags', title: '标签', options: () => KB_TAGS.map((t) => ({ code: t, name: '#' + t, color: '#8fa8c8' })) },
+      { key: 'file', title: '本地文件', options: () => [{ code: 'has', name: '有文件', color: '#2E9B7B' }, { code: 'none', name: '无文件', color: '#95A5A6' }], match: 'bool', test: (e) => false, boolPairs: { has: (e) => e.fileLink !== null, none: (e) => e.fileLink === null } },
+      { key: 'src', title: '关联任务', options: () => [{ code: 'has', name: '已关联', color: '#6C5CE7' }, { code: 'none', name: '未关联', color: '#95A5A6' }], match: 'bool', boolPairs: { has: (e) => e.sourceTaskId !== null, none: (e) => e.sourceTaskId === null } },
+    ]
+  }
+  return [
+    { key: 'status', field: 'statusCode', title: '状态', options: () => TASK_STATUS.map((d) => ({ code: d.code, name: d.name, color: d.color })) },
+    { key: 'priority', field: 'priorityCode', title: '优先级', options: () => TASK_PRIORITY.map((d) => ({ code: d.code, name: d.name, color: d.color })) },
+  ]
+}
+function facetPass(entry, f, sel) {
+  if (f.match === 'bool') { if (!sel.some((c) => f.boolPairs[c](entry))) return false; return true }
+  const val = entry[f.field]
+  const vals = Array.isArray(val) ? val : [val]
+  return sel.some((c) => vals.includes(c))
+}
+function applyFacets(items, st, view) {
+  const facets = facetsOf(view)
+  const active = facets.filter((f) => (st.filters[f.key] ?? []).length > 0)
+  if (active.length === 0) return items
+  return items.filter((e) => active.every((f) => facetPass(e, f, st.filters[f.key])))
+}
+
+/* =========================================================================
+   5. 派生数据（Tab 条数 / 命中数 / 排序后列表）
+   ========================================================================= */
+function sourceOf(view, scale) {
+  const all = view === 'knowledge' ? ALL_KB : ALL_TK
+  return all.slice(0, scale)
+}
+function compute(view, st, scale) {
+  const t0 = performance.now()
+  const source = sourceOf(view, scale)
+  const tabbed = source.filter((e) => matchesTab(e, st.tab, view))
+  const kw = st.keyword.trim().toLowerCase()
+  const searched = tabbed.filter((e) => matchesKeyword(e, kw))
+  const filtered = applyFacets(searched, st, view)
+  const t1 = performance.now()
+  const ordered = orderList(filtered, st)
+  const t2 = performance.now()
+  const paging = paginate(ordered, st)
+  return { source, tabbed, searched, filtered, ordered, paging, msFilter: t1 - t0, msSort: t2 - t1, tabCounts: countTabs(source, kw, st, view) }
+}
+function countTabs(source, kw, st, view) {
+  const codes = (view === 'knowledge' ? KNOW_KINDS : TASK_TYPES).map((d) => d.code)
+  const out = { all: 0 }
+  for (const c of codes) out[c] = 0
+  const base = applyFacets(source.filter((e) => matchesKeyword(e, kw)), st, view)
+  out.all = base.length
+  for (const e of base) {
+    const c = view === 'knowledge' ? e.kindCode : e.typeCode
+    if (out[c] !== undefined) out[c] += 1
+  }
+  return out
+}
+
+/* =========================================================================
+   6. 渲染：Tab / 工具条 / 行 / 分页 / 指标
+   ========================================================================= */
+function dictOf(view) { return view === 'knowledge' ? KNOW_KINDS : TASK_TYPES }
+function kindName(view, code) { return dictOf(view).find((d) => d.code === code)?.name ?? code }
+function kindColor(view, code) { return dictOf(view).find((d) => d.code === code)?.color ?? '#8a9aa8' }
+function badge(list, code) {
+  const d = list.find((x) => x.code === code)
+  const c = d?.color ?? '#8a9aa8'
+  return `<span class="chip" style="background:${c}22;color:${c};border:1px solid ${c}66">${esc(d?.name ?? code)}</span>`
+}
+function highlight(text, kw) {
+  const safe = esc(text)
+  if (kw === '') return safe
+  const idx = safe.toLowerCase().indexOf(esc(kw).toLowerCase())
+  if (idx < 0) return safe
+  return safe.slice(0, idx) + '<mark style="background:color-mix(in srgb,#4f8ef7 38%,transparent);color:#fff;border-radius:3px">'
+    + safe.slice(idx, idx + kw.length) + '</mark>' + safe.slice(idx + kw.length)
+}
+function stamp(v) { const d = new Date(v); return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}` }
+
+/** Tab 条（方案 B）。超过 10 个折叠进「更多 ▾」。 */
+function renderTabs(view, st, counts) {
+  const dict = dictOf(view)
+  const items = [{ code: 'all', name: '全部' }, ...dict]
+  const LIMIT = 10
+  const overflow = items.length > LIMIT
+  const head = overflow ? items.slice(0, LIMIT - 1) : items
+  const tail = overflow ? items.slice(LIMIT - 1) : []
+  const btn = (d, over) => `<button class="tab ${st.tab === d.code ? 'on' : ''} ${over ? 'over' : ''}" data-tab="${d.code}">
+      ${esc(d.name)}<span class="cnt">${fmtNum(counts[d.code] ?? 0)}</span></button>`
+  return `<div class="tabs ${st.tabsOpen ? 'open' : ''}" data-role="tabs">
+    ${head.map((d) => btn(d, false)).join('')}
+    ${tail.length > 0 ? `<button class="tab ${tail.some((d) => d.code === st.tab) ? 'on' : ''}" data-role="more">更多 ▾</button>${tail.map((d) => btn(d, true)).join('')}` : ''}
+  </div>`
+}
+/** 现状：分类用 <select>（长列表要滚动着找） */
+function renderLegacySelect(view, st, counts) {
+  const dict = dictOf(view)
+  const opts = [['all', '全部分类'], ...dict.map((d) => [d.code, `${d.name}（${counts[d.code] ?? 0}）`])]
+  return `<div class="bar" style="margin:0 0 8px">
+    <div class="field" style="flex:1"><span>分类</span>
+      <select class="legacy-select" data-role="legacy">
+        ${opts.map(([v, n]) => `<option value="${v}" ${st.tab === v ? 'selected' : ''}>${esc(n)}</option>`).join('')}
+      </select>
+    </div>
+    <span class="hint">← 现状：下拉列表，${dict.length} 项要滚动着找，看不到各分类条数</span>
+  </div>`
+}
+function renderFacetBar(view, st) {
+  const facets = facetsOf(view)
+  const parts = facets.map((f) => {
+    const opts = f.options()
+    const sel = st.filters[f.key] ?? []
+    return `<span class="field"><span>${esc(f.title)}</span><span class="fchips">${opts.map((o) => `
+      <button class="fchip ${sel.includes(o.code) ? 'on' : ''}" style="--chipcolor:${o.color}" data-facet="${f.key}" data-code="${o.code}">${esc(o.name)}</button>`).join('')}</span></span>`
+  })
+  const anyFilter = facets.some((f) => (st.filters[f.key] ?? []).length > 0)
+  return `<div class="bar">
+    <input type="search" data-role="kw" placeholder="${view === 'knowledge' ? '搜索标题 / 正文 / 标签' : '搜索标题 / 描述'}" value="${esc(st.keyword)}">
+    ${parts.join('')}
+    <button class="btn" data-role="clearfacet" ${anyFilter || st.keyword !== '' ? '' : 'disabled'}>清空筛选</button>
+  </div>`
+}
+function renderSortBar(view, st, paging) {
+  const sorts = SORTS[view]
+  const kinds = view === 'knowledge'
+    ? `<span class="field"><span>类型</span>${st.tab === 'all' ? '全部' : `<span style="color:${kindColor(view, st.tab)};font-weight:600">${esc(kindName(view, st.tab))}</span>`}</span>`
+    : `<span class="field"><span>类型</span>${st.tab === 'all' ? '全部' : `<span style="color:${kindColor(view, st.tab)};font-weight:600">${esc(kindName(view, st.tab))}</span>`}</span>`
+  return `<div class="bar">
+    ${kinds}
+    <span class="field"><span>排序</span>
+      <select data-role="sortkey" style="width:auto">${sorts.map((s) => `<option value="${s.key}" ${st.sortKey === s.key ? 'selected' : ''}>${s.name}${s.key === DEFAULT_SORT[view] ? '（默认）' : ''}</option>`).join('')}</select>
+      <button class="btn" data-role="sortdir" title="切换升降序">${st.sortDir === 'asc' ? '↑ 升序' : '↓ 降序'}</button>
+    </span>
+    <span class="bar-chip">命中 <b>${fmtNum(paging.total)}</b> 条</span>
+    <span class="spacer"></span>
+    <span class="field"><span>展示</span>
+      <span class="seg"><button class="btn ${UI.render === 'pagination' ? 'on' : ''}" data-render="pagination">分页</button><button class="btn ${UI.render === 'virtual' ? 'on' : ''}" data-render="virtual">虚拟滚动</button></span>
+    </span>
+  </div>`
+}
+function renderPinZone(view, st, byId, kw) {
+  const pins = (st.pinned ?? []).map((id) => byId.get(id)).filter(Boolean)
+  const recents = (st.recent ?? []).map((id) => byId.get(id)).filter(Boolean).filter((e) => !(st.pinned ?? []).includes(e.id)).slice(0, 3)
+  if (pins.length === 0 && recents.length === 0) return '<div class="empty" style="padding:14px;font-size:12px">置顶 / 最近使用：点行右侧 ★ 置顶，打开过条目后这里会出现「最近使用」（每条最多 3 + 3）</div>'
+  const rows = (items, mark) => items.map((e) => `<div class="pinrow" data-open="${e.id}"><span>${mark}</span><span class="t">${highlight(e.title, kw)}</span><span style="color:${kindColor(view, view === 'knowledge' ? e.kindCode : e.typeCode)};font-size:11px">${esc(kindName(view, view === 'knowledge' ? e.kindCode : e.typeCode))}</span><span class="stamp">${stamp(e.updatedAt)}</span><span class="go">打开 →</span></div>`).join('')
+  return `<div class="pinzone">
+    <div class="pz-head">★ 置顶（${pins.length}）· 🕘 最近使用（${recents.length}）<button class="btn clear" data-role="clearzone">清空</button></div>
+    ${pins.length > 0 ? rows(pins, '★') : ''}${recents.length > 0 ? rows(recents, '🕘') : ''}
+  </div>`
+}
+function renderRow(view, e, st, depth) {
+  const isPinned = (st.pinned ?? []).includes(e.id)
+  const kw = st.keyword.trim()
+  const kind = view === 'knowledge' ? e.kindCode : e.typeCode
+  const meta = view === 'knowledge'
+    ? `${badge(KNOW_KINDS, e.kindCode)}${e.tags.map((t) => `<span class="tg">#${esc(t)}</span>`).join('')}${e.fileLink ? '<span class="tg">📄 文件</span>' : ''}${e.sourceTaskId ? '<span class="tg">🔗 任务</span>' : ''}`
+    : `${badge(TASK_TYPES, e.typeCode)}${badge(TASK_PRIORITY, e.priorityCode)}${badge(TASK_STATUS, e.statusCode)}<span class="tg">${e.dueAt ? '截止 ' + stamp(e.dueAt) : '无截止'}</span>`
+  const body = view === 'knowledge' ? (e.contentMd ?? '') : (e.description ?? '')
+  return `<div class="row ${isPinned ? 'pinned' : ''}" data-open="${e.id}">
+    ${depth > 0 ? '<span class="twist"></span>' : (view === 'tasks' ? '<button class="twist" data-toggle="' + e.id + '">' + (st._expanded?.has(e.id) ? '▼' : '▶') + '</button>' : '')}
+    <div class="grow">
+      <div class="title">${highlight(e.title, kw)}</div>
+      <div class="meta">${meta}<span class="tg" style="margin-left:auto"></span></div>
+      <div class="excerpt">${highlight(body.slice(0, 96), kw)}</div>
+    </div>
+    <span class="stamp">${stamp(e.updatedAt)}</span>
+    <span class="acts"><button class="iconb ${isPinned ? 'on' : ''}" data-pin="${e.id}" title="${isPinned ? '取消置顶' : '置顶'}">${isPinned ? '★' : '☆'}</button></span>
+  </div>`
+}
+function renderPager(view, st, paging) {
+  const around = []
+  for (let p = Math.max(1, paging.page - 2); p <= Math.min(paging.pages, paging.page + 2); p++) around.push(p)
+  return `<div class="pager">
+    <span>每页</span>
+    <select data-role="pagesize" style="width:auto">${[50, 100, 200].map((n) => `<option value="${n}" ${st.pageSize === n ? 'selected' : ''}>${n}</option>`).join('')}</select>
+    <span>第 ${paging.start + 1}–${paging.end} 条 / 共 <b style="color:var(--text)">${fmtNum(paging.total)}</b> 条 · ${paging.page}/${paging.pages} 页</span>
+    <span class="pages">
+      <button class="pnum" data-page="1" ${paging.page === 1 ? 'disabled' : ''}>«</button>
+      <button class="pnum" data-page="${paging.page - 1}" ${paging.page === 1 ? 'disabled' : ''}>‹</button>
+      ${around.map((p) => `<button class="pnum ${p === paging.page ? 'on' : ''}" data-page="${p}">${p}</button>`).join('')}
+      <button class="pnum" data-page="${paging.page + 1}" ${paging.page === paging.pages ? 'disabled' : ''}>›</button>
+      <button class="pnum" data-page="${paging.pages}" ${paging.page === paging.pages ? 'disabled' : ''}>»</button>
+    </span>
+  </div>`
+}
+function renderMetric(view, c, msRender, mode) {
+  const list = mode === 'virtual' ? c.ordered.length : c.paging.slice.length
+  const rate = msRender > 0 ? Math.round(list / msRender * 1000) : 0
+  return `<div class="metric">
+    <span>数据 <b>${fmtNum(c.source.length)}</b> 条</span>
+    <span>命中 <b>${fmtNum(c.paging.total)}</b> 条</span>
+    <span>DOM 行 <b>${fmtNum(list)}</b></span>
+    <span>filter <b>${c.msFilter.toFixed(1)} ms</b></span>
+    <span>sort <b>${c.msSort.toFixed(1)} ms</b></span>
+    <span>render <b class="${msRender < 60 ? 'ok' : 'warn'}">${msRender.toFixed(1)} ms</b></span>
+    <span>渲染速率 <b>${fmtNum(rate)}</b> 行/秒</span>
+  </div>`
+}
+
+/* =========================================================================
+   7. 组装一个视图的 DOM
+   ========================================================================= */
+function buildView(view, root) {
+  const st = S[view]
+  const scale = UI.scale
+  const c = compute(view, st, scale)
+  const byId = new Map(c.source.map((e) => [e.id, e]))
+  const kw = st.keyword.trim()
+  const before = UI.mode === 'before'
+
+  const tabsHtml = before ? renderLegacySelect(view, st, c.tabCounts) : renderTabs(view, st, c.tabCounts)
+  const bar = before
+    ? `<div class="bar"><input type="search" data-role="kw" placeholder="${view === 'knowledge' ? '搜索标题 / 正文 / 标签' : '搜索标题 / 描述'}" value="${esc(st.keyword)}"><span class="hint">现状：只能搜关键词，无标签筛选、无排序切换（固定按更新时间倒序）、无分页</span></div>`
+    : renderFacetBar(view, st)
+
+  const t0 = performance.now()
+  let listHtml = ''
+  if (UI.render === 'virtual' && !before) {
+    const rowH = 74, over = 6, viewH = 430
+    const items = c.ordered
+    const total = items.length
+    const maxTop = Math.max(0, total * rowH - viewH)
+    st.scrollTop = Math.min(Math.max(0, st.scrollTop), maxTop)
+    const start = Math.max(0, Math.floor(st.scrollTop / rowH) - over)
+    const end = Math.min(total, Math.ceil((st.scrollTop + viewH) / rowH) + over)
+    const visible = items.slice(start, end)
+    listHtml = `<div class="list virtual" data-role="vscroll" data-rowh="${rowH}">
+      <div class="vph" style="height:${total * rowH}px">
+        <div class="vwin" style="transform:translateY(${start * rowH}px)">
+          ${visible.map((e) => renderRow(view, e, st, 0)).join('')}
+        </div>
+      </div>
+    </div>`
+  } else {
+    const rows = before ? c.ordered.slice(0, 500) : c.paging.slice
+    const pageIds = new Set(rows.map((e) => e.id))
+    listHtml = `<div class="list">${rows.map((e) => renderRow(view, e, st, !before && view === 'tasks' && e.parentId !== null && pageIds.has(e.parentId) ? 1 : 0)).join('')}</div>`
+    if (rows.length === 0) listHtml = '<div class="list"><div class="empty">没有符合条件的条目，点「清空筛选」恢复</div></div>'
+  }
+  const msRender = performance.now() - t0
+
+  const pager = (before || UI.render === 'virtual') ? '' : renderPager(view, st, c.paging)
+
+  root.innerHTML = `
+    ${tabsHtml}
+    ${bar}
+    ${before ? '' : renderSortBar(view, st, c.paging)}
+    ${renderPinZone(view, st, byId, kw)}
+    ${listHtml}
+    ${pager}
+    ${renderMetric(view, c, msRender, before ? 'pagination' : UI.render)}
+  `
+  return { msRender, c }
+}
+
+function render() {
+  // 先切视图显隐，再写内容：内容要写入的元素必须已在文档里（掉进游离片段就看不见了）。
+  $('#view-knowledge').style.display = UI.view === 'knowledge' ? '' : 'none'
+  $('#view-tasks').style.display = UI.view === 'tasks' ? '' : 'none'
+  if (UI.mode === 'compare') {
+    $('#kbRoot').innerHTML = compareHtml('knowledge')
+    $('#tkRoot').innerHTML = compareHtml('tasks')
+    fillCompareColumns(UI.view)
+  } else {
+    $('#kbRoot').innerHTML = '<div id="kbSlot"></div>'
+    $('#tkRoot').innerHTML = '<div id="tkSlot"></div>'
+    buildView(UI.view, $(UI.view === 'knowledge' ? '#kbSlot' : '#tkSlot'))
+  }
+}
+function compareHtml(view) {
+  return `<div class="compare">
+    <div class="compare-col old"><h3>修前：下拉分类（7 个分类要滚动着找、看不到条数、无筛选排序分页）</h3><div data-slot="old"></div></div>
+    <div class="compare-col new"><h3>修后：Tab 分类 + 搜索 / 筛选 / 排序 / 分页 / 置顶</h3><div data-slot="new"></div></div>
+  </div>`
+}
+
+/* =========================================================================
+   8. 事件（事件委托，两个视图 + 并排两列共用一套）
+   ========================================================================= */
+function withState(fn) {
+  return (ev) => {
+    const root = ev.currentTarget
+    const view = viewOfNode(ev.target)
+    const variant = root.dataset.variant ?? 'after'
+    fn(ev, S[view], view, variant, root)
+  }
+}
+const HANDLERS = {
+  'click [data-tab]': (ev, st, view) => { st.tab = ev.target.closest('[data-tab]').dataset.tab; st.page = 1; persistTab(view); rerender() },
+  'click [data-role="more"]': (ev, st) => { st.tabsOpen = true; rerender() },
+  'change [data-role="legacy"]': (ev, st, view) => { st.tab = ev.target.value; st.page = 1; rerender() },
+  'input [data-role="kw"]': (ev, st) => { st.keyword = ev.target.value; st.page = 1; debounced() },
+  'click [data-facet]': (ev, st) => {
+    const b = ev.target.closest('[data-facet]'); const k = b.dataset.facet, code = b.dataset.code
+    const cur = st.filters[k] ?? []
+    st.filters[k] = cur.includes(code) ? cur.filter((c) => c !== code) : [...cur, code]
+    st.page = 1; rerender()
+  },
+  'click [data-role="clearfacet"]': (ev, st) => { st.keyword = ''; st.filters = {}; st.page = 1; rerender() },
+  'change [data-role="sortkey"]': (ev, st, view) => { st.sortKey = ev.target.value; persistSort(view); rerender() },
+  'click [data-role="sortdir"]': (ev, st, view) => { st.sortDir = st.sortDir === 'asc' ? 'desc' : 'asc'; persistSort(view); rerender() },
+  'change [data-role="pagesize"]': (ev, st) => { st.pageSize = Number(ev.target.value); st.page = 1; rerender() },
+  'click [data-page]': (ev, st) => { st.page = Number(ev.target.closest('[data-page]').dataset.page); rerender() },
+  'click [data-pin]': (ev, st, view) => {
+    ev.stopPropagation()
+    const id = ev.target.closest('[data-pin]').dataset.pin
+    st.pinned = st.pinned.includes(id) ? st.pinned.filter((x) => x !== id) : [id, ...st.pinned]
+    persistPinned(view); rerender()
+  },
+  'click [data-role="clearzone"]': (ev, st, view) => { st.pinned = []; st.recent = []; persistPinned(view); LS.set('dsh.personal-workbench.recent.' + view, []); rerender() },
+  'click [data-open]': (ev, st, view) => {
+    const id = ev.target.closest('[data-open]').dataset.open
+    st.recent = [id, ...st.recent.filter((x) => x !== id)].slice(0, 3)
+    LS.set('dsh.personal-workbench.recent.' + view, st.recent)
+    rerender()
+  },
+  'scroll [data-role="vscroll"]': (ev, st) => { st.scrollTop = ev.target.scrollTop; throttledScroll() },
+}
+function rerender() {
+  render()
+  if (UI.mode === 'compare') fillCompareColumns(UI.view)
+}
+/** 填「修前 / 修后」两列：只切渲染变体，不动 UI.view。 */
+function fillCompareColumns(view) {
+  const cols = $$('#' + (view === 'knowledge' ? 'kbRoot' : 'tkRoot') + ' .compare-col')
+  const keepMode = UI.mode, keepRender = UI.render
+  for (const col of cols) {
+    const slot = $('[data-slot]', col)
+    if (slot === null) continue
+    UI.mode = col.classList.contains('old') ? 'before' : 'after'
+    UI.render = 'pagination'
+    buildView(view, slot)
+  }
+  UI.mode = keepMode
+  UI.render = keepRender
+}
+let debTimer = null
+function debounced() { clearTimeout(debTimer); debTimer = setTimeout(rerender, 200) }
+let scrollTimer = null
+function throttledScroll() { if (scrollTimer !== null) return; scrollTimer = requestAnimationFrame(() => { scrollTimer = null; rerender() }) }
+
+function viewOfNode(node) {
+  const host = node.closest('#kbRoot, #tkRoot')
+  if (host !== null) return host.id === 'kbRoot' ? 'knowledge' : 'tasks'
+  return UI.view
+}
+function bindDelegation() {
+  const roots = ['#kbRoot', '#tkRoot']
+  for (const sel of roots) {
+    const el = $(sel)
+    for (const [key, fn] of Object.entries(HANDLERS)) {
+      const [type, target] = key.split(' ')
+      el.addEventListener(type, (ev) => {
+        const hit = ev.target.closest(target)
+        if (hit === null || !el.contains(hit)) return
+        const view = el.id === 'kbRoot' ? 'knowledge' : 'tasks'
+        fn(ev, S[view], view, 'after', el)
+      }, type === 'scroll' ? true : false)
+    }
+  }
+  // 面板内的「分页 / 虚拟滚动」切换：只换本面板的渲染窗，不动另一个面板。
+  document.addEventListener('click', (ev) => {
+    const b = ev.target.closest('#kbRoot [data-render], #tkRoot [data-render]')
+    if (b === null) return
+    UI.render = b.dataset.render
+    $$('#segRender .btn').forEach((x) => x.classList.toggle('on', x.dataset.render === UI.render))
+    for (const v of ['knowledge', 'tasks']) { S[v].page = 1; S[v].scrollTop = 0 }
+    render()
+  })
+}
+
+/* =========================================================================
+   9. 顶部控制条
+   ========================================================================= */
+function bindTop() {
+  $('#segView').addEventListener('click', (ev) => {
+    const b = ev.target.closest('[data-view]'); if (!b) return
+    $$('#segView .btn').forEach((x) => x.classList.toggle('on', x === b))
+    UI.view = b.dataset.view; render()
+  })
+  $('#segMode').addEventListener('click', (ev) => {
+    const b = ev.target.closest('[data-mode]'); if (!b) return
+    $$('#segMode .btn').forEach((x) => x.classList.toggle('on', x === b))
+    UI.mode = b.dataset.mode
+    for (const v of ['knowledge', 'tasks']) { S[v].page = 1; S[v].scrollTop = 0 }
+    render()
+  })
+  $('#segScale').addEventListener('click', (ev) => {
+    const b = ev.target.closest('[data-scale]'); if (!b) return
+    $$('#segScale .btn').forEach((x) => x.classList.toggle('on', x === b))
+    UI.scale = Number(b.dataset.scale)
+    for (const v of ['knowledge', 'tasks']) { S[v].page = 1; S[v].scrollTop = 0 }
+    render()
+  })
+  $('#segRender').addEventListener('click', (ev) => {
+    const b = ev.target.closest('[data-render]'); if (!b) return
+    $$('#segRender .btn').forEach((x) => x.classList.toggle('on', x === b))
+    UI.render = b.dataset.render; render()
+  })
+  $('#btnReset').addEventListener('click', () => {
+    for (const v of ['knowledge', 'tasks']) {
+      const fresh = newState(v)
+      fresh.keyword = ''; fresh.filters = {}; fresh.pinned = []; fresh.recent = []
+      S[v] = fresh
+      persistTab(v); persistSort(v); persistPinned(v)
+      LS.set('dsh.personal-workbench.recent.' + v, [])
+    }
+    UI.mode = 'after'; UI.render = 'pagination'; UI.scale = 1200
+    $$('#segMode .btn').forEach((x) => x.classList.toggle('on', x.dataset.mode === 'after'))
+    $$('#segRender .btn').forEach((x) => x.classList.toggle('on', x.dataset.render === 'pagination'))
+    $$('#segScale .btn').forEach((x) => x.classList.toggle('on', x.dataset.scale === '1200'))
+    render()
+  })
+}
+bindTop()
+bindDelegation()
+render()
+</script>
+</body>
+</html>

@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>点子页 · 1 号卡片瀑布（确认稿）</title>
+<style>
+  html, body { height:100%; margin:0; padding:0; overflow:hidden; background:#101013; }
+  :root { --bg:#101013; --sunken:#141418; --card:#1a1a1f; --card-hi:#202027;
+    --line:rgba(255,255,255,.13); --line-soft:rgba(255,255,255,.07);
+    --fg:#eceef1; --fg-2:#a7b0ba; --fg-3:#7b848e; --accent:#4f8ef7; --accent-2:#8fb6ff; }
+  * { box-sizing:border-box; }
+  body { color:var(--fg); font:13px/1.5 system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif; }
+  .kbd { display:flex; height:100%; min-height:0; overflow:hidden; }
+
+  /* ---------- 顶部工具条 ---------- */
+  .top { display:flex; gap:8px; align-items:center; padding:12px 14px 10px; flex:none; flex-wrap:wrap;
+    border-bottom:1px solid var(--line-soft); }
+  .seg { display:inline-flex; gap:2px; padding:3px; border-radius:10px; background:var(--sunken); border:1px solid var(--line); }
+  .seg button { border:none; background:transparent; color:var(--fg-3); font:inherit; font-size:12.5px;
+    padding:6px 12px; border-radius:8px; cursor:pointer; white-space:nowrap; }
+  .seg button.on { background:color-mix(in srgb,var(--accent) 17%,transparent); color:#fff; font-weight:600; }
+  .inpwrap { position:relative; flex:1; min-width:120px; }
+  .inpwrap .ic { position:absolute; left:9px; top:50%; transform:translateY(-50%); color:var(--fg-3); font-size:12px; }
+  .inp { width:100%; background:var(--sunken); border:1px solid var(--line); color:var(--fg);
+    border-radius:9px; padding:7px 10px 7px 30px; font:inherit; font-size:12.5px; }
+  .btn { border:1px solid var(--line); background:transparent; color:var(--fg); border-radius:9px;
+    padding:6px 11px; font:inherit; font-size:12.5px; cursor:pointer; white-space:nowrap; }
+  .btn:hover { background:rgba(255,255,255,.06); }
+  .btn.primary { border-color:color-mix(in srgb,var(--accent) 55%,transparent);
+    background:color-mix(in srgb,var(--accent) 18%,transparent); font-weight:600; }
+  select.sel { background:var(--sunken); border:1px solid var(--line); color:var(--fg);
+    border-radius:9px; padding:6px 9px; font:inherit; font-size:12.5px; }
+
+  .scroll { flex:1; min-height:0; overflow-y:auto; padding:0 14px 14px; }
+  .scroll::-webkit-scrollbar { width:9px; } .scroll::-webkit-scrollbar-thumb { background:rgba(255,255,255,.15); border-radius:5px; }
+
+  /* ---------- 区块标题 ---------- */
+  .sect { display:flex; align-items:center; gap:8px; padding:14px 0 9px; font-size:11px;
+    color:var(--fg-3); font-weight:600; letter-spacing:.3px; }
+  .sect b { color:var(--fg-2); font-weight:600; font-size:12px; }
+  .sect .ln { flex:1; height:1px; background:var(--line-soft); }
+  .sect .hintx { font-weight:400; font-size:11px; color:var(--fg-3); }
+
+  /* ---------- 文件夹（现状不动） ---------- */
+  .folders { display:grid; grid-template-columns:repeat(auto-fill,minmax(238px,1fr)); gap:11px; }
+  .folder { position:relative; border:1px solid var(--line); border-radius:12px; background:var(--card);
+    padding:12px 13px; cursor:pointer; }
+  .folder:hover { border-color:color-mix(in srgb,var(--accent) 40%,transparent); }
+  .folder .fh { display:flex; align-items:center; gap:8px; margin-bottom:9px; }
+  .folder .fi { width:25px; height:25px; border-radius:8px; flex:none; display:grid; place-items:center;
+    background:color-mix(in srgb,var(--accent) 16%,transparent); color:var(--accent); font-size:12px; }
+  .folder h4 { margin:0; flex:1; min-width:0; font-size:13.5px; font-weight:600;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .folder .fc { flex:none; font-size:11px; font-weight:650; background:var(--sunken);
+    border:1px solid var(--line-soft); border-radius:999px; padding:3px 7px; color:var(--fg-2); }
+  .folder .fm { display:flex; flex-direction:column; gap:4px; }
+  .folder .fm span { font-size:12px; color:var(--fg-2); background:var(--sunken); border-radius:6px; padding:5px 8px;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .folder .fm span.more { background:transparent; color:var(--fg-3); padding-left:0; }
+  .folder.new { border-style:dashed; display:grid; place-items:center; text-align:center; color:var(--fg-3);
+    font-size:12.5px; min-height:116px; }
+
+  /* ---------- 点子卡片瀑布（1 号） ---------- */
+  .cards { display:grid; grid-template-columns:1fr 1fr; gap:11px; }
+  .card { position:relative; background:var(--card); border:1px solid var(--line-soft);
+    border-left:3px solid var(--kc,#8a9aa8); border-radius:11px; padding:12px 13px 11px; cursor:pointer;
+    display:flex; flex-direction:column; gap:8px; transition:border-color .14s ease, transform .14s ease, background .14s ease; }
+  .card:hover { background:var(--card-hi); transform:translateY(-1px); }
+  .card.sel { border-color:color-mix(in srgb,var(--accent) 70%,transparent);
+    box-shadow:0 0 0 1px color-mix(in srgb,var(--accent) 35%,transparent); }
+  .card.picked { border-color:color-mix(in srgb,var(--accent) 60%,transparent);
+    background:color-mix(in srgb,var(--accent) 9%,transparent); }
+  .card .ct { font-size:13.5px; font-weight:600; line-height:1.45; padding-right:26px;
+    display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+  .card .cb { color:var(--fg-3); font-size:11.5px; line-height:1.6;
+    display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
+  .card .cf { display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-top:auto; padding-top:2px; }
+  .kdot { width:7px; height:7px; border-radius:50%; flex:none; }
+  .chip { display:inline-flex; align-items:center; border-radius:6px; padding:2px 7px; font-size:10.5px;
+    font-weight:600; white-space:nowrap; }
+  .tg { font-size:11px; color:var(--fg-3); }
+  .stamp { color:var(--fg-3); font-size:11px; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  /* 多选：右上角，hover 才显形，已选常显（对应现有 ☑ 给「AI 关联」用） */
+  .pick { position:absolute; top:9px; right:9px; width:19px; height:19px; border-radius:6px;
+    border:1px solid var(--line); background:var(--sunken); display:grid; place-items:center;
+    font-size:11px; color:transparent; opacity:0; transition:opacity .12s ease; }
+  .card:hover .pick, .card.picked .pick { opacity:1; }
+  .card.picked .pick { color:#fff; border-color:var(--accent); background:var(--accent); }
+  /* 归入文件夹：底部一行，与整卡点击区隔开 */
+  .card .fold { position:relative; margin-left:auto; }
+  .foldbtn { border:1px solid var(--line); background:transparent; color:var(--fg-3); border-radius:7px;
+    padding:2px 8px; font:inherit; font-size:11px; cursor:pointer; }
+  .foldbtn:hover { color:var(--fg); background:rgba(255,255,255,.06); }
+  .foldmenu { position:absolute; bottom:calc(100% + 5px); right:0; z-index:20; min-width:190px;
+    background:#1c1c1f; border:1px solid rgba(255,255,255,.22); border-radius:10px; padding:4px;
+    box-shadow:0 12px 32px rgba(0,0,0,.45); }
+  .foldmenu button { width:100%; text-align:left; border:none; background:transparent; color:var(--fg);
+    font:inherit; font-size:12.5px; padding:7px 9px; border-radius:7px; cursor:pointer; }
+  .foldmenu button:hover { background:rgba(255,255,255,.08); }
+
+  .pager { display:flex; align-items:center; gap:9px; padding:11px 14px; border-top:1px solid var(--line-soft);
+    background:var(--card); font-size:11.5px; color:var(--fg-3); flex:none; flex-wrap:wrap; }
+  .pager .pages { display:flex; gap:3px; }
+  .pnum { border:1px solid var(--line); background:transparent; color:var(--fg-2); border-radius:7px;
+    min-width:27px; padding:3px 6px; font:inherit; font-size:11.5px; cursor:pointer; }
+  .pnum.on { border-color:color-mix(in srgb,var(--accent) 60%,transparent); color:#fff;
+    background:color-mix(in srgb,var(--accent) 20%,transparent); font-weight:600; }
+  .pnum:disabled { opacity:.35; }
+  .grow { flex:1; }
+  .empty { padding:22px; text-align:center; color:var(--fg-3); font-size:12.5px; grid-column:1/-1;
+    border:1px dashed var(--line); border-radius:11px; }
+
+  /* ---------- 修前 / 修后 ---------- */
+  html[data-mode="before"] .cards { display:block; }
+  html[data-mode="before"] .card { flex-direction:row; align-items:center; gap:10px; border-radius:0;
+    border-left-width:0; border-bottom:1px solid var(--line-soft); background:transparent;
+    padding:10px 13px; transform:none; }
+  html[data-mode="before"] .card .cb,
+  html[data-mode="before"] .card .kdot,
+  html[data-mode="before"] .card .kindchip,
+  html[data-mode="before"] .card .ftags { display:none; }
+  html[data-mode="before"] .card .ct { flex:1; padding-right:0; -webkit-line-clamp:1; font-weight:500; font-weight:500; }
+  html[data-mode="before"] .card .cf { margin:0; padding:0; flex:none; }
+  html[data-mode="before"] .pick { opacity:1; color:transparent; position:static; width:16px; height:16px; }
+  html[data-mode="before"] .card.picked .pick { color:#fff; }
+  html[data-mode="before"] .sect .pager-only { display:none; }
+</style>
+</head>
+<body>
+<div class="kbd">
+  <div style="display:flex;flex-direction:column;flex:1;min-height:0">
+    <div class="top">
+      <span class="seg" id="tabs">
+        <button class="on" data-tab="ideas">全部（1）</button>
+        <button data-tab="unfiled">未归类（1）</button>
+        <button data-tab="clusters">文件夹（1）</button>
+      </span>
+      <span class="inpwrap"><span class="ic">⌕</span><input class="inp" id="kw" placeholder="搜索点子或文件夹"></span>
+      <button class="btn">🤖 AI 自动关联</button>
+      <button class="btn">🗂 新建文件夹</button>
+      <button class="btn primary">+ 记个点子</button>
+      <span class="grow"></span>
+      <span class="seg" id="mode">
+        <button data-mode="before">修前</button>
+        <button class="on" data-mode="after">修后（新样式）</button>
+      </span>
+    </div>
+
+    <div class="scroll">
+      <!-- 文件夹区：现状不动 -->
+      <div class="sect"><b>文件夹</b><span>1 个</span><span class="ln"></span>
+        <span class="hintx">点开看成员；hover 可改名 / 删除</span></div>
+      <div class="folders">
+        <div class="folder">
+          <div class="fh"><span class="fi">🗂</span><h4>天线测试方向</h4><span class="fc">1</span></div>
+          <div class="fm">
+            <span>天线测试系统软件接入AI调试</span>
+          </div>
+        </div>
+        <div class="folder new">+ 新建空文件夹<br><span style="font-size:11.5px">也可以让 AI 自动关联</span></div>
+      </div>
+
+      <!-- 点子区：1 号卡片瀑布 -->
+      <div class="sect"><b>未归类</b><span>1 个</span><span class="ln"></span>
+        <span class="hintx"><span class="pager-only">已选 0 个 · </span>卡片右上角 ☑ 可多选，再点「AI 关联」</span></div>
+      <div class="cards" id="cards"></div>
+    </div>
+
+    <div class="pager" id="pager"></div>
+  </div>
+</div>
+
+<script>
+const IDEAS = [
+  { id: 'i1', title: '天线测试系统软件接入AI调试', kindCode: 'project', kindName: '项目点子', color: '#4F86F7',
+    contentMd: '通过 AIDebugBridge 让 AI 直接截图、看 DOM/CSS、点 UI、读参数，把「人点一遍再描述」换成「AI 自己看」。\n可用于 UI Bug 定位与回归。',
+    tags: ['AI', '天线测试', '调试'], updated: '08-21 10:24' },
+  // 下面的样例用来展示卡片瀑布在条目变多时的样子（不是真实数据）
+  { id: 'x1', title: '把「工作台」的任务拆解提案做成可拖拽的树', kindCode: 'plugin', kindName: '插件点子', color: '#8B7BE8',
+    contentMd: '现在拆解是 AI 出提案、用户勾选。可以更进一步：勾选后直接拖拽调层级与顺序，再确认落库。',
+    tags: ['工作台', '交互'], updated: '08-20 16:02' },
+  { id: 'x2', title: '知识库自动生成「这周我学到了什么」', kindCode: 'spark', kindName: '突发奇想', color: '#E7634C',
+    contentMd: '每周一早上把上周新增的知识条目聚成一份摘要，落到日报里。', tags: ['知识库', '日报'], updated: '08-19 09:40' },
+  { id: 'x3', title: '团队记忆的检索结果直接引到工作台会话', kindCode: 'skill', kindName: '技能点子', color: '#2E9B7B',
+    contentMd: '搜到相关经验后一键把 id 塞进当前 AI 会话的上下文，省掉手工复制。', tags: ['团队记忆', 'AI'], updated: '08-18 20:11' },
+];
+
+const state = { mode: 'after', tab: 'ideas', kw: '', picked: new Set(), selected: 'i1', folderMenu: null };
+const $ = (s) => document.querySelector(s);
+
+function visible() {
+  const q = state.kw.trim().toLowerCase();
+  return IDEAS.filter((e) => q === '' || (e.title + e.contentMd + e.tags.join(' ')).toLowerCase().includes(q));
+}
+function render() {
+  const items = visible();
+  $('#cards').innerHTML = items.length === 0
+    ? '<div class="empty">没有匹配的点子</div>'
+    : items.map((e) => `
+      <div class="card ${state.selected === e.id ? 'sel' : ''} ${state.picked.has(e.id) ? 'picked' : ''}"
+           data-id="${e.id}" style="--kc:${e.color}">
+        <span class="pick">✓</span>
+        <div class="ct">${e.title}</div>
+        <div class="cb">${e.contentMd.replace(/\n/g, ' ')}</div>
+        <div class="cf">
+          <span class="kdot" style="background:${e.color}"></span>
+          <span class="chip kindchip" style="background:${e.color}22;color:${e.color}">${e.kindName}</span>
+          <span class="tg ftags">${e.tags.map((t) => '#' + t).join(' ')}</span>
+          <span class="stamp" style="margin-left:auto">${e.updated}</span>
+          <span class="fold">
+            <button class="foldbtn" data-fold="${e.id}">归入文件夹 ▾</button>
+            ${state.folderMenu === e.id ? `<div class="foldmenu">
+              <button data-pickfolder="f1">🗂 天线测试方向</button>
+              <button data-newfolder="1">＋ 新建文件夹…</button>
+            </div>` : ''}
+          </span>
+        </div>
+      </div>`).join('');
+
+  $('#pager').innerHTML = state.mode === 'after'
+    ? `<span>第 1–${items.length} 条 / 共 <b style="color:var(--fg)">${items.length}</b> 条</span>
+       <span class="grow"></span>
+       <span class="pages">
+         <button class="pnum" disabled>«</button><button class="pnum" disabled>‹</button>
+         <button class="pnum on">1</button>
+         <button class="pnum" disabled>›</button><button class="pnum" disabled>»</button>
+       </span>
+       <select class="sel" style="padding:3px 6px;font-size:11.5px"><option>50 / 页</option></select>`
+    : `<span>点子不分页，全部 1 条平铺</span><span class="grow"></span>
+       <select class="sel" style="padding:3px 6px;font-size:11.5px"><option>每页 50（现状无此控件）</option></select>`;
+}
+
+$('#kw').addEventListener('input', (e) => { state.kw = e.target.value; render() });
+$('#tabs').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-tab]'); if (!b) return;
+  $('#tabs').querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b));
+  state.tab = b.dataset.tab; render();
+});
+$('#mode').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-mode]'); if (!b) return;
+  $('#mode').querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b));
+  state.mode = b.dataset.mode;
+  document.documentElement.dataset.mode = state.mode;
+  render();
+});
+$('#cards').addEventListener('click', (e) => {
+  const fold = e.target.closest('[data-fold]');
+  if (fold) { e.stopPropagation(); state.folderMenu = state.folderMenu === fold.dataset.fold ? null : fold.dataset.fold; render(); return; }
+  if (e.target.closest('[data-pickfolder]') || e.target.closest('[data-newfolder]')) { e.stopPropagation(); state.folderMenu = null; render(); return; }
+  const card = e.target.closest('[data-id]');
+  if (card === null) return;
+  if (state.mode === 'after') {                       // 修后：点卡片右上角 ☑ 区域 = 多选（这里用 Alt/点空白近似）
+    if (e.altKey) { const id = card.dataset.id; state.picked.has(id) ? state.picked.delete(id) : state.picked.add(id); render(); return; }
+    state.selected = card.dataset.id; render(); return;
+  }
+  const id = card.dataset.id;                          // 修前：整行点 = 打开
+  state.selected = id; render();
+});
+document.documentElement.dataset.mode = state.mode;
+render();
+</script>
+</body>
+</html>

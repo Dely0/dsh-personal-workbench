@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>1 · 卡片瀑布（Bento / 画廊）</title>
+<style>
+  /* 款式 1：卡片瀑布 —— 2 列圆角卡片，彩色左边框标类型 */
+  .kbd-list { background: var(--bg); }
+  .kbar { display: flex; gap: 8px; align-items: center; padding: 12px 13px 10px; flex: none; }
+  .tabs { display: flex; gap: 2px; padding: 0 13px; border-bottom: 1px solid var(--line-soft); flex: none; overflow-x: auto; }
+  .tab { border: none; background: transparent; color: var(--fg-3); cursor: pointer; font: inherit; font-size: 12.5px;
+    padding: 8px 11px 9px; border-bottom: 2px solid transparent; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+  .tab:hover { color: var(--fg); }
+  .tab.on { color: var(--fg); font-weight: 600; border-bottom-color: var(--accent); }
+  .tab i { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+  .tab .cnt { font-size: 10.5px; color: var(--fg-3); background: rgba(255,255,255,.07); border-radius: 999px; padding: 1px 6px; }
+  .tab.on .cnt { color: var(--fg); background: color-mix(in srgb, var(--accent) 24%, transparent); }
+  .tags { display: flex; gap: 5px; flex-wrap: wrap; padding: 9px 13px 2px; flex: none; }
+  .tchip { border: 1px solid var(--line); background: transparent; color: var(--fg-3); border-radius: 999px;
+    padding: 2px 9px; font: inherit; font-size: 11px; cursor: pointer; }
+  .tchip.on { color: #cfe0ff; border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+    background: color-mix(in srgb, var(--accent) 15%, transparent); font-weight: 600; }
+
+  .cards { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 13px; }
+  .card { position: relative; background: var(--card); border: 1px solid var(--line-soft); border-left: 3px solid var(--kc, #8a9aa8);
+    border-radius: 11px; padding: 11px 12px 10px; cursor: pointer; text-align: left; font: inherit; color: inherit;
+    display: flex; flex-direction: column; gap: 7px; transition: border-color .14s ease, transform .14s ease, background .14s ease; }
+  .card:hover { background: var(--card-hi); transform: translateY(-1px); }
+  .card.sel { border-color: color-mix(in srgb, var(--accent) 70%, transparent);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent); }
+  .card .ct { font-size: 13px; font-weight: 600; line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical; overflow: hidden; }
+  .card .cb { color: var(--fg-3); font-size: 11.5px; line-height: 1.6; display: -webkit-box; -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical; overflow: hidden; }
+  .card .cf { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; margin-top: auto; }
+  .card .kdot { width: 6px; height: 6px; border-radius: 50%; flex: none; }
+
+  /* 修前：平铺单列 + 没有标签 chip 行，显得又长又平 */
+  html[data-mode="before"] .cards { grid-template-columns: 1fr; gap: 0; padding: 0; }
+  html[data-mode="before"] .card { border-radius: 0; border-left-width: 0; border-bottom: 1px solid var(--line-soft);
+    background: transparent; transform: none; flex-direction: row; align-items: center; gap: 10px; padding: 9px 13px; }
+  html[data-mode="before"] .card .cb,
+  html[data-mode="before"] .card .kdot,
+  html[data-mode="before"] .card .kindchip { display: none; }
+  html[data-mode="before"] .card .ct { flex: 1; -webkit-line-clamp: 1; font-weight: 500; }
+  html[data-mode="before"] .card .cf { margin: 0; flex: none; }
+  html[data-mode="before"] .card .ftags { display: none; }
+  html[data-mode="before"] .tags { display: none; }
+</style>
+</head>
+<body>
+<div class="kbd">
+  <div class="kbd-list">
+    <div data-bar></div>
+    <div class="kbd-scroll"><div data-list></div></div>
+    <div data-pager></div>
+  </div>
+  <div class="kbd-detail" data-detail></div>
+</div>
+<script src="_shared.js"></script>
+<script>
+  KB.mount(function (shown) {
+    return `<div class="cards">${shown.map((e) => `
+      <button class="card" data-open="${e.id}" style="--kc:${KB.kindOf(e.kindCode).color}">
+        <div class="ct">${e.title}</div>
+        <div class="cb">${e.contentMd.replace(/\n/g, ' ')}</div>
+        <div class="cf">
+          <span class="kdot" style="background:${KB.kindOf(e.kindCode).color}"></span>
+          <span class="kindchip chip" style="background:${KB.kindOf(e.kindCode).color}22;color:${KB.kindOf(e.kindCode).color}">${KB.kindOf(e.kindCode).name}</span>
+          <span class="ftags tg">${e.tags.map((t) => '#' + t).join(' ')}</span>
+          <span class="stamp" style="margin-left:auto">${KB.fmtShort(e.updatedAt)}</span>
+        </div>
+      </button>`).join('')}</div>`;
+  });
+</script>
+</body>
+</html>

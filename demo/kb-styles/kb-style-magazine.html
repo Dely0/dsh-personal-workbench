@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>4 · 杂志式首屏 + 列表</title>
+<style>
+  /* 款式 4：顶部统计卡 + 「最近更新」大卡 + 常规列表 */
+  .kbd-list { background: var(--bg); }
+  .hero { padding: 14px 14px 4px; flex: none; }
+  .statrow { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; }
+  .stat { background: var(--card); border: 1px solid var(--line-soft); border-radius: 11px; padding: 10px 12px; }
+  .stat .sv { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -.4px; }
+  .stat .sl { font-size: 11px; color: var(--fg-3); margin-top: 2px; }
+  .stat .sd { font-size: 11px; color: #7fd0b3; margin-top: 3px; }
+  .spot { margin-top: 10px; background: linear-gradient(100deg, color-mix(in srgb, var(--accent) 18%, var(--card)), var(--card));
+    border: 1px solid color-mix(in srgb, var(--accent) 34%, transparent); border-radius: 12px; padding: 12px 14px; cursor: pointer; text-align: left;
+    font: inherit; color: inherit; display: block; width: 100%; }
+  .spot:hover { border-color: color-mix(in srgb, var(--accent) 60%, transparent); }
+  .spot .sh { font-size: 10.5px; color: var(--accent-2); font-weight: 700; letter-spacing: .5px; margin-bottom: 5px; }
+  .spot .st { font-size: 14.5px; font-weight: 650; line-height: 1.4; }
+  .spot .ss { color: var(--fg-2); font-size: 11.5px; margin-top: 5px; display: -webkit-box; -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical; overflow: hidden; }
+  .spot .sm { display: flex; gap: 6px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
+
+  .kbar { display: flex; gap: 8px; align-items: center; padding: 12px 13px 10px; flex: none; }
+  .tabs { display: flex; gap: 2px; padding: 0 13px; border-bottom: 1px solid var(--line-soft); flex: none; overflow-x: auto; }
+  .tab { border: none; background: transparent; color: var(--fg-3); cursor: pointer; font: inherit; font-size: 12.5px;
+    padding: 8px 11px 9px; border-bottom: 2px solid transparent; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+  .tab:hover { color: var(--fg); }
+  .tab.on { color: var(--fg); font-weight: 600; border-bottom-color: var(--accent); }
+  .tab i { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+  .tab .cnt { font-size: 10.5px; color: var(--fg-3); background: rgba(255,255,255,.07); border-radius: 999px; padding: 1px 6px; }
+  .tab.on .cnt { color: var(--fg); background: color-mix(in srgb, var(--accent) 24%, transparent); }
+  .tags { display: flex; gap: 5px; flex-wrap: wrap; padding: 8px 13px 0; flex: none; }
+  .tchip { border: 1px solid var(--line); background: transparent; color: var(--fg-3); border-radius: 999px;
+    padding: 2px 9px; font: inherit; font-size: 11px; cursor: pointer; }
+  .tchip.on { color: #cfe0ff; border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+    background: color-mix(in srgb, var(--accent) 15%, transparent); font-weight: 600; }
+
+  .sect { display: flex; align-items: center; gap: 8px; padding: 13px 14px 6px; font-size: 11px;
+    color: var(--fg-3); font-weight: 600; letter-spacing: .3px; }
+  .sect .ln { flex: 1; height: 1px; background: var(--line-soft); }
+  .rows { padding: 0 0 8px; }
+  .r { display: flex; align-items: center; gap: 10px; padding: 8px 14px; cursor: pointer; transition: background .12s ease; }
+  .r:hover { background: rgba(255,255,255,.035); }
+  .r.sel { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+  .r .kbar-mini { width: 3px; align-self: stretch; border-radius: 2px; flex: none; }
+  .r .rb { flex: 1; min-width: 0; }
+  .r .rt { font-size: 12.5px; font-weight: 550; }
+  .r .rm { display: flex; gap: 6px; align-items: center; margin-top: 2px; }
+  .r .kchip { font-size: 10.5px; border-radius: 5px; padding: 1px 6px; font-weight: 600; }
+
+  /* 修前：统计卡与「最近更新」大卡都收起来，只剩下拉 + 平铺列表 */
+  html[data-mode="before"] .statrow { display: none; }
+  html[data-mode="before"] .spot { display: none; }
+  html[data-mode="before"] .tags { display: none; }
+  html[data-mode="before"] .sect { padding-top: 8px; }
+  html[data-mode="before"] .r .rm { display: none; }
+  html[data-mode="before"] .r .kbar-mini { display: none; }
+</style>
+</head>
+<body>
+<div class="kbd">
+  <div class="kbd-list">
+    <div class="hero" data-hero></div>
+    <div data-bar></div>
+    <div class="kbd-scroll"><div data-list></div></div>
+    <div data-pager></div>
+  </div>
+  <div class="kbd-detail" data-detail></div>
+</div>
+<script src="_shared.js"></script>
+<script>
+  const hero = document.querySelector('[data-hero]');
+  function pct(a, b) { return b === 0 ? '0%' : Math.round(a / b * 100) + '%' }
+  function drawHero() {
+    const now = Date.parse('2026-09-25T15:00:00+08:00');
+    const week = KB.ENTRIES.filter((e) => now - Date.parse(e.updatedAt) < 7 * 86400000);
+    const linked = KB.ENTRIES.filter((e) => e.sourceTaskId !== null);
+    const latest = KB.ENTRIES[0];
+    const k = KB.kindOf(latest.kindCode);
+    hero.innerHTML = `
+      <div class="statrow">
+        <div class="stat"><div class="sv">${KB.ENTRIES.length.toLocaleString('zh-CN')}</div><div class="sl">知识条目</div><div class="sd">本周 +${week.length}</div></div>
+        <div class="stat"><div class="sv">${pct(linked.length, KB.ENTRIES.length)}</div><div class="sl">已关联任务</div><div class="sd">${linked.length} 条可追溯</div></div>
+        <div class="stat"><div class="sv">${KB.KINDS.length}</div><div class="sl">分类</div><div class="sd">经验教训最多</div></div>
+      </div>
+      <button class="spot" data-open="${latest.id}">
+        <div class="sh">🕘 最近更新</div>
+        <div class="st">${latest.title}</div>
+        <div class="ss">${latest.contentMd.replace(/\n/g, ' ')}</div>
+        <div class="sm">
+          <span class="kchip" style="background:${k.color}22;color:${k.color}">${k.name}</span>
+          <span class="tg">${latest.tags.map((t) => '#' + t).join(' ')}</span>
+          <span class="stamp" style="margin-left:auto">${KB.fmtShort(latest.updatedAt)}</span>
+        </div>
+      </button>`;
+  }
+  KB.mount(function (shown, total) {
+    drawHero();
+    // 第一页里第一张就是「最近更新」大卡已经展示的那条，列表里跳过它，避免同一屏重复表达
+    const skipFirst = KB.state.mode === 'after' && KB.state.page === 1 && KB.state.keyword === '' && KB.state.kind === 'all' && KB.state.tag === '';
+    const items = skipFirst ? shown.slice(1) : shown;
+    return `<div class="sect">全部知识<span class="ln"></span><span>${total.toLocaleString('zh-CN')} 条</span></div>
+      <div class="rows">${items.map((e) => {
+        const k = KB.kindOf(e.kindCode);
+        return `<div class="r ${KB.state.selectedId === e.id ? 'sel' : ''}" data-open="${e.id}">
+          <span class="kbar-mini" style="background:${k.color}"></span>
+          <span class="rb">
+            <div class="rt ell">${e.title}</div>
+            <div class="rm">
+              <span class="kchip" style="background:${k.color}22;color:${k.color}">${k.name}</span>
+              <span class="tg">${e.tags.map((t) => '#' + t).join(' ')}</span>
+              ${e.fileLink ? '<span class="tg">📄</span>' : ''}
+            </div>
+          </span>
+          <span class="stamp">${KB.fmtShort(e.updatedAt)}</span>
+        </div>`;
+      }).join('')}</div>`;
+  });
+</script>
+</body>
+</html>
