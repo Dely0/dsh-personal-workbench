@@ -176,7 +176,7 @@ M10–M19 是**接线类**变异：它们不改纯函数，纯函数测试照样
 | 门禁 | 结果 |
 |---|---|
 | `pnpm typecheck` | **0** |
-| `pnpm test` | **505/505**（基线 448 → **+57**） |
+| `pnpm test` | **520/520**（本线 +57；合并另一条并行分支后为 520，无冲突丢失） |
 | 变异探针 | **19/19 全红** |
 | `harness-real-browser.mjs --case capacity` | **20/20**；`--case listview` **32/32**（未退化）；`--case all` **51/51** |
 | 固定数据集 | `verify-capacity-fixed-dataset.mjs` → 完全一致（0 处不符） |
@@ -204,14 +204,19 @@ node scripts/repro/repro-task-estimate.mjs --token <新 token>
 
 ---
 
-## 八、并行会话隔离（两个会话改同一个本地仓库）
+## 八、并行会话隔离（两个会话改同一个本地仓库）—— 已合并
 
-详见 [`2026-09-17-parallel-session-handover.md`](./2026-09-17-parallel-session-handover.md)。要点：
+详见 [`2026-09-17-parallel-session-handover.md`](./2026-09-17-parallel-session-handover.md)
+（含「五、合并结果」：合并命令、`--no-ff` 的理由、**唯一那处冲突**的解决方式、合并后重跑的门禁）。要点：
 
 - 本会话全程在**独立 git worktree** `E:\Code\dsh-personal-workbench\capacity-wt`，
   分支 `feat/capacity-rules-transparency` —— 主工作区（另一个会话的知识草稿改动）**一行未碰**；
 - 文件级归属与共享文件的行级分工写在交接文档里；本会话新增的用例名统一带 `[容量]` 前缀便于区分；
-- 两边都从 `03fcdb5` 出发，`git merge --ff-only` 或 rebase 即可，冲突面极小。
+- **实测结果**：唯一冲突正是开工时预判的那处（`tsconfig.build.json` 的 include 白名单里
+  两边加的组件条目位置相邻），解决方式是**两边都保留**；其余共享文件（`index.tsx` /
+  `contracts.ts` / `routes*.ts` / `test/routes.test.mjs`）自动合并成功；
+- 合并后 `main`：typecheck 0、`pnpm test` **520/520**、变异探针 19/19 全红、harness 51/51。
+  worktree 与已合并的分支均已清理。
 
 ---
 
