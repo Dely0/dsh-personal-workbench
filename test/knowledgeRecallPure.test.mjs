@@ -22,6 +22,7 @@ import {
   idfOf,
   isSuperseded,
   isTrivialQuery,
+  neutralizeTemplateBraces,
   normalizeText,
   mergeRecallOutcomes,
   recallKnowledge,
@@ -585,6 +586,31 @@ test('P1 willInject：有提示也算"会在会话里留下东西"（否则日�
   assert.equal(willInject(hit), true)
   assert.equal(willInject(hint), true, '只有提示也必须算"会留下东西"')
   assert.equal(willInject(none), false, '两级都没够到 → 真的什么都不插（不占位）')
+})
+
+/**
+ * ## 宿主会把注入文本当**模板**插值 —— `{{` 是个会炸的雷（v1.15.7 补）
+ *
+ * `@deepseek-ai/dsh-system-prompt` 的 `interpolate()` 扫 `{{name}}`，变量没注册就
+ * `throw new Error('unknown prompt variable …')`，而且抛在 `renderContextSections()` 里 ——
+ * **在我们的 text 回调之外**，我们自己的 try/catch 拦不住，会打断整个提示装配。
+ * 知识正文来自用户内容（模板语法、Vue/Angular 片段、别人的 prompt 示例都是常见内容），
+ * 所以注入前必须把 `{{` 拆开。这条测试就是那个雷的守卫。
+ */
+test('注入文本不得含 `{{`（宿主模板插值会抛异常，且抛在我们的 try/catch 之外）', () => {
+  const outcome = recallKnowledge({
+    query: '模板语法 踩坑',
+    candidates: [candidate({ id: 'tpl', title: '模板语法 踩坑', contentMd: '写 Vue 时 {{ user.name }} 不渲染，改用 v-text。' })],
+    now: NOW,
+  })
+  assert.equal(outcome.hits.length, 1, '前置：这条要被召回并注入')
+  const text = formatRecallText(outcome)
+  assert.ok(text.includes('模板语法'), '前置：正文摘要确实进了注入文本')
+  assert.doesNotMatch(text, /\{\{/, '注入文本里不能出现 {{（宿主会对它做模板插值）')
+  // 提示行同理（它也可能带标题/正文片段）
+  const hinted = recallKnowledge({ query: '模板语法 踩坑', candidates: [candidate({ id: 'tpl', title: '模板语法 踩坑', contentMd: '{{ x }}' })], minScore: 0.9, now: NOW })
+  assert.doesNotMatch(formatHintText(hinted), /\{\{/)
+  assert.equal(neutralizeTemplateBraces('a{{b}}c'), 'a{ {b}}c', '只拆 `{{`，其余一个字符都不动')
 })
 
 /**

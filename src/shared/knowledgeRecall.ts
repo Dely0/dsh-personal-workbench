@@ -917,7 +917,23 @@ export function isTrivialQuery(query: string): boolean {
 }
 
 /**
- * 渲染注入文本。
+ * 中和 `{{` —— 一段**宿主层面的硬约束**，不是我们自己的洁癖（v1.15.7 补）。
+ *
+ * `@deepseek-ai/dsh-system-prompt` 会把 `systemPrompt.context` 的文本当**模板**插值：
+ * `lib/index.js:151 interpolate()` 扫 `{{name}}`，变量没注册就
+ * `throw new Error('unknown prompt variable "{{…}}"')`（`lib/index.js:167`），
+ * 而且这个异常发生在 `renderContextSections()`（同一文件 144 行）里 ——
+ * **在我们的 text 回调之外**，我们的 try/catch 拦不住 → 会打断整个提示装配。
+ *
+ * 知识条目的正文/摘要来自用户内容，完全可能带 `{{`（模板语法、Vue/Angular 片段、
+ * 别人写的 prompt 示例），所以注入前一律把它拆开。只动这一个字符组合，
+ * 不改变可读性，也不碰其它任何内容。
+ */
+export function neutralizeTemplateBraces(text: string): string {
+  return text.replace(/\{\{/g, '{ {')
+}
+
+/** 渲染注入文本。
  *
  * 三条纪律（都与团队记忆一致）：
  * 1. **零命中返回空串** —— 不产生任何消息，保住提示前缀缓存；
@@ -955,7 +971,8 @@ export function formatRecallText(outcome: RecallOutcome): string {
    */
   lines.push('需要全文时：把上面某条的 [id]（完整 uuid）作为 query 传给 workbench_search_knowledge，会返回全文而不是 160 字摘要。')
   lines.push('用到哪几条请调用 workbench_knowledge_recall_control(action=report_usage, entry_ids=[...]) 回报引用。')
-  return lines.join('\n')
+  // 宿主会把这整段当模板插值，`{{` 必须中和（见 `neutralizeTemplateBraces` 的注释）
+  return neutralizeTemplateBraces(lines.join('\n'))
 }
 
 /**
@@ -990,8 +1007,8 @@ export function formatHintText(outcome: RecallOutcome, hints: RecallHit[] = outc
   const items = hints
     .map((hit) => `[${hit.id}] ${hit.title.slice(0, 28)}（${formatRelevance(hit.score)}）`)
     .join('；')
-  return `【工作台知识库】本回合提到的事，库里有 ${hints.length} 条**可能**相关但未达注入闸门（仅供参考，未核实）：`
-    + `${items}。需要的话用 workbench_search_knowledge 按 [id] 取全文。`
+  return neutralizeTemplateBraces(`【工作台知识库】本回合提到的事，库里有 ${hints.length} 条**可能**相关但未达注入闸门（仅供参考，未核实）：`
+    + `${items}。需要的话用 workbench_search_knowledge 按 [id] 取全文。`)
 }
 
 /**

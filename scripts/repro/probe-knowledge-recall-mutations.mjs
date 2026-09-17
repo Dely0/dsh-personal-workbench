@@ -323,6 +323,13 @@ const MUTATIONS = [
     to: 'if (false)\n            return;',
     expect: '只对"像报错"的提问记 suggested_miss',
   },
+  {
+    name: 'M36 注入文本里不中和 `{{`（宿主当模板插值 → 抛异常打断整个提示装配）',
+    file: CORE,
+    from: /return text\.replace\(\/\\\{\\\{\/g, '\{ \{'\);/,
+    to: 'return text;',
+    expect: '宿主会对注入文本做模板插值，`{{` 必须先拆开',
+  },
 ]
 
 const run = () => spawnSync(process.execPath, ['--test', ...TEST_FILES], { cwd: ROOT, encoding: 'utf8' })
