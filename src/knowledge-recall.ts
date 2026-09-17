@@ -58,7 +58,7 @@ const ENTRY_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{1
 
 /** 空结论：构造"没有可检索内容"的结论时只有一处实现（少写一遍就少一处漏字段）。 */
 const EMPTY_OUTCOME: RecallOutcome = {
-  query: '', hits: [], nearMisses: [], matched: 0, droppedByScore: 0, droppedByLimit: 0, droppedAsSeen: 0, droppedAsSuperseded: 0, terms: [],
+  query: '', hits: [], nearMisses: [], matched: 0, droppedByScore: 0, droppedByLimit: 0, droppedAsSeen: 0, droppedAsSuperseded: 0, supersededIds: [], terms: [],
 }
 
 /**
@@ -174,6 +174,15 @@ interface SessionState {
   pendingHits: Array<{ id: string; title: string }>
   /** 这一回合模型是否调用过检索工具（P5 的 suggested_miss 判据之一）。 */
   toolUsedThisTurn: boolean
+  /**
+   * 已经做过"回合收尾观测"的键（`turn + 本回合用户消息`）。
+   *
+   * 为什么要有它：收尾观测会**写库**，而写入口必须幂等（本仓硬规矩）。
+   * 不能寄希望于"宿主每回合只派发一次 turn-stopping" —— 那是宿主实现细节，
+   * 独立审查也确认过"主路径只派发一次"但没法排除重入；重复派发的现象是
+   * 一回合两行一模一样的 `suggested_miss`（账被放大一倍）。
+   */
+  observedTurnKey: string
 }
 
 /** 知识候选快照的缓存时长：题目是"每个回合算一次"，但同一回合内可能装配多次。 */
@@ -280,7 +289,7 @@ export class KnowledgeRecallManager {
   private state(sessionId: string): SessionState {
     let state = this.sessions.get(sessionId)
     if (state === undefined) {
-      state = { primed: false, pendingText: '', cachedText: '', injectedTurn: -1, lastQuery: '', assemblyKey: '', seenIds: new Set(), hintedIds: new Set(), delivered: new Map(), deliveredTurn: -1, pendingHits: [], toolUsedThisTurn: false }
+      state = { primed: false, pendingText: '', cachedText: '', injectedTurn: -1, lastQuery: '', assemblyKey: '', seenIds: new Set(), hintedIds: new Set(), delivered: new Map(), deliveredTurn: -1, pendingHits: [], toolUsedThisTurn: false, observedTurnKey: '' }
       this.sessions.set(sessionId, state)
     }
     return state
@@ -745,13 +754,25 @@ export class KnowledgeRecallManager {
     const key = assemblyKeyOf(turn, queries)
     if (state.assemblyKey === key) return state.cachedText
     const previousKey = state.assemblyKey
+    /**
+     * 同一回合里**已经注入过**的那一段：二次装配要**追加**而不是替换。
+     *
+     * 两个理由：① 模型已经看过那一段（回答里可能引用它），抹掉等于篡改上下文；
+     * ② 同一回合内文本应当稳定（保提示前缀缓存）。两次装配只会在"用户又说了话"
+     * 时发生，那时前缀本来就会变，所以追加是成本与正确性都更好的选择。
+     */
+    const injectedThisTurn = state.injectedTurn === turn ? state.cachedText : ''
     state.assemblyKey = key
     // 换了键就把旧文本作废：算不完也绝不能把上一回合的内容当成本回合的
     state.cachedText = ''
     try {
       if (queries.length > 0) {
         this.recallForTurn(sessionId, cwd, queries)
-        const text = this.injectionFor(sessionId, turn)
+        let text = this.injectionFor(sessionId, turn)
+        if (injectedThisTurn !== '' && text !== '' && text !== injectedThisTurn && !injectedThisTurn.includes(text)) {
+          text = `${injectedThisTurn}\n${text}`
+          state.cachedText = text
+        }
         state.cachedText = text
         return text
       }
@@ -759,7 +780,16 @@ export class KnowledgeRecallManager {
        * 本回合还没有用户消息（罕见：装配早于 `user/message` 落进事件）。
        * **不写 assemblyKey 的终态** —— 否则那条消息到达后这一回合就再也不会被检索，
        * 正好复现我们要修的那个 bug。所以这里把键还原成"未装配过"。
+       *
+       * 而且**不回吐上一轮的缓存**：这条分支的语义是"本回合没有可检索的内容"，
+       * 返回旧文本会变成"回合号读不出来（恒 0）时每回合重复注入同一段旧知识"
+       * （独立审查实测过这个形态）。没有内容就返回空串 —— **不插占位**。
        */
+      if (state.pendingText === '' && state.primeOutcome === undefined) {
+        state.assemblyKey = previousKey
+        state.cachedText = injectedThisTurn
+        return ''
+      }
       const text = this.injectionFor(sessionId, turn)
       state.cachedText = text
       state.assemblyKey = ''
@@ -767,7 +797,7 @@ export class KnowledgeRecallManager {
     } catch (error) {
       // 这次没算成 → 把键还原（下一次装配必须重算，不能当成"已装配"）
       state.assemblyKey = previousKey
-      state.cachedText = ''
+      state.cachedText = injectedThisTurn
       throw error
     }
   }
@@ -779,13 +809,47 @@ export class KnowledgeRecallManager {
    * 只剩一行「停」，实质提问**一个字都没提** —— 有了这条，同样的丢失会立刻现形。
    * 只观测、不强制检索（不改变行为，也就不引入新的行为风险）。
    */
+  /**
+   * **回合收尾的观测总入口**（幂等）：`noteUnretrieved` + `noteSuggestedMiss` 都从它进。
+   *
+   * 为什么要有这一层：两者都会**写库**，而写入口必须幂等（本仓硬规矩）。
+   * 不能寄希望于"宿主每回合只派发一次 `turn-stopping`" —— 那是宿主实现细节；
+   * 重复派发的现象是一回合两行一模一样的 `suggested_miss`（账被放大一倍）。
+   * 判据是"回合 + 本回合用户消息"这个键，与装配键同一套算法。
+   */
+  observeTurnEnd(sessionId: string, cwd: string | undefined, agent: unknown): void {
+    if (!this.sessionEnabled(sessionId)) return
+    const turn = currentTurnOf(agent)
+    const state = this.state(sessionId)
+    const key = assemblyKeyOf(turn, currentTurnQueries(agent))
+    if (state.observedTurnKey === key) return
+    state.observedTurnKey = key
+    this.noteUnretrieved(sessionId, cwd, agent)
+    this.noteSuggestedMiss(sessionId, cwd, agent)
+  }
+
   noteUnretrieved(sessionId: string, cwd: string | undefined, agent: unknown): void {
     if (!this.sessionEnabled(sessionId)) return
     const queries = currentTurnQueries(agent)
     if (queries.length === 0) return
     const turn = currentTurnOf(agent)
-    if (this.state(sessionId).assemblyKey === assemblyKeyOf(turn, queries)) return
-    const query = queries.join(' ／ ')
+    const state = this.state(sessionId)
+    if (state.assemblyKey === assemblyKeyOf(turn, queries)) return
+    /**
+     * 只报**这一回合里确实没被检索过的那些句子**，不把已经检索过的也算进来。
+     *
+     * 为什么值得多写这几行：同一回合里第二条用户消息在装配之后才到达时，
+     * 整轮报"未纳入检索"会把第一条（已检索过）一起写进去 —— 一行读起来像
+     * "这一回合什么都没查"，而事实是"只差第二句"。账要能指对方向（本仓罚过这类偏差）。
+     * 装配键的格式就是 `turn\0句1\1句2`，这里反解出上一轮覆盖了哪些句子。
+     */
+    const prefix = `${turn}\u0000`
+    const covered = new Set(state.assemblyKey.startsWith(prefix)
+      ? state.assemblyKey.slice(prefix.length).split('\u0001').filter((item) => item !== '')
+      : [])
+    const missing = queries.filter((query) => !covered.has(query))
+    if (missing.length === 0) return
+    const query = missing.join(' ／ ')
     this.logLine(`[turn] ${turn} 回合有用户消息但**未纳入检索**（装配期没发生）：「${query.slice(0, 120)}」`)
     const outcome: RecallOutcome = {
       ...EMPTY_OUTCOME,
@@ -822,9 +886,19 @@ export class KnowledgeRecallManager {
       state.cachedText = state.pendingText
       state.injectedTurn = turn
       state.pendingText = ''
-      // P4：这一刻才算"送达"—— 引用自动判定只认真正进过会话的条目
-      state.delivered = new Map(state.pendingHits.map((hit) => [hit.id, hit.title]))
-      state.deliveredTurn = turn
+      /**
+       * P4：这一刻才算"送达"。
+       *
+       * ⚠️ **累加而不是替换**：同一回合里可能装配不止一次（用户在同一个回合里又说了话、
+       * 或宿主重入装配），先注入的那一批模型**已经看过了**，回答里引用它也必须能被标上。
+       * 早先写成 `delivered = new Map(pendingHits)`，于是二次装配把上一批整体丢掉 ——
+       * 现象是"回答里明明写了那条的标题，却 not cited"（独立审查实测抓到的）。
+       */
+      if (state.deliveredTurn !== turn) {
+        state.delivered.clear()
+        state.deliveredTurn = turn
+      }
+      for (const hit of state.pendingHits) state.delivered.set(hit.id, hit.title)
       state.pendingHits = []
       /**
        * 日志要如实区分**注入了完整块**还是**只给了一行提示** ——
@@ -1019,6 +1093,7 @@ export class KnowledgeRecallManager {
           droppedByLimit: 0,
           droppedAsSeen: 0,
           droppedAsSuperseded: 0,
+          supersededIds: [],
           nearMisses: [],
         },
         injected: false,
@@ -1228,13 +1303,11 @@ export function installKnowledgeRecall(
       if (!manager.sessionEnabled(sessionId)) return
       // ① 补做开工前（迟到的关联）
       manager.primeIfNeeded(sessionId, header?.cwd)
-      // ② 观测：这一回合的用户消息到底有没有被检索过
-      manager.noteUnretrieved(sessionId, header?.cwd, payload?.agent)
+      // ② 观测：这一回合的用户消息到底有没有被检索过（含"该查未查"，幂等）
+      manager.observeTurnEnd(sessionId, header?.cwd, payload?.agent)
       // ③ P4：引用自动判定（回答里出现了刚注入条目的标题/id → 自动标 cited）
       manager.autoCite(sessionId, payload?.agent)
-      // ④ P5："该查未查"只观测（像报错却没调用检索工具 → 落一行 suggested_miss）
-      manager.noteSuggestedMiss(sessionId, header?.cwd, payload?.agent)
-      // ⑤ 本回合的"用过工具"标记复位（下一回合重新计）
+      // ④ 本回合的"用过工具"标记复位（下一回合重新计）
       manager.noteTurnStopped(sessionId)
     } catch (error) {
       manager.logLine(`回合收尾处理失败（已忽略，不影响对话）：${error instanceof Error ? error.message : String(error)}`)

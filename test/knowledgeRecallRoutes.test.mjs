@@ -22,7 +22,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openWorkbenchDb } from '../lib/db/database.js'
 import { seedDictionaries } from '../lib/db/seed.js'
-import { createKnowledge, createTask } from '../lib/db/repo.js'
+import { createKnowledge, createTask, deleteKnowledgeWithRefs, getKnowledge, updateKnowledge } from '../lib/db/repo.js'
 import { linkTaskSession } from '../lib/db/repo/task-sessions.js'
 import { makeRoutes } from '../lib/api/routes.js'
 import { KnowledgeRecallManager } from '../lib/knowledge-recall.js'
@@ -355,6 +355,41 @@ test('工具：min_score 用归一化相关度（与输出里的"相关度"同�
 
     const blocked = await tool.execute({ query: '盘符根本', min_score: 1 }, exec)
     assert.match(blocked, /零命中/, '阈值是严格大于，相关度 1.00 不 > 1.00 → 要被挡下')
+  })
+})
+
+/**
+ * P2：**删掉被指向的条目不能留下悬空指针**（仓库层契约）。
+ *
+ * 独立审查抓到的中危：`superseded_by_id` 是纯 TEXT 列、没有外键（SQLite 的
+ * `ALTER TABLE ADD COLUMN` 加不了 `REFERENCES`），删除也不查引用 —— 于是删掉修正条之后，
+ * 被它取代的旧条目**永久静默压制**（召回里再也看不到，日志只说"1 条已被取代/已过期"，
+ * 没有任何地方指出那个 id 已不存在）。仓库层的修法：同一事务里先清引用再删。
+ *
+ * 分层说明：这条在**仓库层**验（HTTP 那一层只验回执形状，见 `test/routes.test.mjs`），
+ * 因为"不留悬空引用"是仓储契约，不是某个端点的行为。
+ */
+test('P2 仓库层：删除条目会清掉指向它的取代引用（不留悬空指针）', async () => {
+  await withDb(async (db) => {
+    const oldOne = createKnowledge(db, { title: '盘符根目录的旧结论', contentMd: '旧' })
+    const fix = createKnowledge(db, { title: '盘符根目录的新结论', contentMd: '新' })
+    updateKnowledge(db, oldOne.id, { supersededById: fix.id })
+    const manager = new KnowledgeRecallManager(db, { log: () => {} })
+    assert.equal(
+      manager.recallToText({ taskId: null, query: '盘符根目录' }).hits.some((hit) => hit.id === oldOne.id), false,
+      '前置：被取代的条目不再进命中',
+    )
+
+    const result = deleteKnowledgeWithRefs(db, fix.id)
+    assert.equal(result.deleted, true)
+    assert.equal(result.clearedRefs, 1, '要如实报出"连带恢复了 1 条"（静默改写字段是禁止的）')
+    assert.equal(getKnowledge(db, oldOne.id).supersededById, null, '指针必须被清掉，不能指向已删除的 id')
+
+    manager.invalidate()
+    assert.ok(
+      manager.recallToText({ taskId: null, query: '盘符根目录' }).hits.some((hit) => hit.id === oldOne.id),
+      '旧条目恢复为可召回 —— 不是"永久静默压制"',
+    )
   })
 })
 

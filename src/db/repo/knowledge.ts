@@ -154,8 +154,39 @@ export function updateKnowledge(db: DatabaseSync, id: string, patch: Partial<Kno
   return next
 }
 
+/**
+ * 删除一条知识条目。
+ *
+ * ⚠️ **必须顺带清掉指向它的取代引用**（P2，独立审查抓到的中危缺陷）。
+ *
+ * `superseded_by_id` 是纯 TEXT 列，没有外键（SQLite 的 `ALTER TABLE ADD COLUMN`
+ * 加不了 `REFERENCES`，而且我们只前向迁移），所以"目标被删"不会自动置空。
+ * 后果很隐蔽：删掉那条**修正条**之后，被它取代的旧条目会**永久静默压制** ——
+ * 召回里再也看不到它，日志只说"1 条已被取代/已过期"，**没有任何地方指出那个 id 已不存在**；
+ * 按 id 直读还会打印"⚠️ 本条已被 [死 id] 取代"。
+ *
+ * 所以删除必须在**同一个事务**里：先把指向它的引用置空（旧条目随之恢复为有效），再删。
+ * 返回值里的 `clearedRefs` 让调用方（HTTP 路由）能把这件事**回显给用户** ——
+ * 静默改写字段是本仓禁止的，这里也一样：用户需要知道"删这条会连带恢复 N 条"。
+ */
+export function deleteKnowledgeWithRefs(db: DatabaseSync, id: string): { deleted: boolean; clearedRefs: number } {
+  db.exec('BEGIN')
+  try {
+    // 先看有哪些行会被牵连（要在 UPDATE 之前数，UPDATE 之后条件已不成立）
+    const rows = db.prepare('SELECT id FROM knowledge_entries WHERE superseded_by_id = ?').all(id) as unknown as Array<{ id: string }>
+    const clearedRefs = rows.length
+    if (clearedRefs > 0) db.prepare('UPDATE knowledge_entries SET superseded_by_id = NULL, updated_at = updated_at WHERE superseded_by_id = ?').run(id)
+    const deleted = db.prepare('DELETE FROM knowledge_entries WHERE id = ?').run(id).changes > 0
+    db.exec('COMMIT')
+    return { deleted, clearedRefs }
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
+  }
+}
+
 export function deleteKnowledge(db: DatabaseSync, id: string): boolean {
-  return db.prepare('DELETE FROM knowledge_entries WHERE id = ?').run(id).changes > 0
+  return deleteKnowledgeWithRefs(db, id).deleted
 }
 
 export function confirmKnowledgeDraft(db: DatabaseSync, draftId: string, actor = 'user', at = nowIso()): KnowledgeRow | undefined {

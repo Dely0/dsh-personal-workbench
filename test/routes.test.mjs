@@ -247,6 +247,34 @@ test('knowledge API：supersededById / validUntil 可设置，非法输入当场
   })
 })
 
+/**
+ * P2：**删掉被指向的条目不能留下悬空指针**。
+ *
+ * 独立审查抓到的中危：`superseded_by_id` 没有外键（SQLite 的 ADD COLUMN 加不了
+ * `REFERENCES`），删除也不查引用 —— 于是删掉修正条之后，被它取代的旧条目
+ * **永久静默压制**（召回里再也看不到，日志只说"1 条已被取代/已过期"，
+ * 没有任何地方指出那个 id 已不存在）。修法：删除时在同一事务里清引用，
+ * 并把"连带影响了几条"回显给调用方。
+ */
+test('knowledge API：删除条目会清掉指向它的取代引用（不留悬空指针）', async () => {
+  await withServer(async ({ db, request }) => {
+    seedDictionaries(db)
+    const oldOne = await request('POST', '/api/workbench/knowledge', { title: '盘符根目录的旧结论', contentMd: '旧', kindCode: 'lesson' })
+    const fix = await request('POST', '/api/workbench/knowledge', { title: '盘符根目录的新结论', contentMd: '新', kindCode: 'lesson' })
+    const oldId = oldOne.body.knowledge.id
+    const fixId = fix.body.knowledge.id
+    await request('PATCH', `/api/workbench/knowledge/${oldId}`, { supersededById: fixId })
+
+    const removed = await request('DELETE', `/api/workbench/knowledge/${fixId}`)
+    assert.equal(removed.status, 200)
+    assert.equal(removed.body.deleted, true)
+    assert.equal(removed.body.clearedSupersedeRefs, 1, '要如实回显"连带恢复了 1 条"')
+
+    const got = await request('GET', `/api/workbench/knowledge/${oldId}`)
+    assert.equal(got.body.knowledge.supersededById, null, '旧条目的取代指针必须被清掉（恢复有效），不能指向已删除的 id')
+  })
+})
+
 test('knowledge API supports file_link and local document reading', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-workbench-knowledge-file-'))
   const docPath = join(dir, 'note.md')

@@ -305,15 +305,15 @@ const MUTATIONS = [
   {
     name: 'M33 不过滤"已被取代/已过期"（作废的结论照样进上下文）',
     file: CORE,
-    from: /if \(isSuperseded\(candidate\.entry, now\)\) \{\r?\n\s*droppedAsSuperseded \+= 1;\r?\n\s*continue;\r?\n\s*\}/,
-    to: 'if (false) {\n            droppedAsSuperseded += 1;\n            continue;\n        }',
+    from: /if \(isSuperseded\(candidate\.entry, now\)\) \{\r?\n\s*supersededIds\.push\(candidate\.entry\.id\);\r?\n\s*continue;\r?\n\s*\}/,
+    to: 'if (false) {\n            supersededIds.push(candidate.entry.id);\n            continue;\n        }',
     expect: '被取代/已过期的条目必须被压制（不是降权）',
   },
   {
     name: 'M34 引用判定放宽成"瞎标"（注入过的全标成被引用 → 证据失真）',
     file: CORE,
-    from: /if \(title\.length >= CITE_TITLE_PREFIX && text\.includes\(title\.slice\(0, CITE_TITLE_PREFIX\)\)\)\r?\n\s*out\.push\(item\.id\);/,
-    to: 'out.push(item.id);',
+    from: /const text = normalizeText\(answer\);\r?\n\s*if \(text === ''\)\r?\n?\s*return \[\];/,
+    to: "const text = normalizeText(answer);\n    if (text === '') return [];\n    if (text !== '') return delivered.map((item) => item.id);",
     expect: '只有回答里真的出现标题/id 才算引用（宁可漏标，不可瞎标）',
   },
   {
@@ -333,8 +333,11 @@ const MUTATIONS = [
   {
     name: 'M37 装配失败后不还原键（这一回合被永久标成"已装配" → 重试返回空/串味）',
     file: MANAGER,
-    from: /state\.assemblyKey = previousKey;/,
-    to: 'void previousKey;',
+    // ⚠️ 必须带上前一行注释：`state.assemblyKey = previousKey;` 在源码里有**两处**
+    // （"没有用户消息"分支与 catch 分支），`String.replace` 只改第一处 —— 早先的写法
+    // 改错了地方，于是这条变异"仍然全绿"（探针自己踩的坑，记在这里免得下次再犯）。
+    from: /(\/\/ 这次没算成 → 把键还原（下一次装配必须重算，不能当成"已装配"）\r?\n\s*)state\.assemblyKey = previousKey;/,
+    to: '$1void previousKey;',
     expect: '失败不得留下假状态：没算成就要允许重算',
   },
   {
@@ -343,6 +346,65 @@ const MUTATIONS = [
     from: /: outcome\.droppedAsSeen > 0\r?\n\s*\? `命中 \$\{outcome\.matched\} 条，但全部已注入过（会话去重跳过 \$\{outcome\.droppedAsSeen\} 条）`/,
     to: ': false\n            ? `命中 ${outcome.matched} 条，但全部已注入过（会话去重跳过 ${outcome.droppedAsSeen} 条）`',
     expect: '"分数不够"与"去重跳过"必须分开说',
+  },
+  {
+    name: 'M39 "未纳入检索"的痕迹不区分句子（已检索过的那句也被算成没检索）',
+    file: MANAGER,
+    from: /const missing = queries\.filter\(\(query\) => !covered\.has\(query\)\);/,
+    to: 'const missing = queries;',
+    expect: '痕迹要精确到"确实没检索过的那一句"',
+  },
+  /**
+   * 独立审查抓到的中/低危各一条，把守卫补齐。
+   */
+  {
+    name: 'M40 matched 的 delivered 改成整体替换（同回合二次装配丢掉先注入的那批 → 被引用却不算引用）',
+    file: MANAGER,
+    from: /if \(state\.deliveredTurn !== turn\) \{\r?\n\s*state\.delivered\.clear\(\);\r?\n\s*state\.deliveredTurn = turn;\r?\n\s*\}\r?\n\s*for \(const hit of state\.pendingHits\)\r?\n\s*state\.delivered\.set\(hit\.id, hit\.title\);/,
+    to: 'if (state.deliveredTurn !== turn) state.deliveredTurn = turn;\n            state.delivered = new Map(state.pendingHits.map((hit) => [hit.id, hit.title]));',
+    expect: '同回合内先后注入的批次都要留在 delivered 里',
+  },
+  {
+    name: 'M41 同回合二次装配整体替换文本（先前注入的那段从上下文里消失）',
+    file: MANAGER,
+    from: /if \(injectedThisTurn !== '' && text !== '' && text !== injectedThisTurn && !injectedThisTurn\.includes\(text\)\) \{\r?\n\s*text = `\$\{injectedThisTurn\}\\n\$\{text\}`;\r?\n\s*state\.cachedText = text;\r?\n\s*\}/,
+    to: 'if (false) { text = `${injectedThisTurn}\\n${text}`; state.cachedText = text; }',
+    expect: '同一回合里先前注入过的内容不能被抹掉',
+  },
+  {
+    name: 'M42 没有用户消息的装配回吐上一回合的文本（回合号读不出来时每回合重复注入）',
+    file: MANAGER,
+    from: /if \(state\.pendingText === '' && state\.primeOutcome === undefined\) \{\r?\n\s*state\.assemblyKey = previousKey;\r?\n\s*state\.cachedText = injectedThisTurn;\r?\n\s*return '';/,
+    to: "if (state.pendingText === '' && state.primeOutcome === undefined) {\n            state.assemblyKey = previousKey;\n            state.cachedText = injectedThisTurn;\n            return injectedThisTurn;",
+    expect: '本回合没有可检索内容 → 不插占位（不许回吐旧文本）',
+  },
+  {
+    name: 'M43 收尾观测不幂等（同一回合重复派发 → 两行一样的账）',
+    file: MANAGER,
+    from: /if \(state\.observedTurnKey === key\)\r?\n\s*return;\r?\n\s*state\.observedTurnKey = key;/,
+    to: 'if (false)\n            return;\n        state.observedTurnKey = key;',
+    expect: '写库的观测入口必须幂等',
+  },
+  {
+    name: 'M44 删除条目不清取代引用（悬空指针 → 旧条目永久静默压制）',
+    file: REPO_KNOWLEDGE,
+    from: /if \(clearedRefs > 0\)\r?\n\s*db\.prepare\('UPDATE knowledge_entries SET superseded_by_id = NULL, updated_at = updated_at WHERE superseded_by_id = \?'\)\.run\(id\);/,
+    to: 'if (false)\n            db.prepare(\'UPDATE knowledge_entries SET superseded_by_id = NULL, updated_at = updated_at WHERE superseded_by_id = ?\').run(id);',
+    expect: '删掉被指向的条目要清掉引用并把连带影响回显给用户',
+  },
+  {
+    name: 'M45 引用判定不判前缀唯一（标题前 12 字碰撞 → 甲乙都标成被引用）',
+    file: CORE,
+    from: /if \(\(byPrefix\.get\(prefix\) \?\? 0\) > 1\)\r?\n\s*continue;/,
+    to: 'if (false)\n            continue;',
+    expect: '前缀在注入批次里不唯一时不猜（宁可漏标）',
+  },
+  {
+    name: 'M46 压制条数在合并时求和而不按 id 去重（库里 1 条被压制、账上写 2）',
+    file: CORE,
+    from: /for \(const id of outcome\.supersededIds \?\? \[\]\)\r?\n\s*superseded\.add\(id\);/,
+    to: 'for (let i = 0; i < (outcome.droppedAsSuperseded ?? 0); i += 1) superseded.add(`dup-${superseded.size}`);',
+    expect: '多句 query 合并时压制的条目要按 id 取并集',
   },
 ]
 

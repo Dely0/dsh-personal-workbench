@@ -6,7 +6,7 @@ import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import type { DatabaseSync } from 'node:sqlite'
 import { readFile, stat } from 'node:fs/promises'
 import { basename } from 'node:path'
-import { assertValidFileLink, createKnowledge, deleteKnowledge, getDictionary, getKnowledge, listKnowledge, updateKnowledge } from '../../db/repo.js'
+import { assertValidFileLink, createKnowledge, deleteKnowledgeWithRefs, getDictionary, getKnowledge, listKnowledge, updateKnowledge } from '../../db/repo.js'
 import { isLoopbackRequest, KNOWLEDGE_PREFIX, MAX_LOCAL_DOC_BYTES, pathSegments, readJsonBody, requireCode, toNativePath, writeJson } from './helpers.js'
 
 export function makeKnowledgeRoutes(db: DatabaseSync): WebRoute[] {
@@ -126,7 +126,12 @@ export function makeKnowledgeRoutes(db: DatabaseSync): WebRoute[] {
           return writeJson(res, 200, { ok: true, knowledge: entry })
         }
         if (method === 'DELETE' && segments.length === 1) {
-          return writeJson(res, 200, { ok: true, deleted: deleteKnowledge(db, id) })
+          /**
+           * P2：删条目要顺带清掉指向它的取代引用，并把"连带影响了几条"**回显给用户** ——
+           * 否则"删掉修正条 → 旧条目永久查不到"这种事没有任何地方看得出来。
+           */
+          const result = deleteKnowledgeWithRefs(db, id)
+          return writeJson(res, 200, { ok: true, deleted: result.deleted, clearedSupersedeRefs: result.clearedRefs })
         }
         return writeJson(res, 404, { error: 'not found' })
       },

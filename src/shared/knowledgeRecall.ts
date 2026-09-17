@@ -210,6 +210,14 @@ export interface RecallOutcome {
    * "为什么我刚写的那条新知识没被召回"（答：旧的那条还在库里且没标取代关系 / 或者标反了）。
    */
   droppedAsSuperseded: number
+  /**
+   * 被压制条目的 **id 列表**（多句 query 合并时按 id 去重）。
+   *
+   * 为什么单列一份 id：`droppedAsSuperseded` 数的是"压制发生了几次"，
+   * 而开工前那次会把任务标题与描述**分两句**各算一遍 —— 同一批被压制条目会被数两遍
+   * （独立审查实测：库里只有 1 条被压制，日志里写 2）。按 id 取并集才是"库里有几条被压制"。
+   */
+  supersededIds: string[]
   /** 关键词（用于日志：检索了哪些关键词是可观测要求之一）。 */
   terms: string[]
   /** 跳过检索的原因（非空即"没检索"，与"检索了零命中"区分开）。 */
@@ -427,12 +435,29 @@ export const CITE_TITLE_PREFIX = 12
 export function citationMatch(answer: string, delivered: Array<{ id: string; title: string }>): string[] {
   const text = normalizeText(answer)
   if (text === '') return []
+  /**
+   * 前缀是**有碰撞的**：两条标题前 12 字相同（"盘符根目录出不去怎么处理甲/乙"）时，
+   * 回答只提到其中一条会让两条都被标上（独立审查实测抓到的 LOW）。
+   * 处理办法是保守：前缀在**本回合注入的这一批**里不唯一时，**两条都不标**，并留一行日志 ——
+   * 标错会让"是否被引用"这条证据失真，而漏标只是少一份证据。
+   */
+  const byPrefix = new Map<string, number>()
+  for (const item of delivered) {
+    const title = normalizeText(item.title)
+    if (title.length < CITE_TITLE_PREFIX) continue
+    const prefix = title.slice(0, CITE_TITLE_PREFIX)
+    byPrefix.set(prefix, (byPrefix.get(prefix) ?? 0) + 1)
+  }
   const out: string[] = []
   for (const item of delivered) {
     const id = normalizeText(item.id)
     if (id !== '' && text.includes(id)) { out.push(item.id); continue }
     const title = normalizeText(item.title)
-    if (title.length >= CITE_TITLE_PREFIX && text.includes(title.slice(0, CITE_TITLE_PREFIX))) out.push(item.id)
+    if (title.length < CITE_TITLE_PREFIX) continue
+    const prefix = title.slice(0, CITE_TITLE_PREFIX)
+    if (!text.includes(prefix)) continue
+    if ((byPrefix.get(prefix) ?? 0) > 1) continue   // 前缀不唯一 → 不猜
+    out.push(item.id)
   }
   return out
 }
@@ -722,7 +747,7 @@ export function recallKnowledge(input: RecallInput): RecallOutcome {
   const now = input.now ?? new Date()
   const exclude = new Set(input.excludeIds ?? [])
   const dedupe = input.dedupe !== false
-  const base = { query, hits: [] as RecallHit[], nearMisses: [] as RecallHit[], matched: 0, droppedByScore: 0, droppedByLimit: 0, droppedAsSeen: 0, droppedAsSuperseded: 0, terms: [] as string[] }
+  const base = { query, hits: [] as RecallHit[], nearMisses: [] as RecallHit[], matched: 0, droppedByScore: 0, droppedByLimit: 0, droppedAsSeen: 0, droppedAsSuperseded: 0, supersededIds: [] as string[], terms: [] as string[] }
 
   if (query === '') return { ...base, skippedReason: '空提问' }
   if (isTrivialQuery(query)) return { ...base, skippedReason: '琐碎消息' }
@@ -734,10 +759,10 @@ export function recallKnowledge(input: RecallInput): RecallOutcome {
   const context: ScoreContext = { terms, now, stats, massSat: input.massSat }
   const scored: RecallHit[] = []
   let anyTermHit = 0
-  let droppedAsSuperseded = 0
+  const supersededIds: string[] = []
   for (const candidate of input.candidates) {
     // P2：已被取代 / 已过期的条目根本不参与打分（压制，不是降权）
-    if (isSuperseded(candidate.entry, now)) { droppedAsSuperseded += 1; continue }
+    if (isSuperseded(candidate.entry, now)) { supersededIds.push(candidate.entry.id); continue }
     const hit = scoreCandidate(candidate, context)
     if (hit === undefined) continue
     anyTermHit += 1
@@ -790,7 +815,7 @@ export function recallKnowledge(input: RecallInput): RecallOutcome {
     .filter((hit) => !exclude.has(hit.id))
     .slice(0, RECALL_DEFAULTS.maxHints)
 
-  return { query, hits, nearMisses: freshNear, matched, droppedByScore, droppedByLimit, droppedAsSeen, droppedAsSuperseded, terms }
+  return { query, hits, nearMisses: freshNear, matched, droppedByScore, droppedByLimit, droppedAsSeen, droppedAsSuperseded: supersededIds.length, supersededIds, terms }
 }
 
 /**
@@ -830,6 +855,7 @@ export function mergeRecallOutcomes(
     droppedByLimit: 0,
     droppedAsSeen: 0,
     droppedAsSuperseded: 0,
+    supersededIds: [],
     terms: [...new Set(inputs.flatMap((item) => item.outcome.terms))],
   }
   // 全部句子都被跳过（空提问 / 琐碎）→ 整次召回就是"跳过"，不能装作查过了。
@@ -845,12 +871,13 @@ export function mergeRecallOutcomes(
   let matched = 0
   let droppedByScore = 0
   let droppedAsSeen = 0
-  let droppedAsSuperseded = 0
+  /** 压制的条目按 **id 去重**（同一批在两句 query 里各被数一遍不算两条）。 */
+  const superseded = new Set<string>()
   for (const { query, outcome } of inputs) {
     matched += outcome.matched - outcome.hits.length
     droppedByScore += outcome.droppedByScore
     droppedAsSeen += outcome.droppedAsSeen
-    droppedAsSuperseded += outcome.droppedAsSuperseded ?? 0
+    for (const id of outcome.supersededIds ?? []) superseded.add(id)
     for (const hit of outcome.hits) {
       const seen = best.get(hit.id)
       if (seen === undefined) {
@@ -880,7 +907,8 @@ export function mergeRecallOutcomes(
     .map((id) => nearBest.get(id)!)
     .sort((a, b) => b.score - a.score || Number(b.fromTask) - Number(a.fromTask) || a.id.localeCompare(b.id))
     .slice(0, RECALL_DEFAULTS.maxHints)
-  return { ...base, hits, nearMisses, matched, droppedByScore, droppedByLimit: ranked.length - hits.length, droppedAsSeen, droppedAsSuperseded }
+  const supersededIds = [...superseded]
+  return { ...base, hits, nearMisses, matched, droppedByScore, droppedByLimit: ranked.length - hits.length, droppedAsSeen, droppedAsSuperseded: supersededIds.length, supersededIds }
 }
 
 /**

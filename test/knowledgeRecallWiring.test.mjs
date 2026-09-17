@@ -244,6 +244,36 @@ test('P1 未纳入检索要留痕：装配期没检索过 → 回合收尾必须
   })
 })
 
+/**
+ * 同一回合内第二条用户消息**在装配之后**才到达时，痕迹只能报"没检索过的那一句"。
+ *
+ * 整轮报"未纳入检索"会把第一条（其实已经检索过）一起写进去 ——
+ * 一行读起来像"这一回合什么都没查"，而事实是"只差第二句"。
+ */
+test('P1 未纳入检索的痕迹要精确到句子（已检索过的那句不能算进来）', () => {
+  withDb((db) => {
+    createKnowledge(db, { title: '盘符根目录的坑', contentMd: '盘符 parent null' })
+    const { ctx, listeners, contextText } = fakeCtx()
+    installKnowledgeRecall(ctx, db, { log: () => {} })
+    const events = (extra) => [
+      { type: 'turn/start', seq: 1, time: 1, data: { turn: { turn: 12 } } },
+      { type: 'user/message', seq: 2, time: 2, data: { content: [{ type: 'text', text: '盘符根目录 出不去' }], source: { kind: 'user' } } },
+      ...(extra
+        ? [{ type: 'user/message', seq: 3, time: 3, data: { content: [{ type: 'text', text: '另外顺便看看日志系统' }], source: { kind: 'user' } } }]
+        : []),
+    ]
+    const first = { session: { header: { id: 'sess-precise', cwd: 'E:\\Code\\x' }, snapshotEvents: () => events(false) } }
+    assert.match(contextText(first), /盘符根目录的坑/)
+    // 装配之后用户又补了一句（同一个回合）→ 那句话没被检索
+    const later = { session: { header: { id: 'sess-precise', cwd: 'E:\\Code\\x' }, snapshotEvents: () => events(true) } }
+    listeners.get('agent/turn-stopping')({ agent: later, turn: 12, signal: {} })
+    const rows = listRecallLog(db, { sessionId: 'sess-precise' }).filter((row) => row.trigger === 'turn' && row.skippedReason !== null)
+    assert.equal(rows.length, 1, '未纳入检索要留痕')
+    assert.match(rows[0].query, /日志系统/, '要报出没检索的那一句')
+    assert.doesNotMatch(rows[0].query, /盘符根目录/, '已经检索过的那一句不该被算成"没检索"')
+  })
+})
+
 test('开工前：会话开始时还没建立 task_sessions 关联 → 留一行日志，并在关联到手后补做一次', () => {
   withDb((db) => {
     const t = task(db, { title: '修复选择文件出不了 C 盘', description: '盘符 根目录 parent 为 null' })
@@ -332,6 +362,64 @@ test('P1 装配失败不留假状态：抛异常后同回合重试必须重算�
     const retry = contextText(fourth)
     assert.match(retry, /BBB 乙乙乙 专属主题/, '同回合重试必须重算 —— 键没被失败那次占住')
     assert.doesNotMatch(retry, /AAA 甲甲甲/, '绝不能把上一回合的文本当本回合的（串味）')
+  })
+})
+
+/**
+ * 同一回合里装配**两次**（用户在同一个回合里又说了话）：先前注入的内容**不能被抹掉**。
+ *
+ * 独立审查实测抓到的中危缺陷：二次装配整体替换 `cachedText` 与 `delivered`，
+ * 于是"回答里明明写了那条的标题，却 not cited"（P4 的判据在同一回合二次装配后失效）。
+ * 两个理由让"追加"成为正确选择：① 模型已经看过那一段，抹掉等于篡改上下文；
+ * ② 同回合内文本应当稳定（保前缀缓存）。
+ */
+test('P1/P4 同回合二次装配：先前注入的条目仍在文本里，且回答引用它照样算数', () => {
+  withDb((db) => {
+    createKnowledge(db, { title: '盘符根目录的坑与处理办法', contentMd: '盘符 parent null' })
+    createKnowledge(db, { title: '时序控制器操作 SOP', contentMd: '时序控制器 操作流程' })
+    const { ctx, listeners, contextText } = fakeCtx()
+    installKnowledgeRecall(ctx, db, { log: () => {} })
+    const events = (extra) => [
+      { type: 'turn/start', seq: 1, time: 1, data: { turn: { turn: 30 } } },
+      { type: 'user/message', seq: 2, time: 2, data: { content: [{ type: 'text', text: '盘符根目录 出不去' }], source: { kind: 'user' } } },
+      ...(extra
+        ? [{ type: 'user/message', seq: 3, time: 3, data: { content: [{ type: 'text', text: '时序控制器 操作流程' }], source: { kind: 'user' } } }]
+        : []),
+      { type: 'assistant/message', seq: 4, time: 4, data: { content: [{ type: 'text', text: '参考《盘符根目录的坑与处理办法》，另外时序那条我也看了。' }] } },
+    ]
+    const first = { session: { header: { id: 'sess-twice', cwd: 'E:\\Code\\x' }, snapshotEvents: () => events(false) } }
+    assert.match(contextText(first), /盘符根目录的坑与处理办法/)
+    const second = { session: { header: { id: 'sess-twice', cwd: 'E:\\Code\\x' }, snapshotEvents: () => events(true) } }
+    const merged = contextText(second)
+    assert.match(merged, /时序控制器操作 SOP/, '新检索到的要注入')
+    assert.match(merged, /盘符根目录的坑与处理办法/, '先前注入过的那条不能被抹掉')
+
+    listeners.get('agent/turn-stopping')({ agent: second, turn: 30, signal: {} })
+    const cited = listRecallLog(db, { sessionId: 'sess-twice' }).filter((row) => row.citedIds.length > 0)
+    assert.ok(cited.some((row) => row.hits.some((hit) => hit.title === '盘符根目录的坑与处理办法')),
+      '回答里引用了先注入的那条 → 必须标得上（二次装配不能把 delivered 整体丢掉）')
+  })
+})
+
+/**
+ * 本回合**没有**用户消息时，绝不能把上一回合的文本回吐出去。
+ *
+ * 独立审查实测：回合号读不出来（恒 0，宿主事件里没有 `turn/start`）时，
+ * "没有用户消息"的装配分支会返回上一回合缓存的那段文本 —— 表现为
+ * "没有新提问的回合反复注入同一段旧知识"。
+ */
+test('P1 没有用户消息的装配不得回吐上一回合的文本', () => {
+  withDb((db) => {
+    createKnowledge(db, { title: '盘符根目录的坑', contentMd: '盘符 parent null' })
+    const { ctx, contextText } = fakeCtx()
+    installKnowledgeRecall(ctx, db, { log: () => {} })
+    // 刻意**没有** turn/start：回合号读不出来（恒 0），走的是最脆的那条分支
+    const asked = { session: { header: { id: 'sess-noturn', cwd: 'E:\\Code\\x' }, snapshotEvents: () => [
+      { type: 'user/message', seq: 1, time: 1, data: { content: [{ type: 'text', text: '盘符根目录 出不去' }], source: { kind: 'user' } } },
+    ] } }
+    assert.match(contextText(asked), /盘符根目录的坑/, '前置：有提问时正常注入')
+    const idle = { session: { header: { id: 'sess-noturn', cwd: 'E:\\Code\\x' }, snapshotEvents: () => [] } }
+    assert.equal(contextText(idle), '', '没有用户消息 → 什么都不插（不许回吐上一回合的文本）')
   })
 })
 
@@ -468,5 +556,34 @@ test('P5 该查未查只观测：像报错却没调用检索工具 → 落一行
     contextText(third)
     listeners.get('agent/turn-stopping')({ agent: third, turn: 7, signal: {} })
     assert.equal(listRecallLog(db, { sessionId: 'sess-chat' }).filter((row) => row.trigger === 'suggested_miss').length, 0)
+  })
+})
+
+/**
+ * 收尾观测**必须幂等**：同一回合重复派发 `turn-stopping` 不得写出两行一样的账。
+ *
+ * 为什么不能只靠"宿主每回合派发一次"：那是宿主实现细节。独立审查确认主路径只派发一次，
+ * 但没法排除重入 —— 而写入口幂等是本仓硬规矩（每一类写入口都要先判状态）。
+ */
+test('P5 收尾观测幂等：同一回合重复派发 turn-stopping 只记一行', () => {
+  withDb((db) => {
+    const { ctx, listeners, contextText } = fakeCtx()
+    installKnowledgeRecall(ctx, db, { log: () => {} })
+    const agent = {
+      session: {
+        header: { id: 'sess-idem', cwd: 'E:\\Code\\x' },
+        snapshotEvents: () => [
+          { type: 'turn/start', seq: 1, time: 1, data: { turn: { turn: 8 } } },
+          { type: 'user/message', seq: 2, time: 2, data: { content: [{ type: 'text', text: '装盘后又报错了 ENOENT' }], source: { kind: 'user' } } },
+        ],
+      },
+    }
+    contextText(agent)
+    listeners.get('agent/turn-stopping')({ agent, turn: 8, signal: {} })
+    listeners.get('agent/turn-stopping')({ agent, turn: 8, signal: {} })
+    assert.equal(
+      listRecallLog(db, { sessionId: 'sess-idem' }).filter((row) => row.trigger === 'suggested_miss').length, 1,
+      '同一回合派发两次只留一行账',
+    )
   })
 })

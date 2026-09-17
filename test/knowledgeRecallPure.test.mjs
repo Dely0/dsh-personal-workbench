@@ -638,12 +638,14 @@ test('P2 已被取代 / 已过期的条目不参与召回（压制，不是降�
   assert.equal(isSuperseded({ supersededById: 'x', validUntil: null }, NOW), true)
   assert.equal(isSuperseded({ supersededById: '', validUntil: null }, NOW), false, '空串 = 没有取代关系')
 
-  // 多句合并也要把压制条数带上（否则开关前那次的账会丢）
+  // 多句合并：压制的条目要**按 id 去重**（同一批在两句 query 里各数一遍不算两条）。
+  // 独立审查实测过：库里只有 1 条被压制，开工前那句（标题 + 描述分两句）却写出 2。
   const merged = mergeRecallOutcomes([
     { query: '盘符根目录', outcome: out },
     { query: '盘符根目录', outcome: recallKnowledge({ query: '盘符根目录', candidates: [replaced], now: NOW }) },
   ])
-  assert.equal(merged.droppedAsSuperseded, 3, '合并后压制条数是各句之和')
+  assert.equal(merged.droppedAsSuperseded, 2, '按 id 取并集：replaced + expired，不是 3')
+  assert.deepEqual([...merged.supersededIds].sort(), ['expired', 'replaced'])
 })
 
 /**
@@ -658,6 +660,18 @@ test('P4 引用判定：命中标题前缀或 id 才算引用，普通复述不�
   assert.deepEqual(citationMatch('见 7532f45e-cb93-4f1a-9c2e-6d2f3a1b0c9d 这条', delivered), [delivered[0].id], 'id 命中')
   assert.deepEqual(citationMatch('复盘做完了，团队记忆这块可以改进三点。', delivered), [], '只复述了几个词、没写标题 → 不算引用（宁可漏标）')
   assert.deepEqual(citationMatch('', delivered), [], '没有回答 → 不算')
+
+  /**
+   * 前缀**会碰撞**：两条标题前 12 字相同时，回答只提到其中一条，
+   * 绝不能把两条都标上（独立审查实测抓到的 LOW）。
+   * 处理办法保守：前缀在**本回合注入的这一批**里不唯一 → 两条都不标。
+   */
+  const twins = [
+    { id: 'id-jia', title: '盘符根目录出不去怎么处理甲' },
+    { id: 'id-yi', title: '盘符根目录出不去怎么处理乙' },
+  ]
+  assert.deepEqual(citationMatch('先看《盘符根目录出不去怎么处理甲》那条', twins), [], '前缀不唯一 → 不猜（宁可漏标）')
+  assert.deepEqual(citationMatch('先看 id-jia 那条', twins), ['id-jia'], '但明确写了 id 的那条要标上')
 })
 
 

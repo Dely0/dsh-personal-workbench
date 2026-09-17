@@ -210,7 +210,7 @@ export { ensureRecurringInstances, RECURRENCE_BACKFILL_LIMIT } from './repo/recu
 // 知识库域已抽到 repo/knowledge.ts；此处再导出保持对外 API 不变
 export {
   normalizeFileLink, assertValidFileLink, createKnowledge, getKnowledge, listKnowledge,
-  updateKnowledge, deleteKnowledge, confirmKnowledgeDraft, getPendingKnowledgeDraft,
+  updateKnowledge, deleteKnowledge, deleteKnowledgeWithRefs, confirmKnowledgeDraft, getPendingKnowledgeDraft,
 } from './repo/knowledge.js'
 export type { KnowledgeInput, KnowledgeRow } from './repo/knowledge.js'
 
