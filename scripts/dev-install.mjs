@@ -113,7 +113,13 @@ try {
   fail(`包有问题：${error.stdout ?? ''}${error.stderr ?? ''}`)
 }
 
-// 回退指针 + 一份稳定副本：万一新包有问题，照 pointer 就能装回去
+/**
+ * 一份"刚打出来的包"的稳定副本（`current.tgz` + `current.txt` 里记的路径）。
+ *
+ * ⚠️ 它**不是回退指针** —— 它是本次新包。回退目标只能来自"装盘前 profile 里的那条
+ * `file:` 依赖"（见下面 `previousSpec` / `rollbackCommand`）。
+ * 2026-09-17 的教训：把这里当回退指针写进提示，就会打印一条指向"刚装上的包"的空回退。
+ */
 const pointer = join(DEV_DIR, 'current.txt')
 writeFileSync(pointer, `${tgzPath}\n`, 'utf8')
 copyFileSync(tgzPath, join(DEV_DIR, 'current.tgz'))
@@ -213,6 +219,18 @@ function installedVersions(names) {
 
 const beforeInstalled = installedVersions(Object.keys(beforeDeps))
 
+/**
+ * 回退目标 = **装盘前** profile 里指向的那个包（不是刚打好的这个）。
+ *
+ * 2026-09-17 实测踩到：`current.txt` 是在装盘**之前**就被写的（写的是本次新包），
+ * 于是脚本末尾那句"回退：…"打印出来的命令**指向刚装上的包** —— 一条什么都不做的回退提示。
+ * 真出问题要回退时，照它敲一遍等于原地不动。回退指针只能来自"装之前的样子"。
+ */
+const previousSpec = typeof beforeDeps[PLUGIN] === 'string' ? beforeDeps[PLUGIN] : null
+const rollbackCommand = previousSpec !== null
+  ? `dsh plugin --profile ${PROFILE} add ${previousSpec}`
+  : `（此前 profile 未声明本插件）恢复 ${profilePkgPath}.bak-devinstall-${backupStamp} 后 pnpm install`
+
 const status = runVisible(addCommand)
 if (status !== 0) fail(`dsh plugin add 退出码 ${status} —— profile 可能已被改动，用上面的 .bak 回退`)
 
@@ -275,5 +293,6 @@ if (!SKIP_DUMP) {
 
 step(7, '全部通过')
 console.log(`  备份：${profilePkgPath}.bak-devinstall-${backupStamp}`)
-console.log(`  回退：${addCommand.replace(tgzPath.split('\\').join('/'), readFileSync(pointer, 'utf8').trim().split('\\').join('/'))}`)
+console.log(`  装上了：${ours}`)
+console.log(`  回退：${rollbackCommand}`)
 console.log('  下一步：由你决定何时重启 `dsh web`（重启后硬刷新页面，客户端 bundle 有缓存）。')
