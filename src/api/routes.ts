@@ -6,6 +6,7 @@
  * （workspaces/ensure、settings、bootstrap、maintenance、health）。
  */
 import { mkdirSync, readFileSync } from 'node:fs'
+import { basename, dirname, normalize } from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import {
@@ -23,7 +24,7 @@ import { makeQuickAttachmentRoutes } from './routes/quick-attachments.js'
 import { makeReminderRoutes, type ReminderRouteDeps } from './routes/reminders.js'
 import { makeReportRoutes } from './routes/reports.js'
 import { makeTaskRoutes } from './routes/tasks.js'
-import { defaultTasksWorkspace } from '../workbenchPaths.js'
+import { defaultWorkbenchDataDir } from '../workbenchPaths.js'
 
 /**
  * 插件版本：直接读包内 package.json，避免再出现"代码已升级、health 还报旧版本"的漂移。
@@ -37,6 +38,17 @@ const PACKAGE_VERSION: string = (() => {
 })()
 
 /** 每天可投入时长（分钟）：存 meta，缺省 390（6.5 小时），夹在 30–1440 之间。 */
+
+function normalizeDefaultWorkspaceRoot(path: string): string {
+  const trimmed = path.trim()
+  if (trimmed === '') return ''
+  return basename(normalize(trimmed)).toLowerCase() === 'tasks' ? dirname(trimmed) : trimmed
+}
+
+function readDefaultWorkspaceRoot(db: DatabaseSync): string {
+  return normalizeDefaultWorkspaceRoot(readMeta(db, 'ai_default_workspace') ?? defaultWorkbenchDataDir())
+}
+
 export const DEFAULT_DAILY_CAPACITY_MINUTES = 390
 export function readDailyCapacityMinutes(db: DatabaseSync): number {
   const raw = Number(readMeta(db, 'daily_capacity_minutes'))
@@ -86,7 +98,7 @@ export function makeRoutes(db: DatabaseSync, deps: ReminderRouteDeps = {}): WebR
           return writeJson(res, 200, {
             ok: true,
             settings: {
-              defaultWorkspace: readMeta(db, 'ai_default_workspace') ?? defaultTasksWorkspace(),
+              defaultWorkspace: readDefaultWorkspaceRoot(db),
               autoCreateTypeFolders: (readMeta(db, 'auto_create_type_folders') ?? '1') === '1',
               desktopNotify: (readMeta(db, 'desktop_notify') ?? '1') === '1',
               dailyCapacityMinutes: readDailyCapacityMinutes(db),
@@ -97,7 +109,7 @@ export function makeRoutes(db: DatabaseSync, deps: ReminderRouteDeps = {}): WebR
           const body = await readJsonBody(req)
           if (body === undefined) return writeJson(res, 400, { error: 'invalid JSON body' })
           if (typeof body.defaultWorkspace === 'string') {
-            const defaultWorkspace = body.defaultWorkspace.trim()
+            const defaultWorkspace = normalizeDefaultWorkspaceRoot(body.defaultWorkspace)
             if (defaultWorkspace !== '') mkdirSync(defaultWorkspace, { recursive: true })
             writeMeta(db, 'ai_default_workspace', defaultWorkspace)
           }
@@ -108,7 +120,7 @@ export function makeRoutes(db: DatabaseSync, deps: ReminderRouteDeps = {}): WebR
             writeMeta(db, 'daily_capacity_minutes', String(minutes))
           }
           return writeJson(res, 200, { ok: true, settings: {
-            defaultWorkspace: readMeta(db, 'ai_default_workspace') ?? defaultTasksWorkspace(),
+            defaultWorkspace: readDefaultWorkspaceRoot(db),
             autoCreateTypeFolders: (readMeta(db, 'auto_create_type_folders') ?? '1') === '1',
             desktopNotify: (readMeta(db, 'desktop_notify') ?? '1') === '1',
             dailyCapacityMinutes: readDailyCapacityMinutes(db),

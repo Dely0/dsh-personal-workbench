@@ -5,8 +5,11 @@
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { randomUUID } from 'node:crypto'
+import { mkdirSync } from 'node:fs'
+import { basename, dirname, join, normalize } from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
-import { addTaskMemory, assertValidFileLink, createDraft, getDeferredDraftForTask, getDictionary, getDraft, getIdea, getIdeaCluster, getPendingDailyPlanDraft, getPendingDraftForSession, getPendingDraftForTask, getPendingKnowledgeDraft, getPendingReportDraft, getTask, listTaskEvents, localDateString, updateDraft, updateTask } from './db/repo.js'
+import { addTaskMemory, assertValidFileLink, createDraft, getDeferredDraftForTask, getDictionary, getDraft, getIdea, getIdeaCluster, getPendingDailyPlanDraft, getPendingDraftForSession, getPendingDraftForTask, getPendingKnowledgeDraft, getPendingReportDraft, getTask, listTaskEvents, localDateString, readMeta, updateDraft, updateTask } from './db/repo.js'
+import { defaultWorkbenchDataDir } from './workbenchPaths.js'
 
 function text(value: string): ContentBlock[] {
   return [{ type: 'text', text: value }]
@@ -42,6 +45,25 @@ function str(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() !== '' ? value : undefined
 }
 
+
+function normalizeDefaultWorkspaceRoot(path: string): string {
+  const trimmed = path.trim()
+  if (trimmed === '') return ''
+  return basename(normalize(trimmed)).toLowerCase() === 'tasks' ? dirname(trimmed) : trimmed
+}
+
+function taskDirectoryName(taskId: string): string {
+  const cleaned = taskId.trim().replace(/[^A-Za-z0-9_-]/g, '')
+  return cleaned === '' ? 'task' : cleaned
+}
+
+function defaultTaskDirectory(db: DatabaseSync, taskId: string | undefined): string | null {
+  if (taskId === undefined) return null
+  const root = normalizeDefaultWorkspaceRoot(readMeta(db, 'ai_default_workspace') ?? defaultWorkbenchDataDir())
+  const trimmedRoot = root.trim()
+  return trimmedRoot === '' ? null : join(trimmedRoot, 'tasks', taskDirectoryName(taskId))
+}
+
 export function submitTaskTool(db: DatabaseSync) {
   return defineTool({
     name: 'workbench_submit_task',
@@ -50,7 +72,7 @@ export function submitTaskTool(db: DatabaseSync) {
       '适用于自然语言快速录入和详细表单“启动AI澄清”两个场景。同一会话重复调用且带 draft_id 时更新同一草稿，不重复创建。',
     parameters: {
       draft_id: { type: 'string', description: '已有草稿 id；更新草稿时必传，首次提交不传' },
-      task_id: { type: 'string', description: '预分配任务 id；快速录入会话由工作台生成，用于提前创建任务资料夹' },
+      task_id: { type: 'string', description: '预分配任务 id；快速录入会话由工作台生成，用于提前创建任务目录' },
       title: { type: 'string', required: true, description: '任务标题，简洁、动词开头更好' },
       description: { type: 'string', description: 'Markdown 描述：背景/目标/验收标准/注意事项' },
       type_code: { type: 'string', required: true, description: '任务类型 code，如 client_meeting / code_impl' },
@@ -62,7 +84,7 @@ export function submitTaskTool(db: DatabaseSync) {
       ai_policy_code: { type: 'string', description: 'AI 策略 code；V1 只允许 none / consult，默认 consult' },
       reminder_offset_minutes: { type: 'number', description: '截止前多少分钟提醒；缺省按任务类型默认' },
       parent_id: { type: 'string', description: '父任务 id（子任务场景）' },
-      workspace_path: { type: 'string', description: '任务资料夹路径；AI 会话仍连接默认工作区根目录，文件资料放在该路径下' },
+      workspace_path: { type: 'string', description: '任务目录路径；AI 会话仍连接默认工作区根目录，文件资料放在该路径下' },
       subtasks: { type: 'json', description: '可选：用户明确要求拆解时的简版子任务数组' },
       extra: { type: 'json', description: '附加信息：原始输入、澄清问答摘要等' },
     },
@@ -87,8 +109,11 @@ export function submitTaskTool(db: DatabaseSync) {
       const reminderOffset = typeof args.reminder_offset_minutes === 'number'
         ? args.reminder_offset_minutes
         : typeDefault ?? priorityDefault
+      const payloadId = str(args.task_id) ?? randomUUID()
+      const workspacePath = str(args.workspace_path) ?? defaultTaskDirectory(db, payloadId)
+      if (workspacePath !== null) mkdirSync(workspacePath, { recursive: true })
       const payload: Record<string, unknown> = {
-        id: str(args.task_id) ?? randomUUID(),
+        id: payloadId,
         title,
         description: str(args.description) ?? '',
         typeCode,
@@ -100,7 +125,7 @@ export function submitTaskTool(db: DatabaseSync) {
         aiPolicyCode,
         reminderOffsetMinutes: reminderOffset ?? null,
         parentId: str(args.parent_id) ?? null,
-        workspacePath: str(args.workspace_path) ?? null,
+        workspacePath,
         subtasks: args.subtasks ?? [],
         extra: args.extra ?? {},
         source: 'nl',

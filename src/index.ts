@@ -4,13 +4,8 @@
  */
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-host-webserver'
-import type {} from '@deepseek-ai/dsh-commands'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-tools'
-import { randomUUID } from 'node:crypto'
-import { mkdirSync } from 'node:fs'
-import { join } from 'node:path'
-import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { makeDictionaryRoute } from './api/dictionaryRoute.js'
 import { makeLocalDirRoute } from './api/localDirRoute.js'
 import { makeOpenFileRoute } from './api/openFileRoute.js'
@@ -25,11 +20,10 @@ import { readReminderPolicy, writeReminderPolicy } from './reminder/config.js'
 import { ReminderScheduler } from './reminder/scheduler.js'
 import { readWeixinInboundCount } from './reminder/weixin-status.js'
 import { proposeDailyPlanTool, proposeIdeaClustersTool, proposeSubtasksTool, requestCompletionTool, saveTaskMemoryTool, submitIdeaTasksTool, submitKnowledgeTool, submitReportTool, submitReviewTool, submitTaskTool, updateTaskTool } from './tools.js'
-import { defaultTasksWorkspace } from './workbenchPaths.js'
 
 export const name = 'dsh-workbench'
 
-export const inject = ['webServer', 'systemPrompt', 'tools', 'commands']
+export const inject = ['webServer', 'systemPrompt', 'tools']
 
 const WORKBENCH_GUIDANCE = [
   '本机已安装 dsh-workbench 插件（个人工作台）：侧边栏「工作台」入口；',
@@ -42,17 +36,8 @@ const WORKBENCH_GUIDANCE = [
   '知识库：值得沉淀的经验教训/决策/笔记请调用 workbench_submit_knowledge 提交知识草稿（kind_code/tags）；如来自本地文档，应同时传入 file_link（file:// 或绝对路径）用于追溯；用户确认后入库；复盘时优先考虑。',
   '点子/点子王：关联点子请调用 workbench_propose_idea_clusters；头脑风暴落地请调用 workbench_submit_idea_tasks。都只写草稿，用户确认后才生效。',
   'AI 会话前用户可能通过工作台选择 DSH Skill；若提示词要求加载技能，请先调用 skill 工具逐个加载，加载失败要如实说明后继续。',
-  '/workbench 是个人工作台“快速录入新任务”的专用命令：当用户消息以 /workbench 开头时，只把后续文字和用户提供的图片/PDF/DOCX理解为新任务线索，按 workbench-intake 规范澄清，并且只能调用 workbench_submit_task 写入 pending 任务草稿；不要执行、拆解、生成计划/报告/知识/点子/复盘，也不要处理微信提醒。',
   '用户提到「工作台 / 任务 / 日历 / 提醒 / 子任务 / 计划 / 日报周报」时即指本插件，请据此协作。',
 ].join('')
-
-const WORKBENCH_INTAKE_COMMAND_PROMPT = [
-  '你是“个人工作台”的任务澄清助手。请按 workbench-intake 规范执行。',
-  '用户通过 /workbench 请求创建一个新的个人工作台任务。',
-  '只处理新任务的澄清与提交：先一次询问一个主题、最多澄清 5 轮；信息足够后只能调用 workbench_submit_task 写入 pending 任务草稿。',
-  '不要执行任务本身，不要拆解任务，不要生成计划、报告、知识、点子、复盘，也不要处理微信提醒。',
-  '以下是用户通过 /workbench 提供的任务线索：',
-].join('\n')
 
 const SECTION_ORDER = 150
 
@@ -127,35 +112,6 @@ export function apply(ctx: Context, config: Config = {}): void {
       return () => { for (const dispose of disposers) dispose() }
     },
     'dsh-workbench: tools',
-  )
-
-  // 注册到 Harness 的斜杠命令发现面，使 /workbench 能在对话框补全菜单中出现。
-  // 命令本身只负责进入快速录入语义，不把输入当作普通模型消息执行。
-  ctx.effect(
-    () => ctx.commands.register({
-      name: 'workbench',
-      description: '快速录入个人工作台新任务',
-      input: { hint: '<任务文字>' },
-      handler: ({ agent, rawInput }) => {
-        const taskText = rawInput.trim()
-        if (!taskText) {
-          return { kind: 'error', text: '请在 /workbench 后输入任务文字。' }
-        }
-        const taskId = randomUUID()
-        const taskFolderPath = join(defaultTasksWorkspace(), taskId)
-        try {
-          mkdirSync(taskFolderPath, { recursive: true })
-        } catch (error) {
-          return { kind: 'error', text: `无法创建任务资料夹：${error instanceof Error ? error.message : String(error)}` }
-        }
-        agent.steer(createUserMessage({
-          content: [{ type: 'text', text: `${WORKBENCH_INTAKE_COMMAND_PROMPT}\n\n当前时间：${new Date().toISOString()}\n本次预分配任务 id：${taskId}\n任务资料夹：${taskFolderPath}\n任务资料夹相对路径：./${taskId}/\n\n请将本次任务相关文件放入该资料夹。提交草稿时必须传入 task_id="${taskId}"、workspace_path="${taskFolderPath}"。\n\n${taskText}` }],
-          source: { kind: 'user' },
-        }))
-        return { kind: 'success', text: '已将任务线索送入当前工作区，开始按 workbench-intake 规范澄清。' }
-      },
-    }),
-    'dsh-workbench: command',
   )
 
   // 提醒调度：用 ctx.interval（随 fiber 自动销毁）。

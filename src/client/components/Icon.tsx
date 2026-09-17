@@ -23,6 +23,7 @@ export function Icon({ name, size = 16 }: { name: string; size?: number }): JSX.
     case 'archive': return <svg {...common}><rect x="2.5" y="3" width="11" height="3.5" rx="1" /><path d="M4 6.5h8v6H4v-6zM6.5 9h3" /></svg>
     case 'book': return <svg {...common}><path d="M3 2.5h6.5v11H3zM9.5 2.5H13v11H9.5z" /><path d="M3 2.5v11M13 2.5v11" /></svg>
     case 'file': return <svg {...common}><path d="M4 1.5h5.5L13 5v9.5H4z" /><path d="M9.5 1.5V5H13" /></svg>
+    case 'paperclip': return <svg {...common} viewBox="0 0 16 16"><path d="M5.5 8.4v3a2.5 2.5 0 0 0 5 0V5.2a3.4 3.4 0 0 0-6.8 0v6.2a4.2 4.2 0 0 0 8.4 0V5.6" /></svg>
     case 'upload': return <svg {...common}><path d="M8 13V3" /><path d="M4.5 6.5L8 3l3.5 3.5" /></svg>
     case 'chevron-down': return <svg {...common}><path d="M4 6l4 4 4-4" /></svg>
     case 'folder': return <svg {...common}><path d="M2.5 4h4l1.5 2h5.5v7h-11z" /></svg>

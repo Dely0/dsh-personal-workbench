@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { openWorkbenchDb } from '../lib/db/database.js'
 import { seedDictionaries } from '../lib/db/seed.js'
 import { proposeDailyPlanTool, proposeIdeaClustersTool, submitIdeaTasksTool, submitKnowledgeTool, submitReportTool, submitTaskTool, updateTaskTool, requestCompletionTool, saveTaskMemoryTool } from '../lib/tools.js'
-import { createIdea, createTask, getTask, getTaskMemoryContext, getDraftBySession, getPendingDailyPlanDraft, getPendingDraftForSession, getPendingDraftForTask, getPendingReportDraft, updateTask } from '../lib/db/repo.js'
+import { createIdea, createTask, getTask, getTaskMemoryContext, getDraftBySession, getPendingDailyPlanDraft, writeMeta, getPendingDraftForSession, getPendingDraftForTask, getPendingReportDraft, updateTask } from '../lib/db/repo.js'
 
 test('agent tools write pending drafts and update tasks', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-workbench-tools-'))
@@ -14,6 +14,7 @@ test('agent tools write pending drafts and update tasks', async () => {
   try {
     db = openWorkbenchDb({ dbPath: join(dir, 'workbench.db') })
     seedDictionaries(db)
+    writeMeta(db, 'ai_default_workspace', dir)
     const submit = submitTaskTool(db)
     const out = await submit.execute(
       { task_id: 'reserved-task-1', title: 'clarified task', type_code: 'client_meeting', priority_code: 'p0' },
@@ -23,7 +24,7 @@ test('agent tools write pending drafts and update tasks', async () => {
     const quickDraft = getDraftBySession(db, 'sess-1')
     assert.ok(quickDraft)
     assert.equal(quickDraft.payload.id, 'reserved-task-1')
-    assert.equal(quickDraft.payload.workspacePath, null)
+    assert.equal(quickDraft.payload.workspacePath, join(dir, 'tasks', 'reserved-task-1'))
 
     // AI 可能发明/使用字典外的 type_code：training 应合法，未知 code 应回退不报错
     const training = await submit.execute({ title: '学做东北菜', type_code: 'training', priority_code: 'p2' }, { agent: { session: { id: 'sess-training' } } })
