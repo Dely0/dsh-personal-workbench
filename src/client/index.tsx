@@ -22,6 +22,7 @@ import {
   type TaskTreeNode,
 } from './taskFilterSort.js'
 import { isWslStylePath, joinPath, normalizeWindowsPathToWsl } from './workspacePath.js'
+import { DEFAULT_ESTIMATE_MINUTES, MAX_ESTIMATE_MINUTES, capacityTodayKey, computeTodayCapacity } from './capacity.js'
 import { WORKBENCH_CSS } from './styles.js'
 import { ACTIVE_ATTR, OFFICIAL_ATTR, PANEL_NAME, PENDING_ATTR, VIEW_ATTR } from './constants.js'
 import { panelDataOpen, shouldShowPanel } from './panelState.js'
@@ -122,6 +123,17 @@ function newTaskId(): string {
 
 /** 知识库列表状态的本地存储键（Tab 与排序要在刷新后保持，见验收项）。 */
 const KNOWLEDGE_FILTER_STORAGE_KEY = 'dsh.personal-workbench.knowledgeList'
+
+/**
+ * 「预计耗时」非法时的**行内红字**（文案定稿，见设计文档 §12.4）。
+ *
+ * 为什么做成函数而不是字面量：默认耗时是**用户可改的偏好**，
+ * 用户把默认改成 60 之后，提示里还写"默认 30 分钟"就是在说谎。
+ * 这个文案同时被编辑弹窗与新建表单复用（同一字段两个入口，两套说法迟早打架）。
+ */
+function estimateRangeMessage(defaultMinutes: number): string {
+  return `耗时必须是 1–1440 之间的整数（留空表示用默认 ${defaultMinutes} 分钟）`
+}
 
 /**
  * 读回知识库列表状态。
@@ -604,7 +616,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   const [selected, setSelected] = useState<TaskDetail | null>(null)
   const [showForm, setShowForm] = useState(false)
   const [subtaskParent, setSubtaskParent] = useState<Task | null>(null)
-  const [editDraft, setEditDraft] = useState<{ title: string; description: string; typeCode: string; priorityCode: string; statusCode: string; aiPolicyCode: string; dueLocal: string; workspacePath: string; recurrenceCode: string; parentId: string } | null>(null)
+  const [editDraft, setEditDraft] = useState<{ title: string; description: string; typeCode: string; priorityCode: string; statusCode: string; aiPolicyCode: string; dueLocal: string; workspacePath: string; recurrenceCode: string; parentId: string; estimatedMinutes: string; allDay: boolean } | null>(null)
   const [detailTab, setDetailTab] = useState<'desc' | 'children' | 'sessions' | 'records'>('desc')
   const [sessionPickerOpen, setSessionPickerOpen] = useState(false)
   const [sessionPickerRole, setSessionPickerRole] = useState('consult')
@@ -742,7 +754,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
     /** 本次已经建出来的那条（"就删掉这条新建的"用得上）。 */
     newTaskId: string
   } | null>(null)
-  const [settings, setSettings] = useState<WorkbenchSettings>({ defaultWorkspace: '', autoCreateTypeFolders: true, desktopNotify: true, dailyCapacityMinutes: 390, quickWorkspaceRecent: [], autoKnowledgeRecall: true })
+  const [settings, setSettings] = useState<WorkbenchSettings>({ defaultWorkspace: '', autoCreateTypeFolders: true, desktopNotify: true, dailyCapacityMinutes: 390, quickWorkspaceRecent: [], autoKnowledgeRecall: true, defaultEstimateMinutes: DEFAULT_ESTIMATE_MINUTES, dailyCapacityIncludeOverdue: false })
   /** 今日容量里「可投入时长」的行内编辑态（null = 只读展示） */
   const [capacityEdit, setCapacityEdit] = useState<string | null>(null)
   const [notifyPerm, setNotifyPerm] = useState<NotificationPermission | 'unsupported'>(() => typeof Notification === 'undefined' ? 'unsupported' : Notification.permission)
@@ -1742,23 +1754,50 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   const saveEditDraft = async (): Promise<void> => {
     if (editDraft === null || selected === null) return
     if (editDraft.title.trim() === '') return
-    const payload: Record<string, unknown> = {
-      title: editDraft.title.trim(),
-      description: editDraft.description,
-      typeCode: editDraft.typeCode,
-      priorityCode: editDraft.priorityCode,
-      statusCode: editDraft.statusCode,
-      aiPolicyCode: editDraft.aiPolicyCode,
-      dueAt: editDraft.dueLocal === '' ? null : new Date(editDraft.dueLocal).toISOString(),
-      workspacePath: editDraft.workspacePath.trim() === '' ? null : editDraft.workspacePath.trim(),
-      // 改父任务（v1.14.0）：null = 移到顶层。服务端 repo 层会做存在性 + 防环校验，
-      // 失败返回 400 中文原因（下面的 catch 会把它显示成 toast），不是 500。
-      parentId: editDraft.parentId === '' ? null : editDraft.parentId,
+    /**
+     * 耗时在**客户端先校验**，合法才发请求：非法输入靠服务端 400 去猜，
+     * 用户看到的只有一句英文错误，也不知道合法的区间是多少（本项目"非法输入要当场拒绝"）。
+     * 留空 = null = 没填 → 走默认耗时，是合法状态，不是错误。
+     */
+    const estimatedRaw = editDraft.estimatedMinutes.trim()
+    const estimated = estimatedRaw === '' ? null : Number(estimatedRaw)
+    if (estimated !== null && (!Number.isFinite(estimated) || estimated < 1 || estimated > MAX_ESTIMATE_MINUTES)) {
+      pushToast(estimateRangeMessage(DEFAULT_ESTIMATE_MINUTES), 'error')
+      return
     }
-    // 自动生成的实例不允许改重复规则，编辑保存时也不提交该字段，从源头避免 400。
-    if (selected.task.recurrenceMasterId === null) payload.recurrenceCode = editDraft.recurrenceCode
+    // 小数按四舍五入（服务的夹取规则是"非整数 → null"，直接在客户端算清更不容易踩坑）
+    const estimatedMinutes = estimated === null ? null : Math.round(estimated)
     try {
+      const payload: Record<string, unknown> = {
+        title: editDraft.title.trim(),
+        description: editDraft.description,
+        typeCode: editDraft.typeCode,
+        priorityCode: editDraft.priorityCode,
+        statusCode: editDraft.statusCode,
+        aiPolicyCode: editDraft.aiPolicyCode,
+        dueAt: editDraft.dueLocal === '' ? null : new Date(editDraft.dueLocal).toISOString(),
+        workspacePath: editDraft.workspacePath.trim() === '' ? null : editDraft.workspacePath.trim(),
+        // 改父任务（v1.14.0）：null = 移到顶层。服务端 repo 层会做存在性 + 防环校验，
+        // 失败返回 400 中文原因（下面的 catch 会把它显示成 toast），不是 500。
+        parentId: editDraft.parentId === '' ? null : editDraft.parentId,
+        // 「预计耗时」与「全天任务」（v1.15.1）：前者直接决定今日容量的「已排」，
+        // 后者只影响展示与重复锚点（不改变容量计算）。
+        estimatedMinutes,
+        allDay: editDraft.allDay,
+      }
+      // 自动生成的实例不允许改重复规则，编辑保存时也不提交该字段，从源头避免 400。
+      if (selected.task.recurrenceMasterId === null) payload.recurrenceCode = editDraft.recurrenceCode
       await patchTask(selected.task.id, payload)
+      /**
+       * 乐观更新：`patchTask` 成功后**立刻**把这一条在本地 tasks 里改掉，
+       * 不刷新页面就能看到「已排」跟着变（用户验收标准第 2 条：
+       * "改完立即影响今日容量" = 乐观更新 + 立即重算，不是"刷新后生效"）。
+       * 幂等：同 id 字段合并，重复保存结果一致；`patchTask` 内部随后 refresh 对账，
+       * 服务端值与乐观值一致时不会产生可见跳动。
+       */
+      setTasks((prev) => prev.map((task) => (
+        task.id === selected.task.id ? { ...task, estimatedMinutes, allDay: editDraft.allDay } : task
+      )))
       setEditDraft(null)
       pushToast('任务已更新', 'success')
     } catch (e) {
@@ -1775,7 +1814,17 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
     const dueAt = due === '' ? null : new Date(due).toISOString()
     const recurrenceCode = String(form.get('recurrence') ?? 'none')
     const recurrenceAnchor = dueAt !== null ? new Date(dueAt) : new Date()
-    await api('/api/workbench/tasks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title, description: String(form.get('description') ?? ''), typeCode: String(form.get('type') ?? ''), priorityCode: String(form.get('priority') ?? ''), statusCode: String(form.get('status') ?? 'todo'), workspacePath: String(form.get('workspacePath') ?? '').trim() || null, dueAt, recurrenceCode: recurrenceCode === 'none' ? null : recurrenceCode, recurrenceRule: recurrenceCode === 'none' ? undefined : { interval: 1, startDate: localDateString(recurrenceAnchor), weekdays: [recurrenceAnchor.getDay()], monthDay: recurrenceAnchor.getDate() } }) })
+    /**
+     * 耗时与全天（v1.15.1）：与编辑弹窗**同一规则**——留空 = null（走默认耗时）、
+     * 非法值当作没填（服务端还会再夹一次，但这里不把脏值发出去）。
+     * 非法值不静默改写：用户看到的是"没填"的语义（详情行会写"未单独设置"）。
+     */
+    const estimatedRaw = String(form.get('estimatedMinutes') ?? '').trim()
+    const estimatedParsed = estimatedRaw === '' ? null : Number(estimatedRaw)
+    const estimatedMinutes = estimatedParsed !== null && Number.isFinite(estimatedParsed) && estimatedParsed >= 1
+      ? Math.min(MAX_ESTIMATE_MINUTES, Math.round(estimatedParsed))
+      : null
+    await api('/api/workbench/tasks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title, description: String(form.get('description') ?? ''), typeCode: String(form.get('type') ?? ''), priorityCode: String(form.get('priority') ?? ''), statusCode: String(form.get('status') ?? 'todo'), workspacePath: String(form.get('workspacePath') ?? '').trim() || null, dueAt, estimatedMinutes, allDay: form.get('allDay') !== null, recurrenceCode: recurrenceCode === 'none' ? null : recurrenceCode, recurrenceRule: recurrenceCode === 'none' ? undefined : { interval: 1, startDate: localDateString(recurrenceAnchor), weekdays: [recurrenceAnchor.getDay()], monthDay: recurrenceAnchor.getDate() } }) })
     setShowForm(false); await refresh()
   }
   // 今日/日历/列表三棵树：默认全部收起
@@ -1986,32 +2035,28 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
     } catch (e) { setError(e instanceof Error ? e.message : String(e)) }
   }
 
-  /** 今日容量：当天要做的事（今天到期 + 无截止的进行中）按 estimatedMinutes 摊开。
-   * 没有估算的任务按每件 30 分钟兜底，避免"没填估算就当零成本"导致容量条失真。
+  /**
+   * 今日容量（唯一权威源 = 纯函数模块 `capacity.ts`）。
+   *
+   * 三条别改回去的接线细节：
+   * 1. **`now` 不能进依赖数组** —— 它是渲染体内每帧新建的对象，放进去等于 memo 每帧失效
+   *    （跨天刷新才有必要重算，同一帧里 now 变了也不会引起重渲染）。
+   *    依赖改成 `capacityTodayKey(now)`（YYYY-MM-DD 本地日字符串，跨天才变）。
+   * 2. **传全量列表、函数内自己过滤**：`archivedTasks` 只有打开"查看归档"时才加载，
+   *    它为空数组不影响结果（归档任务本就不进容量），也不会出现"同一语义两处算"。
+   * 3. 逾期口径与默认耗时的**唯一来源是 settings**，页面不另存副本、不自己算一遍。
    */
-  const capacityTodayTasks = openTasks.filter((t) =>
-    t.effectiveDueAt === null
-      ? (t.statusCode === 'doing' || t.statusCode === 'blocked')
-      : isTaskDueOnDay(t, now))
-  const capacityTaskIds = new Set(capacityTodayTasks.map((t) => t.id))
-  const capacityFromPlan = (todayPlan?.items ?? []).filter((item) => capacityTaskIds.has(item.taskId)).length
-  const capacityPlanned = capacityTodayTasks.reduce((sum, t) => sum + (t.estimatedMinutes ?? 30), 0)
-  const capacityByPriority = {
-    p0: capacityTodayTasks.filter((t) => t.priorityCode === 'p0').reduce((sum, t) => sum + (t.estimatedMinutes ?? 30), 0),
-    p1: capacityTodayTasks.filter((t) => t.priorityCode === 'p1').reduce((sum, t) => sum + (t.estimatedMinutes ?? 30), 0),
-    p2: capacityTodayTasks.filter((t) => t.priorityCode === 'p2').reduce((sum, t) => sum + (t.estimatedMinutes ?? 30), 0),
-    p3: capacityTodayTasks.filter((t) => t.priorityCode !== 'p0' && t.priorityCode !== 'p1' && t.priorityCode !== 'p2').reduce((sum, t) => sum + (t.estimatedMinutes ?? 30), 0),
-  }
-  const capacityTotal = Math.max(settings.dailyCapacityMinutes, capacityPlanned, 1)
-  const capacity = {
-    planned: capacityPlanned,
-    free: Math.max(0, settings.dailyCapacityMinutes - capacityPlanned),
-    over: capacityPlanned > settings.dailyCapacityMinutes,
-    byPriority: capacityByPriority,
-    total: capacityTotal,
-    count: capacityTodayTasks.length,
-    planCovered: capacityFromPlan,
-  }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- 依赖用下面的日字符串代替 now，见注释 1
+  const capacity = useMemo(
+    () => computeTodayCapacity({
+      tasks: [...tasks, ...archivedTasks],
+      dailyCapacityMinutes: settings.dailyCapacityMinutes,
+      defaultEstimateMinutes: settings.defaultEstimateMinutes,
+      includeOverdue: settings.dailyCapacityIncludeOverdue,
+      now,
+    }),
+    [tasks, archivedTasks, settings.dailyCapacityMinutes, settings.defaultEstimateMinutes, settings.dailyCapacityIncludeOverdue, capacityTodayKey(now)],
+  )
 
   /** 保存「每天可投入时长」（分钟）；<30 视为无效，恢复默认 390。 */
   const saveDailyCapacity = async (): Promise<void> => {    const raw = capacityEdit === null ? '' : capacityEdit.trim()
@@ -3296,7 +3341,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                     <>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                         <h4 style={{ flex: 1, margin: 0 }}>{selected.task.title}</h4>
-                        {!selected.task.archived && <button className="wb-btn" onClick={() => setEditDraft({ title: selected.task.title, description: selected.task.description, typeCode: selected.task.typeCode, priorityCode: selected.task.priorityCode, statusCode: selected.task.statusCode, aiPolicyCode: selected.task.aiPolicyCode, dueLocal: toLocalInput(selected.task.dueAt), workspacePath: selected.task.workspacePath ?? '', recurrenceCode: selected.task.recurrenceCode ?? 'none', parentId: selected.task.parentId ?? '' })}><Icon name="edit" />编辑</button>}
+                        {!selected.task.archived && <button className="wb-btn" onClick={() => setEditDraft({ title: selected.task.title, description: selected.task.description, typeCode: selected.task.typeCode, priorityCode: selected.task.priorityCode, statusCode: selected.task.statusCode, aiPolicyCode: selected.task.aiPolicyCode, dueLocal: toLocalInput(selected.task.dueAt), workspacePath: selected.task.workspacePath ?? '', recurrenceCode: selected.task.recurrenceCode ?? 'none', parentId: selected.task.parentId ?? '', estimatedMinutes: selected.task.estimatedMinutes === null ? '' : String(selected.task.estimatedMinutes), allDay: selected.task.allDay })}><Icon name="edit" />编辑</button>}
                       </div>
                       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', margin: '8px 0' }}>
                         <Badge dict={dictOf('type')} code={selected.task.typeCode} />
@@ -3318,6 +3363,8 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                         </div>
                       )}
                       <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>截止：{selected.task.effectiveDueAt === null ? '无' : fmtTime(selected.task.effectiveDueAt)}{selected.task.dueAt === null && selected.task.effectiveDueAt !== null ? '（继承父任务）' : ''}</div>
+                      {/* 预计耗时（v1.15.1）：直接决定今日容量的「已排」，所以未填时必须说清"按默认算"。 */}
+                      <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>预计耗时：{selected.task.estimatedMinutes === null ? `默认 ${settings.defaultEstimateMinutes} 分钟（未单独设置）` : `${selected.task.estimatedMinutes} 分钟`}{selected.task.allDay ? ' · 全天' : ''}</div>
                       <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>AI 工作区：{selected.task.effectiveWorkspacePath ?? (settings.defaultWorkspace || '默认工作区未设置')}{selected.task.workspacePath === null && selected.task.effectiveWorkspacePath !== null ? '（继承父任务）' : ''}</div>
                       <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>
                         重复：{dicts.find((d) => d.kind === 'recurrence' && d.code === (selected.task.recurrenceCode ?? 'none'))?.name ?? '不重复'}
@@ -3740,6 +3787,15 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
             <label>状态<select name="status" defaultValue="todo">{dictOf('status').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
             <label>截止时间<input name="due" type="datetime-local" /></label>
             <label>重复<select name="recurrence" defaultValue="none">{dictOf('recurrence').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
+            {/* 与编辑弹窗同一套字段与文案：同一字段两个入口两套说法 = 迟早打架 */}
+            <label>耗时（分钟）<input name="estimatedMinutes" type="number" min={1} max={1440} step={5} placeholder={`留空 = 默认 ${settings.defaultEstimateMinutes} 分钟`} /></label>
+            <label style={{ alignSelf: 'end' }}>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 600 }}>
+                <input name="allDay" type="checkbox" />
+                全天任务
+              </span>
+              <span style={{ fontSize: 11, color: 'var(--dsw-alias-label-secondary)' }}>只影响显示与重复锚点，不改变容量计算</span>
+            </label>
             <label className="full">AI 会话工作区（可选，留空用默认）<input name="workspacePath" placeholder={settings.defaultWorkspace || '默认工作区未设置'} /></label>
             <label className="full">描述<textarea name="description" rows={2} placeholder="背景 / 目标 / 验收标准（Markdown）" /></label>
             <div className="full" style={{ display: 'flex', gap: 8 }}>
@@ -3774,6 +3830,18 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
               ? <label>重复<select value={editDraft.recurrenceCode} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, recurrenceCode: e.target.value })}>{dictOf('recurrence').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
               : <div style={{ fontSize: 12, color: '#999', alignSelf: 'center' }}>重复：由模板任务管理</div>}
             <label>截止时间<input type="datetime-local" value={editDraft.dueLocal} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, dueLocal: e.target.value })} /></label>
+            {/* ---------------- 预计耗时 / 全天任务（v1.15.1） ---------------- */}
+            <label>耗时（分钟）<input type="number" min={1} max={1440} step={5} value={editDraft.estimatedMinutes} placeholder={`留空 = 默认 ${settings.defaultEstimateMinutes} 分钟`} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, estimatedMinutes: e.target.value })} /></label>
+            <label style={{ alignSelf: 'end' }}>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 600 }}>
+                <input type="checkbox" checked={editDraft.allDay} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, allDay: e.target.checked })} />
+                全天任务
+              </span>
+              <span style={{ fontSize: 11, color: 'var(--dsw-alias-label-secondary)' }}>只影响显示与重复锚点，不改变容量计算</span>
+            </label>
+            <p className="wb-hint" style={{ gridColumn: '1 / -1', margin: '0 0 4px' }}>
+              {`耗时改完立即影响今日容量的「已排」；留空 = 按默认 ${settings.defaultEstimateMinutes} 分钟计入。`}
+            </p>
             <label className="full">AI 会话工作区（留空则继承父任务，父任务也没有才用默认）<input value={editDraft.workspacePath} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, workspacePath: e.target.value })} placeholder={settings.defaultWorkspace || '默认工作区未设置'} /></label>
             <label className="full">描述（Markdown）<textarea rows={6} value={editDraft.description} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, description: e.target.value })} /></label>
             {/* ---------------- 改父任务（v1.14.0） ---------------- */}

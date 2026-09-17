@@ -51,6 +51,23 @@ export function readDailyCapacityMinutes(db: DatabaseSync): number {
 }
 
 /**
+ * 没填「预计耗时」时的默认分钟数：存 meta，缺省 30，夹在 5–1440 之间。
+ *
+ * ⚠️ 这两个常量（`DEFAULT_ESTIMATE_MINUTES` / `MIN_ESTIMATE_MINUTES`）与客户端
+ * `src/client/capacity.ts` 里**必须同值**：一处是"读书时兜底"，一处是"落库时夹取"，
+ * 不同值就会出现"库里存 3 分钟、界面按 5 分钟算"的双口径。
+ * 测试 `test/routes.test.mjs` 直接 import 客户端那份做交叉断言，不靠人记。
+ */
+export const DEFAULT_SETTINGS_ESTIMATE_MINUTES = 30
+export const MIN_SETTINGS_ESTIMATE_MINUTES = 5
+export const MAX_SETTINGS_ESTIMATE_MINUTES = 1440
+export function readDefaultEstimateMinutes(db: DatabaseSync): number {
+  const raw = Number(readMeta(db, 'default_estimated_minutes'))
+  if (!Number.isFinite(raw) || raw < MIN_SETTINGS_ESTIMATE_MINUTES) return DEFAULT_SETTINGS_ESTIMATE_MINUTES
+  return Math.min(MAX_SETTINGS_ESTIMATE_MINUTES, Math.round(raw))
+}
+
+/**
  * 读取「最近用过的工作区」列表。
  *
  * 存 meta 的 JSON 字符串（单键，不动 schema）：这是**用户偏好**而非业务数据，
@@ -104,6 +121,9 @@ export function readWorkbenchSettings(db: DatabaseSync): WorkbenchSettings {
     quickWorkspaceRecent: readRecentWorkspaces(db),
     /** 缺省**开**：功能不默认关闭，否则用户永远发现不了它（关掉是显式动作）。 */
     autoKnowledgeRecall: (readMeta(db, 'knowledge_recall_auto') ?? '1') !== '0',
+    defaultEstimateMinutes: readDefaultEstimateMinutes(db),
+    /** 缺省**关**：逾期是历史欠账，默认不混进"今天要做的事"（见 contracts 里的说明）。 */
+    dailyCapacityIncludeOverdue: (readMeta(db, 'daily_capacity_include_overdue') ?? '0') === '1',
   }
 }
 
@@ -175,6 +195,18 @@ export function makeRoutes(db: DatabaseSync, deps: WorkbenchRouteDeps = {}): Web
           if (typeof body.dailyCapacityMinutes === 'number' && Number.isFinite(body.dailyCapacityMinutes)) {
             const minutes = Math.min(1440, Math.max(30, Math.round(body.dailyCapacityMinutes)))
             writeMeta(db, 'daily_capacity_minutes', String(minutes))
+          }
+          /**
+           * 默认耗时（v1.15.1）：没填「预计耗时」的任务按它计入今日容量。
+           * 夹 5–1440，缺省 30；越界按边界落库而不是静默丢弃（静默丢件是禁区）。
+           */
+          if (typeof body.defaultEstimateMinutes === 'number' && Number.isFinite(body.defaultEstimateMinutes)) {
+            const minutes = Math.min(MAX_SETTINGS_ESTIMATE_MINUTES, Math.max(MIN_SETTINGS_ESTIMATE_MINUTES, Math.round(body.defaultEstimateMinutes)))
+            writeMeta(db, 'default_estimated_minutes', String(minutes))
+          }
+          /** 逾期是否计入今日容量：写单个 meta 键，客户端读同一键（不另开字段）。 */
+          if (body.dailyCapacityIncludeOverdue === true || body.dailyCapacityIncludeOverdue === false) {
+            writeMeta(db, 'daily_capacity_include_overdue', body.dailyCapacityIncludeOverdue ? '1' : '0')
           }
           if (Array.isArray(body.quickWorkspaceRecent)) {
             /**

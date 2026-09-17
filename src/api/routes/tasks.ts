@@ -9,7 +9,7 @@ import {
   getTask, getTaskMemoryContext, getTaskRootId, linkTaskSession, listArchivedTasks, listChildren, listReminders, listTaskEvents,
   listTaskMemories, listTaskReviews, listTaskSessions, listTasks, repairParentCompletion, restoreTask, updateTask, updateTaskWithCompletion,
 } from '../../db/repo.js'
-import { TASKS_PREFIX, defaultRecurrenceRule, isLoopbackRequest, pathSegments, publicTask, readJsonBody, requireCode, taskInputFromBody, todayRange, writeJson } from './helpers.js'
+import { TASKS_PREFIX, clampEstimateForStorage, defaultRecurrenceRule, isLoopbackRequest, pathSegments, publicTask, readJsonBody, requireCode, taskInputFromBody, todayRange, writeJson } from './helpers.js'
 
 export function makeTaskRoutes(db: DatabaseSync): WebRoute[] {
   return [
@@ -92,7 +92,7 @@ export function makeTaskRoutes(db: DatabaseSync): WebRoute[] {
             }
             if ('dueAt' in body) patch.dueAt = typeof body.dueAt === 'string' ? body.dueAt : null
             if (body.allDay === true || body.allDay === false) patch.allDay = body.allDay
-            if ('estimatedMinutes' in body) patch.estimatedMinutes = typeof body.estimatedMinutes === 'number' ? body.estimatedMinutes : null
+            if ('estimatedMinutes' in body) patch.estimatedMinutes = clampEstimateForStorage(body.estimatedMinutes)
             if (body.archived === true || body.archived === false) patch.archived = body.archived
             if ('workspacePath' in body) patch.workspacePath = typeof body.workspacePath === 'string' ? body.workspacePath : null
             // 改父任务：string = 挂到该父任务下；null / 空串 = 移到顶层。

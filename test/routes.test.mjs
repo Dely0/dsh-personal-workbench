@@ -878,3 +878,99 @@ test('settings：最近手动选择的工作区是整表替换（能置顶 / 能
       '去重（忽略大小写/结尾分隔符）、丢非字符串与空白、截断到上限')
   })
 })
+
+/**
+ * ── [容量] 预计耗时的服务端夹取（v1.15.1）────────────────────────────────────
+ *
+ * 背景（fresh-eyes 审查第 2 条）：PATCH 原先只判 `typeof === 'number'` 就原样落库，
+ * 而容量算法把 `≤0` 视为"没填"、把 `>1440` 夹到 1440 —— 库里能出现 99999，
+ * 界面却按默认 30 算：**同一个字段两个口径**。设置项 `dailyCapacityMinutes` 一直有夹取，
+ * 这个字段漏了。
+ *
+ * 用例名统一带 `[容量]` 前缀：本文件是多个会话都会追加的共享大文件，
+ * 前缀能让"谁加的用例"一眼分得清（见 docs/design/2026-09-17-parallel-session-handover.md）。
+ */
+const PATCH_ESTIMATE_CASES = [
+  { input: 90, expected: 90, why: '区间内原样' },
+  { input: 1, expected: 1, why: '下界 1 有效' },
+  { input: 1440, expected: 1440, why: '上界有效' },
+  { input: 99999, expected: 1440, why: '超上界夹到 1440' },
+  { input: 0, expected: null, why: '0 = 没填' },
+  { input: -5, expected: null, why: '负数 = 没填' },
+  { input: 0.5, expected: null, why: '非整数 = 没填（不做四舍五入，客户端已经算清）' },
+  { input: '90', expected: null, why: '字符串不是合法耗时（AJV 之外的第二道防线）' },
+  { input: null, expected: null, why: 'null = 清空成没填' },
+]
+
+for (const { input, expected, why } of PATCH_ESTIMATE_CASES) {
+  test(`[容量] PATCH /tasks/:id 的 estimatedMinutes 夹取：${JSON.stringify(input)} → ${JSON.stringify(expected)}（${why}）`, async () => {
+    await withServer(async ({ db, request }) => {
+      const task = createTask(db, { title: 'estimate clamp', typeCode: 'code_impl', priorityCode: 'p2' })
+      const res = await request('PATCH', `/api/workbench/tasks/${task.id}`, { estimatedMinutes: input })
+      assert.equal(res.status, 200)
+      assert.equal(res.body.task.estimatedMinutes, expected, why)
+      // 落库值必须与回执一致（"库里 99999、界面按 30 算"这类双口径就是从回执对不上开始的）
+      const reread = await request('GET', `/api/workbench/tasks/${task.id}`)
+      assert.equal(reread.body.task.estimatedMinutes, expected, '回读一致')
+    })
+  })
+}
+
+test('[容量] 新建任务同样走夹取（POST 与 PATCH 不许两套口径）', async () => {
+  await withServer(async ({ db, request }) => {
+    const res = await request('POST', '/api/workbench/tasks', {
+      title: 'created with estimate', typeCode: 'code_impl', priorityCode: 'p2', estimatedMinutes: 99999, allDay: true,
+    })
+    assert.equal(res.status, 201, 'POST 新建返回 201')
+    assert.equal(res.body.task.estimatedMinutes, 1440, 'POST 也夹到 1440')
+    assert.equal(res.body.task.allDay, true, 'allDay 落库并回读为布尔')
+    assert.ok(res.body.task.id !== undefined)
+    void db
+  })
+})
+
+test('[容量] 两个新设置键：缺省值、写入回读、越界夹取', async () => {
+  await withServer(async ({ request }) => {
+    const initial = await request('GET', '/api/workbench/settings')
+    assert.equal(initial.body.settings.defaultEstimateMinutes, 30, '默认耗时缺省 30')
+    assert.equal(initial.body.settings.dailyCapacityIncludeOverdue, false, '逾期口径缺省关')
+
+    const written = await request('POST', '/api/workbench/settings', { defaultEstimateMinutes: 60, dailyCapacityIncludeOverdue: true })
+    assert.equal(written.body.settings.defaultEstimateMinutes, 60, '写入后回读')
+    assert.equal(written.body.settings.dailyCapacityIncludeOverdue, true)
+
+    // 夹取：下界 5、上界 1440（与容量口径同一区间）
+    const low = await request('POST', '/api/workbench/settings', { defaultEstimateMinutes: 1 })
+    assert.equal(low.body.settings.defaultEstimateMinutes, 5, '1 夹到 5')
+    const high = await request('POST', '/api/workbench/settings', { defaultEstimateMinutes: 99999 })
+    assert.equal(high.body.settings.defaultEstimateMinutes, 1440, '99999 夹到 1440')
+    const rounded = await request('POST', '/api/workbench/settings', { defaultEstimateMinutes: 61.7 })
+    assert.equal(rounded.body.settings.defaultEstimateMinutes, 62, '小数四舍五入')
+
+    // 不传就不动：设置页是"整表回传"的，漏字段不许把用户的值冲掉
+    const kept = await request('POST', '/api/workbench/settings', { defaultWorkspace: 'D:\\Code\\x' })
+    assert.equal(kept.body.settings.defaultEstimateMinutes, 62, '不传就不动它')
+    assert.equal(kept.body.settings.dailyCapacityIncludeOverdue, true, '布尔开关同理')
+  })
+})
+
+test('[容量] 客户端与服务端的 estimatedMinutes 夹取必须同口径（跨模块等价性，防两处漂移）', async () => {
+  /**
+   * 为什么需要这条：客户端与宿主是**两个编译容器**（客户端不进宿主产物），
+   * 所以 `clampEstimateForStorage`（服务端）与 `clampEstimatedMinutes`（客户端）
+   * 是两份同构实现。两份实现对同一批输入必须给同一个结果 ——
+   * 不一致就会出现"设置页说 90 分钟、容量条按 30 算"这种双口径，而且**两边测试各自全绿**。
+   * 这条断言就是钉住它们不许漂移的钉子。
+   */
+  const { clampEstimateForStorage } = await import('../lib/api/routes/helpers.js')
+  const { clampEstimatedMinutes } = await import('../lib/client/capacity.js')
+  const probes = [90, 1, 1440, 1441, 99999, 0, -1, -5, 0.5, 1.5, 60.4, Number.NaN, Number.POSITIVE_INFINITY, '90', '', null, undefined, true, {}, []]
+  for (const value of probes) {
+    assert.deepEqual(
+      clampEstimateForStorage(value),
+      clampEstimatedMinutes(value),
+      `两份实现对 ${String(value)} 的结果不一致（服务端 ${String(clampEstimateForStorage(value))} / 客户端 ${String(clampEstimatedMinutes(value))}）`,
+    )
+  }
+})
+

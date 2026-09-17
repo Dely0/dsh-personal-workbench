@@ -250,6 +250,21 @@ export interface WorkbenchSettings {
    * 会话级开关另有出口（`/api/workbench/knowledge-recall/session` + 工具 turn_off）。
    */
   autoKnowledgeRecall: boolean
+  /**
+   * 任务没填「预计耗时」时按多少分钟计入今日容量（缺省 30，夹 5–1440）。
+   *
+   * 为什么做成偏好而不是常量：容量读数直接受它影响，用户必须能看见并调整
+   * "系统凭什么替我估 30 分钟"；写死在代码里就变成了又一个不可解释的数字。
+   */
+  defaultEstimateMinutes: number
+  /**
+   * 「逾期的未完成任务」是否计入今日容量（缺省**关**）。
+   *
+   * 为什么默认关：逾期是历史欠账，混进"今天要做的事"会让读数失去意义。
+   * 但用户可能就是想看清"债主上门"的总量，所以给开关而不是写死。
+   * 开关状态与规则文案一起呈现（见 `CapacityRulePanel`），避免"数字变了但不知道谁改的"。
+   */
+  dailyCapacityIncludeOverdue: boolean
 }
 
 // ---------------------------------------------------------------------------

@@ -180,6 +180,51 @@ export function SettingsModal(props: SettingsModalProps): ReactNode {
             </section>
           )}
 
+          {section === 'general' && (
+            <section>
+              {/*
+                「今日容量」的口径偏好（v1.15.1）。
+                这两个值直接决定任务页顶部那个数字（已排 / 余），所以必须**可见可改** ——
+                写死在代码里就变成了又一个用户无法解释、也无法纠正的数字。
+                规则全文在任务页的「规则」面板里（CapacityRulePanel），这里只放两个开关，
+                并各写一句"它会怎样影响读数"。
+              */}
+              <h5 style={{ marginTop: 18 }}>今日容量</h5>
+              <div className="wb-field">
+                <span>默认耗时（任务没填「预计耗时」时按它计入，分钟）</span>
+                <input
+                  type="number"
+                  min={5}
+                  max={1440}
+                  step={5}
+                  value={settings.defaultEstimateMinutes}
+                  onChange={(e) => {
+                    // 空串/非数字时不写 NaN 进 settings：先落到缺省 30，用户继续输入会被后续 onChange 覆盖
+                    const parsed = Number(e.target.value)
+                    const next = Number.isFinite(parsed) && parsed >= 5 ? Math.min(1440, Math.round(parsed)) : 30
+                    onSettingsChange({ ...settings, defaultEstimateMinutes: next })
+                  }}
+                />
+                <span className="wb-hint">可设 5–1440；任务自己的耗时优先于它。</span>
+              </div>
+              <label className="wb-switch-row">
+                <input
+                  type="checkbox"
+                  checked={settings.dailyCapacityIncludeOverdue}
+                  onChange={(e) => onSettingsChange({ ...settings, dailyCapacityIncludeOverdue: e.target.checked })}
+                />
+                <span>
+                  把逾期任务计入今日容量
+                  <span className="wb-switch-desc">
+                    默认关闭：逾期是历史欠账，混进"今天要做的事"会让「已排」失去意义。
+                    打开后，未完成且截止时间早于今天 0 点的任务也会计入（读数会明显变大）。
+                    任务页的「今日容量 → 规则」面板里有同样的开关，两处写同一个设置。
+                  </span>
+                </span>
+              </label>
+            </section>
+          )}
+
           {section === 'notify' && (
             <section>
               <h5>桌面通知</h5>

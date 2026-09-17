@@ -18,6 +18,35 @@ import {
 
 export { isLoopbackRequest, readJsonBody, writeJson } from '../http.js'
 
+/** 「预计耗时」落库时的合法区间。上界与 `dailyCapacityMinutes` 一致。 */
+export const MIN_ESTIMATE_MINUTES = 1
+export const MAX_ESTIMATE_MINUTES = 1440
+
+/**
+ * 「预计耗时」的落库夹取（**唯一的服务端实现**）。
+ *
+ * 为什么必须有：PATCH 原先只判 `typeof body.estimatedMinutes === 'number'` 就原样落库，
+ * 而容量算法把 `≤0` 视为"没填"、把 `>1440` 夹到 1440 —— 于是库里能出现 99999，
+ * 界面却按默认 30 算：**同一个字段两个口径**。设置项 `dailyCapacityMinutes` 一直有夹取，
+ * 这个字段漏了（fresh-eyes 审查第 2 条）。
+ *
+ * 口径与客户端 `src/client/capacity.ts#clampEstimatedMinutes` **逐条同构**：
+ * - 有限整数且 ≥1 → `min(1440, 值)`；
+ * - `0` / 负 / 非有限 / 小数 / 非数字（含 `"90"` 这种字符串）→ `null`（= 没填）。
+ *
+ * 为什么没有直接 import 客户端那一份：客户端与宿主是两个编译容器
+ * （客户端源码不进 `tsconfig.build.json` 的宿主产物），跨容器 import 会把客户端拖进宿主。
+ * 因此靠 `test/routes.test.mjs` 里一条**跨模块等价性断言**（同一批输入两份实现必须同结果）
+ * 钉住它们不许漂移，而不是靠人记得同步改两处。
+ */
+export function clampEstimateForStorage(value: unknown): number | null {
+  if (typeof value !== 'number') return null
+  if (!Number.isFinite(value)) return null
+  if (!Number.isInteger(value)) return null
+  if (value < MIN_ESTIMATE_MINUTES) return null
+  return Math.min(MAX_ESTIMATE_MINUTES, value)
+}
+
 export const TASKS_PREFIX = '/api/workbench/tasks'
 export const DRAFTS_PREFIX = '/api/workbench/drafts'
 export const REMINDERS_PREFIX = '/api/workbench/reminders'
@@ -177,7 +206,7 @@ export function taskInputFromBody(body: Record<string, unknown>): TaskInput {
     aiPolicyCode: str('aiPolicyCode'),
     dueAt: body.dueAt === null ? null : str('dueAt'),
     allDay: body.allDay === true,
-    estimatedMinutes: typeof body.estimatedMinutes === 'number' ? body.estimatedMinutes : null,
+    estimatedMinutes: clampEstimateForStorage(body.estimatedMinutes),
     source: str('source'),
     parentId: body.parentId === null ? null : str('parentId'),
     workspacePath: body.workspacePath === null ? null : str('workspacePath'),
