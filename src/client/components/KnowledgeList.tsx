@@ -14,6 +14,9 @@
 import type { ListGroup } from '../listPresentation.js'
 import type { ContentItem, ListPage, SortDir, SortKey, TagCount } from '../listPresentation.js'
 import { DEFAULT_PAGE_SIZE, PAGE_SIZES, SORT_OPTIONS } from '../listPresentation.js'
+import { ALL, buildTabs, TabBar, toggleTab, type TabItem } from './TabBar.js'
+import { TagFilter } from './TagFilter.js'
+import { Icon } from './Icon.js'
 import { fmtTime } from '../format.js'
 import type { Dict } from '../viewTypes.js'
 
@@ -29,7 +32,7 @@ export interface KnowledgeFilters {
 
 export const EMPTY_KNOWLEDGE_FILTERS: KnowledgeFilters = Object.freeze({
   keyword: '',
-  kinds: Object.freeze(['all']) as readonly string[],
+  kinds: Object.freeze([ALL]) as readonly string[],
   tags: Object.freeze([]) as readonly string[],
   sortKey: 'updatedAt' as SortKey,
   sortDir: 'desc' as SortDir,
@@ -39,7 +42,7 @@ export const EMPTY_KNOWLEDGE_FILTERS: KnowledgeFilters = Object.freeze({
 
 /** 当前选中的分类 code。**唯一**的派生点 —— 页面与工具条都调它，不各自写 `kinds[0] ?? 'all'`。 */
 export function selectedKind(filters: KnowledgeFilters): string {
-  return filters.kinds[0] ?? 'all'
+  return filters.kinds[0] ?? ALL
 }
 
 /** 「其他」伪分类：字典外的 kindCode 归到这里，`reconcileKnowledgeKinds` 也要认得它。 */
@@ -55,7 +58,7 @@ export const OTHER_KIND = 'other'
  */
 export function reconcileKnowledgeKinds(filters: KnowledgeFilters, knownCodes: readonly string[]): KnowledgeFilters | null {
   const current = selectedKind(filters)
-  if (current === 'all' || current === OTHER_KIND) return null
+  if (current === ALL || current === OTHER_KIND) return null
   /**
    * 字典还没到（空列表）时**什么都不判**。
    *
@@ -65,60 +68,40 @@ export function reconcileKnowledgeKinds(filters: KnowledgeFilters, knownCodes: r
    */
   if (knownCodes.length === 0) return null
   if (knownCodes.includes(current)) return null
-  return { ...filters, kinds: ['all'], page: 0 }
+  return { ...filters, kinds: [ALL], page: 0 }
 }
 
 export function knowledgeFilterActive(f: KnowledgeFilters): boolean {
-  return f.keyword.trim() !== '' || f.tags.length > 0 || selectedKind(f) !== 'all'
+  return f.keyword.trim() !== '' || f.tags.length > 0 || selectedKind(f) !== ALL
 }
 
-/** Tab 徽标：`all` + 每个知识类型 + 「其他」（库里出现了字典外的 kindCode 时不静默丢件）。 */
-export interface KindTab { code: string; name: string; color: string; count: number }
-
-export function kindTabs(kinds: readonly Dict[], counts: Readonly<Record<string, number>>): KindTab[] {
-  const tabs: KindTab[] = [{ code: 'all', name: '全部', color: '', count: counts.all ?? 0 }]
-  for (const kind of kinds) {
-    tabs.push({ code: kind.code, name: kind.name, color: String(kind.config.color ?? '#8a9aa8'), count: counts[kind.code] ?? 0 })
-  }
-  // 字典外的 kindCode（历史数据 / 手工改库）归到「其他」，否则这些条目在 Tab 上无处可去
-  if ((counts.other ?? 0) > 0) tabs.push({ code: 'other', name: '其他', color: '#8a9aa8', count: counts.other })
-  return tabs
+/**
+ * Tab 徽标：`全部` + 每个知识类型 + 「其他」（库里出现了字典外的 kindCode 时不静默丢件）。
+ * 拼装逻辑在 `TabBar.buildTabs` —— 与任务页共用一份，不各写一遍。
+ */
+export function kindTabs(kinds: readonly Dict[], counts: Readonly<Record<string, number>>): TabItem[] {
+  return buildTabs(kinds, counts)
 }
 
-export function KnowledgeTabBar({ tabs, current, onSelect }: { tabs: readonly KindTab[]; current: string; onSelect: (code: string) => void }): JSX.Element {
-  return (
-    <div className="wb-kb-tabs">
-      {tabs.map((tab) => (
-        <button
-          key={tab.code}
-          type="button"
-          className={`wb-kb-tab ${current === tab.code ? 'on' : ''}`}
-          data-kind-tab={tab.code}
-          onClick={() => onSelect(tab.code)}
-        >
-          {tab.color !== '' && <i className="wb-kb-dot" style={{ background: tab.color }} />}
-          {tab.name}
-          <span className="wb-kb-cnt">{tab.count.toLocaleString('zh-CN')}</span>
-        </button>
-      ))}
-    </div>
-  )
-}
-
-export function KnowledgeToolbar({ filters, tabs, tagCounts, total, onChange, onClear }: {
+export function KnowledgeToolbar({ filters, tabs, tagCounts, total, onChange, onClear, onCreate, onSummarizeDoc, busy = false }: {
   filters: KnowledgeFilters
-  tabs: readonly KindTab[]
+  tabs: readonly TabItem[]
   tagCounts: readonly TagCount[]
   total: number
   onChange: (patch: Partial<KnowledgeFilters>) => void
   onClear: () => void
+  onCreate: () => void
+  onSummarizeDoc: () => void
+  busy?: boolean
 }): JSX.Element {
-  const toggleTag = (tag: string): void => {
-    onChange({ tags: filters.tags.includes(tag) ? filters.tags.filter((t) => t !== tag) : [...filters.tags, tag], page: 0 })
-  }
   const sortName = SORT_OPTIONS.find((o) => o.key === filters.sortKey)?.name ?? '更新时间'
   return (
     <>
+      {/* 一行：搜索 + 排序 + 命中数左对齐；新建 / AI 总结 / 清空筛选右对齐。
+          宽度不够时**缩搜索框**（`.wb-kb-search` 是唯一可缩项），按钮一律 flex:none + nowrap ——
+          否则按钮会被压成竖排文字（本项目踩过：缺 flex-shrink/min-width/white-space 三重保护）。
+          实测把这行挤爆的主要是「排序」那一组，所以方向按钮**只留箭头**（排序键名在下拉里已有，
+          重复一遍白占 ~58px，正好够搜索框）。 */}
       <div className="wb-kb-bar">
         <input
           className="wb-kb-search"
@@ -138,34 +121,22 @@ export function KnowledgeToolbar({ filters, tabs, tagCounts, total, onChange, on
         </select>
         <button
           type="button"
-          className="wb-btn"
+          className="wb-btn wb-kb-sortdir"
           data-kb-sortdir
-          title={filters.sortDir === 'desc' ? '当前降序，点击切升序' : '当前升序，点击切降序'}
+          title={`当前按「${sortName}」${filters.sortDir === 'desc' ? '降序' : '升序'}，点击切换`}
+          aria-label={`切换排序方向（当前按${sortName}${filters.sortDir === 'desc' ? '降序' : '升序'}）`}
           onClick={() => onChange({ sortDir: filters.sortDir === 'desc' ? 'asc' : 'desc', page: 0 })}
         >
-          {filters.sortDir === 'desc' ? '↓' : '↑'} {sortName}
+          {filters.sortDir === 'desc' ? '↓' : '↑'}
         </button>
         <span className="wb-kb-hit" data-kb-hit>命中 {total.toLocaleString('zh-CN')} 条</span>
-        <span style={{ flex: 1 }} />
+        <span className="wb-kb-spacer" />
+        <button type="button" className="wb-btn primary" data-kb-new onClick={onCreate}><Icon name="plus" />新建</button>
+        <button type="button" className="wb-btn" data-kb-summarize disabled={busy} onClick={onSummarizeDoc}><Icon name="file" />AI 总结本地文档</button>
         <button type="button" className="wb-btn" disabled={!knowledgeFilterActive(filters)} data-kb-clear onClick={onClear}>清空筛选</button>
       </div>
-      <KnowledgeTabBar tabs={tabs} current={selectedKind(filters)} onSelect={(code) => onChange({ kinds: [code], page: 0 })} />
-      {tagCounts.length > 0 && (
-        <div className="wb-kb-tags">
-          <button type="button" className={`wb-kb-tag ${filters.tags.length === 0 ? 'on' : ''}`} data-kb-tag="" onClick={() => onChange({ tags: [], page: 0 })}>全部标签</button>
-          {tagCounts.slice(0, 12).map((t) => (
-            <button
-              key={t.tag}
-              type="button"
-              className={`wb-kb-tag ${filters.tags.includes(t.tag) ? 'on' : ''}`}
-              data-kb-tag={t.tag}
-              onClick={() => toggleTag(t.tag)}
-            >
-              #{t.tag}<span className="wb-kb-tagcnt">{t.count}</span>
-            </button>
-          ))}
-        </div>
-      )}
+      <TabBar tabs={tabs} selected={filters.kinds} onSelect={(code, multi) => onChange({ kinds: toggleTab(filters.kinds, code, multi), page: 0 })} ariaLabel="知识库分类" />
+      <TagFilter tagCounts={tagCounts} selected={filters.tags} onChange={(tags) => onChange({ tags, page: 0 })} />
     </>
   )
 }

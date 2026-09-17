@@ -252,6 +252,48 @@ test('knowledge API supports file_link and local document reading', async () => 
   }
 })
 
+test('list-local-dir: 盘符根能给"上一级"，不再把用户永久困在 C 盘', async () => {
+  await withServer(async ({ request }) => {
+    // 默认起点是主目录（保留原行为）
+    const home = await request('GET', '/api/workbench/knowledge/list-local-dir')
+    assert.equal(home.status, 200)
+    assert.ok(typeof home.body.home === 'string' && home.body.home !== '', '返回主目录路径')
+    assert.ok(Array.isArray(home.body.roots), '返回可浏览的根列表')
+
+    // 「此电脑」视图：path 是哨兵，entries 是各盘符（没有盘符时要给可读空态，而不是崩）
+    const roots = await request('GET', `/api/workbench/knowledge/list-local-dir?path=${encodeURIComponent('\u0000roots')}`)
+    assert.equal(roots.status, 200)
+    assert.equal(roots.body.path, '\u0000roots', '根视图用哨兵标识')
+    assert.equal(roots.body.parent, null, '根视图没有上一级')
+    assert.equal(roots.body.entries.length, roots.body.roots.length, '每个根一行')
+    for (const entry of roots.body.entries) {
+      assert.equal(entry.isDirectory, true, '盘符当目录处理')
+      assert.ok(entry.path.length > 0)
+    }
+
+    /**
+     * 关键回归：**盘符根**的 `parent` 必须是哨兵而不是 `null`。
+     *
+     * 原先 `dirname('C:\\') === 'C:\\'` → `parent = null` → 弹窗「上级」在盘符根变灰，
+     * 用户再也出不去 C 盘（现象："选择文件只能选 C 盘"）。
+     */
+    if (process.platform === 'win32') {
+      const atDriveRoot = await request('GET', `/api/workbench/knowledge/list-local-dir?path=${encodeURIComponent('C:\\')}`)
+      assert.equal(atDriveRoot.status, 200)
+      assert.equal(atDriveRoot.body.parent, '\u0000roots', '盘符根的上一级 = 根列表（不是 null）')
+      assert.ok(atDriveRoot.body.roots.length >= 1, '至少有一个盘符')
+      // 盘符列表里每个都应是盘符形态（这条守住"枚举逻辑"本身，不假设机器上有几个盘）
+      for (const root of atDriveRoot.body.roots) {
+        assert.match(root.path, /^[A-Za-z]:\\$/, `盘符形态：${root.path}`)
+      }
+    } else {
+      const atRoot = await request('GET', `/api/workbench/knowledge/list-local-dir?path=${encodeURIComponent('/')}`)
+      assert.equal(atRoot.status, 200)
+      assert.equal(atRoot.body.parent, '\u0000roots', '文件系统根的上一级 = 根列表')
+    }
+  })
+})
+
 test('dictionary CRUD API creates, edits, deactivates, protects builtin and blocks invalid code', async () => {
   await withServer(async ({ db, request }) => {
     seedDictionaries(db)

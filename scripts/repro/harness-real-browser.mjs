@@ -90,10 +90,10 @@ const page = buildListPage({
 
 const toolbar = renderToStaticMarkup(createElement(KnowledgeToolbar, {
   filters, tabs: kindTabs(KINDS, page.tabCounts), tagCounts: page.tagCounts, total: page.total,
-  onChange: () => {}, onClear: () => {},
+  onChange: () => {}, onClear: () => {}, onCreate: () => {}, onSummarizeDoc: () => {},
 }))
 const list = renderToStaticMarkup(createElement(KnowledgeList, { page, dicts: KINDS, selectedId: 'k2', onOpen: () => {} }))
-const pager = renderToStaticMarkup(createElement(KnowledgePager, { page, pageSize: 50, onPage: () => {}, onPageSize: () => {} }))
+const pager = renderToStaticMarkup(createElement(KnowledgePager, { page, pageSize: 10, onPage: () => {}, onPageSize: () => {} }))
 const grid = renderToStaticMarkup(createElement(IdeaCardGrid, {
   ideas, dicts: IDEA_KINDS, selectedId: 'i0', pickedIds: new Set(['i0']), clusters: CLUSTERS,
   onOpen: () => {}, onTogglePick: () => {}, onFileInto: () => {}, onCreateFolder: () => {},
@@ -109,7 +109,7 @@ writeFileSync(PAGE, `<!DOCTYPE html>
   /* .wb-panel-host 是 fixed + overflow:hidden 的容器（复审 F4 的场景）
      .wb-app-scope 是它内部的**滚动区** —— 与真实面板一致 */
   .wb-app-scope { overflow: auto; }
-  .pane { width: 660px; padding: 14px; box-sizing: border-box; }
+  .pane { width: 880px; padding: 14px; box-sizing: border-box; }
   #ideas { padding-top: 24px; }
 </style></head>
 <body><div class="wb-panel-host" data-open="1"><div class="wb-app-scope" data-dsh-personal-workbench-view data-harness-scroller>
@@ -153,7 +153,7 @@ const profile = mkdtempSync(join(tmpdir(), 'lv-harness-'))
 const child = spawn(EDGE, [
   '--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check',
   `--remote-debugging-port=${PORT}`, `--user-data-dir=${profile}`,
-  '--window-size=1220,900', '--hide-scrollbars', 'about:blank',
+  '--window-size=1340,900', '--hide-scrollbars', 'about:blank',
 ], { stdio: 'ignore' })
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
@@ -211,7 +211,7 @@ check('页面无脚本异常', pageErrors.length === 0, pageErrors.join(' | '))
 const styleApplied = await evaluate(`(() => {
   const cards = document.querySelector('.wb-idea-cards')
   return {
-    tabsDisplay: getComputedStyle(document.querySelector('.wb-kb-tabs')).display,
+    tabsDisplay: getComputedStyle(document.querySelector('.wb-tabs')).display,
     rowDisplay: getComputedStyle(document.querySelector('.wb-kb-row')).display,
     cardsDisplay: getComputedStyle(cards).display,
     cardsCols: getComputedStyle(cards).gridTemplateColumns,
@@ -241,7 +241,7 @@ check('卡片是 2 列网格（窗口够宽时）', styleApplied.cardsCols.split
 // ---- 知识库：结构 + 布局 ----
 const kb = await evaluate(`(() => {
   const pane = document.querySelector('#knowledge')
-  const tabs = [...pane.querySelectorAll('.wb-kb-tab')]
+  const tabs = [...pane.querySelectorAll('.wb-tab')]
   const groups = [...pane.querySelectorAll('[data-kb-group]')].map((g) => g.getAttribute('data-kb-group'))
   const rows = [...pane.querySelectorAll('[data-kb-row]')]
   const pagerBox = pane.querySelector('[data-kb-pager]').getBoundingClientRect()
@@ -263,10 +263,77 @@ const kb = await evaluate(`(() => {
 check('知识库：5 个 Tab 且只有一个高亮', kb.tabCount === 5 && kb.activeTabs === 1, JSON.stringify({ n: kb.tabCount, active: kb.activeTabs }))
 check('知识库：Tab 带条数徽标', kb.tabLabels.every((l) => /\d/.test(l)), JSON.stringify(kb.tabLabels))
 check('知识库：时间分组头 ≥2 且带条数', kb.groups.length >= 2 && kb.groupHeadsHaveCount, JSON.stringify(kb.groups))
-check('知识库：每页 50 行', kb.rows === 50, String(kb.rows))
+check('知识库：每页 10 行（用户定的默认）', kb.rows === 10, String(kb.rows))
 check('知识库：行有摘要/类型徽标/标签', kb.hasSummary && kb.hasChip && kb.hasTags, JSON.stringify({ s: kb.hasSummary, c: kb.hasChip, t: kb.hasTags }))
 check('知识库：选中行有 sel 态', kb.selected === 1, String(kb.selected))
 check('知识库：分页条在列表下方（没被挤到视口外）', kb.pagerBelowList === true, JSON.stringify(kb))
+
+// ---- 工具栏：三个按钮必须在同一行且右对齐（用户要求） ----
+const toolbarBox = await evaluate(`(() => {
+  const bar = document.querySelector('.wb-kb-bar')
+  const btn = (sel) => { const el = bar.querySelector(sel); return el === null ? null : el.getBoundingClientRect() }
+  const nw = btn('[data-kb-new]'), sum = btn('[data-kb-summarize]'), clr = btn('[data-kb-clear]')
+  const search = btn('[data-kb-search]'), hit = btn('[data-kb-hit]')
+  const barBox = bar.getBoundingClientRect()
+  // 判"同一行"用**各元素中心线**与工具栏中心线的偏差，而不是 top 相等：
+  // 小字号的命中数（11.5px）与按钮（30px 高）在同一行里 top 本来就会差几像素（垂直居中）。
+  const barCenter = barBox.top + barBox.height / 2
+  const centered = (b) => b !== null && Math.abs((b.top + b.height / 2) - barCenter) < 4
+  const sameRow = (a, b) => a !== null && b !== null && Math.abs(a.top - b.top) < 2
+  return {
+    barHeight: Math.round(barBox.height),
+    btnRowHeight: nw === null ? 0 : Math.round(nw.height),
+    tops: { search: search === null ? null : Math.round(search.top), hit: hit === null ? null : Math.round(hit.top), nw: nw === null ? null : Math.round(nw.top) },
+    // 全部 5 个控件都在工具栏这一条的中心线上 ⇒ 真的只有一行
+    allCenteredOnBar: [nw, sum, clr, search, hit].every(centered),
+    allSameRow: sameRow(nw, sum) && sameRow(sum, clr),
+    // 按钮右对齐：三个按钮都在工具栏右半边
+    buttonsRightOfCenter: [nw, sum, clr].every((b) => b !== null && b.left > barBox.left + barBox.width * 0.5),
+    // 左半部分（搜索/命中数）在左半边
+    leftHalf: search.left < barBox.left + barBox.width * 0.5 && hit.left < barBox.left + barBox.width * 0.5,
+    // 按钮没被压成竖排：宽 > 高
+    noVerticalSquash: [nw, sum, clr].every((b) => b !== null && b.width > b.height),
+    order: [nw, sum, clr].map((b) => (b === null ? -1 : Math.round(b.left))),
+    searchWidth: search === null ? 0 : Math.round(search.width),
+    spacerWidth: Math.round((bar.querySelector('.wb-kb-spacer')?.getBoundingClientRect().width) ?? 0),
+    widths: [...bar.children].map((c) => ({ cls: String(c.className).replace('wb-btn ', ''), w: Math.round(c.getBoundingClientRect().width) })),
+    barWidth: Math.round(barBox.width),
+  }
+})()`)
+check('工具栏：真实宽度下搜索框够用（≥200px）', toolbarBox.searchWidth >= 200, `search=${toolbarBox.searchWidth}px 预算=${JSON.stringify(toolbarBox.widths)}`)
+
+/**
+ * 真实面板宽度下再量一次。
+ *
+ * 窄窗（内容区 632px）是**压力测试**：一行放不下时按用户要求"先降搜索宽度"。
+ * 但真实左侧列表区是 `flex:0 0 min(56%, 880px)`，1920 屏上约 880px、1366 屏上约 709px ——
+ * 所以真正要守住的是"日常宽度下搜索框够宽敞"。
+ */
+const wideToolbar = await evaluate(`(() => {
+  const pane = document.querySelector('#knowledge')
+  const prev = pane.style.width
+  pane.style.width = '900px'
+  const bar = document.querySelector('.wb-kb-bar')
+  const box = (sel) => { const el = bar.querySelector(sel); return el === null ? null : el.getBoundingClientRect() }
+  const search = box('[data-kb-search]')
+  const nw = box('[data-kb-new]'), sum = box('[data-kb-summarize]'), clr = box('[data-kb-clear]')
+  const barBox = bar.getBoundingClientRect()
+  const result = {
+    searchWidth: search === null ? 0 : Math.round(search.width),
+    spacerWidth: Math.round((bar.querySelector('.wb-kb-spacer')?.getBoundingClientRect().width) ?? 0),
+    allOneRow: [nw, sum, clr, search].every((b) => b !== null && Math.abs((b.top + b.height / 2) - (barBox.top + barBox.height / 2)) < 4),
+    buttonsRight: [nw, sum, clr].every((b) => b !== null && b.left > barBox.left + barBox.width * 0.5),
+  }
+  pane.style.width = prev
+  return result
+})()`)
+check('工具栏：真实面板宽度（900px 内容区）下搜索框宽敞（≥200px）', wideToolbar.searchWidth >= 200, JSON.stringify(wideToolbar))
+check('工具栏：真实宽度下仍是一行、按钮仍右对齐', wideToolbar.allOneRow === true && wideToolbar.buttonsRight === true, JSON.stringify(wideToolbar))
+check('工具栏：三按钮 + 搜索/命中数在**同一行**', toolbarBox.allCenteredOnBar === true && toolbarBox.allSameRow === true, JSON.stringify(toolbarBox))
+check('工具栏：按钮右对齐、搜索与命中数左对齐', toolbarBox.buttonsRightOfCenter === true && toolbarBox.leftHalf === true, JSON.stringify(toolbarBox))
+check('工具栏：按钮没被压成竖排（宽>高）', toolbarBox.noVerticalSquash === true, JSON.stringify(toolbarBox))
+check('工具栏：按钮顺序为 新建 → AI 总结 → 清空筛选', toolbarBox.order[0] < toolbarBox.order[1] && toolbarBox.order[1] < toolbarBox.order[2], JSON.stringify(toolbarBox.order))
+check('工具栏：只占一行（高度接近一个控件）', toolbarBox.barHeight < toolbarBox.btnRowHeight * 2, `bar=${toolbarBox.barHeight} btn=${toolbarBox.btnRowHeight}`)
 
 // ---- 点子卡片：真布局 + hover/focus ----
 const idea = await evaluate(`(async () => {
@@ -340,6 +407,15 @@ check('菜单：不被面板的 overflow 裁掉（仍可命中，pointer-events 
 check('菜单：滚动时视口坐标不变（证明 overflow 祖先不是包含块）', menu.viewportStable === true && menu.scrolled > 0, JSON.stringify(menu))
 check('菜单：整块在视口内', menu.insideViewport === true, String(menu.insideViewport))
 
+// 截图前把面板滚回顶部、并移掉那个浮动菜单：
+// 菜单是 fixed（不随滚动移动，这是设计使然），留着会压在知识库列表上，截图会误导人。
+// 工具栏与 Tab 条在顶部，是这次改动最该看的地方。
+await evaluate(`(() => {
+  document.querySelector('.wb-app-scope').scrollTop = 0
+  document.querySelector('[data-idea-foldmenu]')?.remove()
+  return true
+})()`)
+await sleep(250)
 const shot = await send('Page.captureScreenshot', { format: 'png' })
 writeFileSync(join(OUT, 'real-render.png'), Buffer.from(shot.data, 'base64'))
 
@@ -354,3 +430,6 @@ if (failed.length > 0) {
   for (const f of failed) console.log('  - ' + f.name + ' :: ' + f.detail)
   process.exit(1)
 }
+
+
+

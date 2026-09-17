@@ -742,30 +742,86 @@ ${panelContainerCss({ view: VIEW_ATTR, official: OFFICIAL_ATTR, active: ACTIVE_A
    知识库（打样 2 号）：密集列表 + 自适应时间分组 + 编号分页
    判定全在 listPresentation.ts；这里只负责长什么样。
    =========================================================================== */
-.wb-kb-bar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:9px; }
-.wb-kb-search { flex:1; min-width:140px; background:var(--wb-sunk); border:1px solid var(--wb-line); color:inherit;
+/* 知识库工具栏：**一行**放完 —— 左半搜索/排序/命中数，右半三个按钮。
+   宽度不够时只缩搜索框（唯一可缩项）；按钮一律 flex:none + nowrap，
+   否则会被父级 flex 压成竖排文字（本项目踩过一次：缺 flex-shrink/min-width/white-space 三重保护）。 */
+.wb-kb-bar { display:flex; gap:8px; align-items:center; margin-bottom:9px; }
+.wb-kb-bar > * { flex:none; white-space:nowrap; }
+.wb-kb-search { flex:1 1 auto; min-width:110px; background:var(--wb-sunk); border:1px solid var(--wb-line); color:inherit;
   border-radius:var(--wb-r-1); padding:7px 10px; font:inherit; font-size:12.5px; }
+.wb-kb-spacer { flex:1 1 auto !important; min-width:0; }
 .wb-kb-sortkey, .wb-kb-pagesize { background:var(--wb-sunk); border:1px solid var(--wb-line); color:inherit;
   border-radius:var(--wb-r-1); padding:7px 9px; font:inherit; font-size:12.5px; }
-.wb-kb-hit { font-size:11.5px; color:var(--wb-ink-3); font-variant-numeric:tabular-nums; white-space:nowrap; }
+.wb-kb-hit { font-size:11.5px; color:var(--wb-ink-3); font-variant-numeric:tabular-nums; }
+/* 排序方向只留箭头（排序键名在下拉里已有）：把这一行的宽度预算让给搜索框 */
+.wb-kb-sortdir { padding-left:9px; padding-right:9px; font-variant-numeric:tabular-nums; }
 
-.wb-kb-tabs { display:flex; gap:2px; overflow-x:auto; border-bottom:1px solid var(--wb-line); margin-bottom:9px; }
-.wb-kb-tab { border:none; background:transparent; color:var(--wb-ink-3); font:inherit; font-size:12.5px;
+/* 通用分类 Tab 条（知识库与任务页共用；组件在 components/TabBar.tsx） */
+.wb-tabs { display:flex; gap:2px; overflow-x:auto; border-bottom:1px solid var(--wb-line); margin-bottom:9px; }
+.wb-tab { border:none; background:transparent; color:var(--wb-ink-3); font:inherit; font-size:12.5px;
   padding:8px 11px 9px; border-bottom:2px solid transparent; cursor:pointer; white-space:nowrap;
   display:inline-flex; align-items:center; gap:6px; }
-.wb-kb-tab:hover { color:var(--wb-ink-1); }
-.wb-kb-tab.on { color:var(--wb-ink-1); font-weight:600; border-bottom-color:var(--wb-accent); }
-.wb-kb-dot { width:7px; height:7px; border-radius:50%; display:inline-block; flex:none; }
-.wb-kb-cnt { font-size:10.5px; background:color-mix(in srgb, var(--wb-ink-1) 8%, transparent);
+.wb-tab:hover { color:var(--wb-ink-1); }
+.wb-tab.on { color:var(--wb-ink-1); font-weight:600; border-bottom-color:var(--wb-accent); }
+.wb-tab-dot { width:7px; height:7px; border-radius:50%; display:inline-block; flex:none; }
+.wb-tab-cnt { font-size:10.5px; background:color-mix(in srgb, var(--wb-ink-1) 8%, transparent);
   border-radius:999px; padding:1px 6px; color:var(--wb-ink-3); font-variant-numeric:tabular-nums; }
-.wb-kb-tab.on .wb-kb-cnt { color:var(--wb-ink-1); background:var(--wb-accent-soft); }
+.wb-tab.on .wb-tab-cnt { color:var(--wb-ink-1); background:var(--wb-accent-soft); }
 
-.wb-kb-tags { display:flex; gap:5px; flex-wrap:wrap; margin-bottom:10px; }
-.wb-kb-tag { border:1px solid var(--wb-line); background:transparent; color:var(--wb-ink-3);
+/* 标签筛选：**单行**（横向滚动），不再 flex-wrap 铺开——标签一多就吃好几行高度。
+   超出 VISIBLE_TAG_LIMIT 的收进「更多 ▾」浮层（TagFilter.tsx）。 */
+.wb-kb-tags { display:flex; gap:5px; flex-wrap:nowrap; overflow-x:auto; margin-bottom:10px;
+  padding-bottom:2px; scrollbar-width:thin; }
+.wb-kb-tags::-webkit-scrollbar { height:5px; }
+.wb-kb-tags::-webkit-scrollbar-thumb { background:color-mix(in srgb, var(--wb-ink-1) 16%, transparent); border-radius:3px; }
+.wb-kb-tag { flex:none; border:1px solid var(--wb-line); background:transparent; color:var(--wb-ink-3);
   border-radius:999px; padding:2px 9px; font:inherit; font-size:11px; cursor:pointer; white-space:nowrap; }
 .wb-kb-tag:hover { color:var(--wb-ink-1); }
 .wb-kb-tag.on { color:var(--wb-ink-1); border-color:var(--wb-accent-line); background:var(--wb-accent-soft); font-weight:600; }
 .wb-kb-tagcnt { margin-left:5px; opacity:.7; font-variant-numeric:tabular-nums; }
+.wb-kb-tag-more { border-style:dashed; }
+
+/* 「更多标签」浮层：portal 到 document.body（工具栏在滚动容器里，留在里面会被裁）。
+   与 .wb-idea-foldmenu 同一套：容器 pointer-events:none 防继承、z-index 高于面板宿主 55。 */
+.wb-tagmenu { position:fixed; z-index:60; min-width:210px; max-width:280px; padding:6px;
+  background:var(--dsw-alias-bg-layer-2, #1c1c1f); border:1px solid var(--wb-line);
+  border-radius:10px; box-shadow:0 12px 32px rgba(0,0,0,.45); pointer-events:none; }
+.wb-tagmenu > * { pointer-events:auto; }
+.wb-tagmenu-search { width:100%; box-sizing:border-box; background:var(--wb-sunk); border:1px solid var(--wb-line);
+  color:inherit; border-radius:var(--wb-r-1); padding:6px 8px; font:inherit; font-size:12px; margin-bottom:5px; }
+.wb-tagmenu-list { max-height:220px; overflow-y:auto; display:flex; flex-direction:column; gap:1px; }
+.wb-tagmenu-item { display:flex; align-items:center; gap:7px; width:100%; text-align:left; border:none;
+  background:transparent; color:var(--wb-ink-1); font:inherit; font-size:12.5px; padding:6px 8px;
+  border-radius:7px; cursor:pointer; }
+.wb-tagmenu-item:hover { background:color-mix(in srgb, var(--wb-ink-1) 8%, transparent); }
+.wb-tagmenu-item.on { background:var(--wb-accent-soft); font-weight:600; }
+.wb-tagmenu-check { width:12px; flex:none; color:var(--wb-accent); }
+.wb-tagmenu-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.wb-tagmenu-cnt { flex:none; font-size:11px; color:var(--wb-ink-3); font-variant-numeric:tabular-nums; }
+.wb-tagmenu-empty { padding:10px 8px; font-size:12px; color:var(--wb-ink-3); text-align:center; }
+.wb-tagmenu-foot { display:flex; gap:6px; align-items:center; margin-top:5px; padding-top:5px;
+  border-top:1px solid var(--wb-line-soft); }
+
+/* 「AI 总结本地文档」弹窗（LocalDocModal.tsx）：路径 + 浏览 + 执行收在一处，
+   工具栏因此只留一个按钮（原先三个裸控件横在工具栏里占一整行）。 */
+.wb-doc-modal { width:min(680px, 94vw); }
+.wb-doc-path { display:flex; gap:6px; align-items:center; margin-bottom:8px; }
+.wb-doc-path input { flex:1; min-width:0; background:var(--wb-sunk); border:1px solid var(--wb-line); color:inherit;
+  border-radius:var(--wb-r-1); padding:7px 10px; font:inherit; font-size:12.5px; }
+.wb-doc-nav { display:flex; gap:6px; align-items:center; margin-bottom:8px; }
+.wb-doc-crumb { flex:1; min-width:0; font-size:12px; word-break:break-all; color:var(--wb-ink-3);
+  background:var(--wb-sunk); border:1px solid var(--wb-line); border-radius:6px; padding:4px 8px; }
+.wb-doc-error { color:#E74C3C; font-size:12px; margin-bottom:6px; }
+.wb-doc-loading { padding:16px; color:var(--wb-ink-3); font-size:13px; }
+.wb-doc-list { max-height:320px; overflow:auto; border:1px solid var(--wb-line); border-radius:8px; }
+.wb-doc-empty { padding:12px; color:var(--wb-ink-3); font-size:12px; }
+.wb-doc-row { display:flex; align-items:center; gap:8px; padding:6px 8px; cursor:pointer;
+  border-bottom:1px solid var(--wb-line-soft); }
+.wb-doc-row:last-child { border-bottom:none; }
+.wb-doc-row:hover { background:color-mix(in srgb, var(--wb-ink-1) 5%, transparent); }
+.wb-doc-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px;
+  display:inline-flex; align-items:center; gap:6px; }
+.wb-doc-acts { display:flex; gap:6px; flex:none; }
 
 .wb-kb-list { border:1px solid var(--wb-line-soft); border-radius:var(--wb-r-2); overflow:hidden; background:var(--wb-surface); }
 .wb-kb-group { display:block; }

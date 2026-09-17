@@ -21,7 +21,14 @@ export interface DictionaryLike {
 }
 
 type Section = 'general' | 'notify' | 'wechat' | 'dict'
-type DictKind = 'type' | 'status' | 'priority' | 'idea_kind'
+/**
+ * 可管理的字典种类。
+ *
+ * ⚠️ `knowledge_kind` 原先漏了 —— 知识库类型的出厂 `config` 是空的（没有颜色），
+ * 而这里又没有入口，用户连手工补色的地方都没有（现象：知识库 Tab/徽标全灰，且无法自救）。
+ * 字典表里本来就有这 4 条，缺的只是入口。
+ */
+export type DictKind = 'type' | 'status' | 'priority' | 'knowledge_kind' | 'idea_kind'
 
 /** 草稿通知类型选项（与后端 policy.draftNotifyKinds 的取值对齐）。 */
 const DRAFT_NOTIFY_OPTIONS: Array<{ code: string; label: string }> = [
@@ -44,6 +51,7 @@ const DICT_KINDS: Array<{ key: DictKind; label: string }> = [
   { key: 'type', label: '任务类型' },
   { key: 'status', label: '状态' },
   { key: 'priority', label: '优先级' },
+  { key: 'knowledge_kind', label: '知识库类型' },
   { key: 'idea_kind', label: '点子类型' },
 ]
 

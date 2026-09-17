@@ -61,17 +61,20 @@ export const DICTIONARY_SEEDS: DictionarySeed[] = [
   { kind: 'draft_kind', code: 'idea_tasks', name: '点子落地任务', sortOrder: 90, config: {} },
 
   // 知识库分类
-  { kind: 'knowledge_kind', code: 'note', name: '笔记', sortOrder: 10, config: {} },
-  { kind: 'knowledge_kind', code: 'lesson', name: '经验教训', sortOrder: 20, config: {} },
-  { kind: 'knowledge_kind', code: 'decision', name: '决策记录', sortOrder: 30, config: {} },
-  { kind: 'knowledge_kind', code: 'snippet', name: '片段/模板', sortOrder: 40, config: {} },
+  // ⚠️ 颜色是**字典数据**（用户可在「设置 → 字典管理」里改），不是 UI 里的硬编码调色板。
+  // 出厂值必须带 color：第一版留空 `{}`，于是知识库的 Tab 圆点 / 行前缀点 / 类型徽标
+  // 全落到同一个灰色兜底 —— 用户看到的就是「设计稿有颜色、装盘后没有」。
+  { kind: 'knowledge_kind', code: 'note', name: '笔记', sortOrder: 10, config: { color: '#4F86F7' } },
+  { kind: 'knowledge_kind', code: 'lesson', name: '经验教训', sortOrder: 20, config: { color: '#E7634C' } },
+  { kind: 'knowledge_kind', code: 'decision', name: '决策记录', sortOrder: 30, config: { color: '#8B7BE8' } },
+  { kind: 'knowledge_kind', code: 'snippet', name: '片段/模板', sortOrder: 40, config: { color: '#2E9B7B' } },
 
-  // 点子类型
-  { kind: 'idea_kind', code: 'project', name: '项目点子', sortOrder: 10, config: {} },
-  { kind: 'idea_kind', code: 'skill', name: '技能点子', sortOrder: 20, config: {} },
-  { kind: 'idea_kind', code: 'plugin', name: '插件点子', sortOrder: 30, config: {} },
-  { kind: 'idea_kind', code: 'spark', name: '突发奇想', sortOrder: 40, config: {} },
-  { kind: 'idea_kind', code: 'random', name: '莫名其妙的点子', sortOrder: 50, config: {} },
+  // 点子类型（同样必须有 color：卡片瀑布的左侧色条与类型徽标都取它）
+  { kind: 'idea_kind', code: 'project', name: '项目点子', sortOrder: 10, config: { color: '#4F86F7' } },
+  { kind: 'idea_kind', code: 'skill', name: '技能点子', sortOrder: 20, config: { color: '#2E9B7B' } },
+  { kind: 'idea_kind', code: 'plugin', name: '插件点子', sortOrder: 30, config: { color: '#8B7BE8' } },
+  { kind: 'idea_kind', code: 'spark', name: '突发奇想', sortOrder: 40, config: { color: '#E7634C' } },
+  { kind: 'idea_kind', code: 'random', name: '莫名其妙的点子', sortOrder: 50, config: { color: '#D98E32' } },
 
   // 重复规则
   { kind: 'recurrence', code: 'none', name: '不重复', sortOrder: 10, config: {} },

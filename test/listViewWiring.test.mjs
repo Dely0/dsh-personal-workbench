@@ -11,6 +11,9 @@ import { readFileSync } from 'node:fs'
 const indexSource = readFileSync('src/client/index.tsx', 'utf8')
 const knowledgeSource = readFileSync('src/client/components/KnowledgeList.tsx', 'utf8')
 const ideaSource = readFileSync('src/client/components/IdeaCardGrid.tsx', 'utf8')
+const tabBarSource = readFileSync('src/client/components/TabBar.tsx', 'utf8')
+const taskListSource = readFileSync('src/client/components/TaskList.tsx', 'utf8')
+const settingsSource = readFileSync('src/client/components/SettingsModal.tsx', 'utf8')
 
 test('接线：知识库列表由 listPresentation 判定，组件不再自己过滤/排序', () => {
   assert.match(indexSource, /buildListPage\(\{/, '必须走唯一判定入口')
@@ -56,11 +59,13 @@ function stripComments(source) {
 test('接线：分类语义只派生一处（不许再写 kinds[0] ?? all）', () => {
   assert.match(knowledgeSource, /export function selectedKind/, '派生点在组件模块里')
   assert.match(indexSource, /tab: selectedKind\(knowledgeFilters\)/, '页面走 selectedKind')
-  assert.match(knowledgeSource, /current=\{selectedKind\(filters\)\}/, '工具条也走 selectedKind')
   assert.match(knowledgeSource, /const current = selectedKind\(filters\)/, '对账函数也走 selectedKind')
+  // 工具条已改用共用 TabBar（选中态由 `TabBar.isTabActive` 判），所以不再是 `current=` 那种写法
+  assert.match(knowledgeSource, /<TabBar tabs=\{tabs\} selected=\{filters\.kinds\}/, '工具条把选中集合交给 TabBar')
   // 允许 1 处：`selectedKind` 自己的实现。其余出现都是"同一语义第二处实现"。
   const rawDerivations = (stripComments(indexSource).match(/kinds\[0\]/g) ?? []).length
     + (stripComments(knowledgeSource).match(/kinds\[0\]/g) ?? []).length
+    + (stripComments(tabBarSource).match(/kinds\[0\]/g) ?? []).length
   assert.equal(rawDerivations, 1, `kinds[0] 只该出现在 selectedKind 里，实际 ${rawDerivations} 处`)
 })
 
@@ -163,15 +168,103 @@ test('样式：多选 ☑ 对键盘用户可见（只靠 hover 显形 = 焦点�
   assert.ok(focusRule !== null && /opacity:1/.test(focusRule[0]), '聚焦时必须显形')
 })
 
-test('样式：两处新 UI 的类名都真的定义了（否则渲染出来是裸元素）', () => {
+test('样式：新 UI 的类名都真的定义了（否则渲染出来是裸元素）', () => {
   const css = readFileSync('src/client/styles.ts', 'utf8')
-  for (const cls of ['.wb-kb-tabs', '.wb-kb-tab', '.wb-kb-list', '.wb-kb-row', '.wb-kb-ghead', '.wb-kb-pager', '.wb-kb-pnum',
-    '.wb-idea-cards', '.wb-idea-card2', '.wb-idea-pick', '.wb-idea-foldbtn', '.wb-idea-foldmenu']) {
+  for (const cls of ['.wb-kb-list', '.wb-kb-row', '.wb-kb-ghead', '.wb-kb-pager', '.wb-kb-pnum',
+    '.wb-idea-cards', '.wb-idea-card2', '.wb-idea-pick', '.wb-idea-foldbtn', '.wb-idea-foldmenu',
+    // 第二轮：通用 Tab（知识库 + 任务页共用）、标签「更多」浮层
+    '.wb-tabs', '.wb-tab', '.wb-tab-dot', '.wb-tab-cnt',
+    '.wb-kb-tags', '.wb-kb-tag', '.wb-tagmenu', '.wb-tagmenu-item', '.wb-tagmenu-search']) {
     assert.ok(css.includes(cls + ' ') || css.includes(cls + '{') || css.includes(cls + ','), `styles.ts 缺 ${cls}`)
   }
 })
 
-test('知识库组件：分类入口是 Tab 而不是下拉（这是本次改动的起点）', () => {
-  assert.match(knowledgeSource, /data-kind-tab=/)
-  assert.doesNotMatch(knowledgeSource, /<select[^>]*data-kind/, '分类不许再做成下拉')
+test('知识库与任务页共用同一个 Tab 组件（同一语义不写两遍）', () => {
+  assert.match(knowledgeSource, /import \{ ALL, buildTabs, TabBar, toggleTab, type TabItem \} from '\.\/TabBar\.js'/, '知识库用共用组件')
+  assert.match(indexSource, /import \{ ALL, buildTabs, TabBar, toggleTab \} from '\.\/components\/TabBar\.js'/, '任务页用共用组件')
+  // 两处都必须是 TabBar，不许谁偷偷再写一份自己的 Tab
+  assert.equal((knowledgeSource.match(/<TabBar/g) ?? []).length, 1)
+  assert.equal((indexSource.match(/<TabBar/g) ?? []).length, 1)
+  assert.doesNotMatch(knowledgeSource, /data-kind-tab/, '旧的自建 Tab 类名应已消失')
+})
+
+test('任务页：类型从多选下拉升为 Tab，且**其他下拉保留**', () => {
+  const listSection = indexSource.slice(indexSource.indexOf("view === 'list' &&"))
+  assert.match(listSection, /<TabBar/, '列表页有类型 Tab')
+  assert.doesNotMatch(listSection, /label="类型"/, '原来的「类型」多选下拉必须去掉')
+  assert.match(listSection, /label="状态"/, '状态下拉保留')
+  assert.match(listSection, /label="优先级"/, '优先级下拉保留')
+  // Tab 是单选 + Ctrl/Cmd 多选：走 toggleTab，不自己写选中逻辑
+  assert.match(listSection, /toggleTab\(/, '选中逻辑走共用纯函数')
+})
+
+test('任务页：类型 Tab 的条数由 countTasksByType 给出（排除类型维度自身）', () => {
+  assert.match(indexSource, /countTasksByType\(buildTaskTree\(/, '条数走纯函数')
+  assert.match(indexSource, /buildTabs\(taskTypeDicts, \{ \.\.\.byType, all \}/, '拼装走共用 buildTabs')
+})
+
+test('任务行：类型徽标已去掉（Tab 已表达类型），优先级/状态徽标仍在', () => {
+  const content = taskListSource.match(/const content = \([\s\S]*?\n  \)/)
+  assert.ok(content !== null, 'TaskRow 的 content 存在')
+  assert.doesNotMatch(content[0], /kind === 'type'/, '不该再渲染类型徽标')
+  assert.match(content[0], /kind === 'priority'/, '优先级仍在')
+  assert.match(content[0], /kind === 'status'/, '状态仍在')
+  // 4 列的默认栅格是按带类型徽标写的，去掉一列必须显式改列数，否则右侧会错位
+  assert.match(content[0], /gridTemplateColumns:/, '去掉一列后要显式改列宽')
+})
+
+test('设置页：字典管理里有「知识库类型」（原先漏了这个入口）', () => {
+  assert.match(settingsSource, /type DictKind = [^\n]*'knowledge_kind'/, 'DictKind 含 knowledge_kind')
+  assert.match(settingsSource, /\{ key: 'knowledge_kind', label: '知识库类型' \}/, '字典分区里有这个 Tab')
+  for (const key of ['type', 'status', 'priority', 'idea_kind']) {
+    assert.match(settingsSource, new RegExp(`\\{ key: '${key}'`), `原有分区不能丢：${key}`)
+  }
+})
+
+test('字典：知识库/点子类型的**出厂 config 必须带颜色**（否则 Tab 圆点与徽标全落灰色兜底）', () => {
+  const seed = readFileSync('src/db/seed.ts', 'utf8')
+  const knowledgeSeeds = seed.match(/\{ kind: 'knowledge_kind'[^\n]*/g) ?? []
+  const ideaSeeds = seed.match(/\{ kind: 'idea_kind'[^\n]*/g) ?? []
+  assert.equal(knowledgeSeeds.length, 4, 'knowledge_kind 种子 4 条')
+  assert.equal(ideaSeeds.length, 5, 'idea_kind 种子 5 条')
+  for (const line of [...knowledgeSeeds, ...ideaSeeds]) {
+    assert.match(line, /config: \{ color: '#[0-9A-Fa-f]{6}' \}/, `种子缺颜色：${line.slice(0, 60)}`)
+  }
+})
+
+test('迁移 16：给已存在的库回填这两类字典的颜色，且**不覆盖已有颜色**', () => {
+  // 归一化行尾：Windows 检出是 CRLF，正则里的 `\n` 会匹配不到
+  const schema = readFileSync('src/db/schema.ts', 'utf8').replace(/\r\n/g, '\n')
+  assert.match(schema, /export const SCHEMA_VERSION = 16/, '版本号推到 16')
+  const start = schema.indexOf('version: 16,')
+  assert.ok(start > 0, '有 version 16 的迁移')
+  const migration = schema.slice(start, schema.indexOf('\n]', start))
+  assert.match(migration, /knowledge_kind:/, '覆盖知识库类型')
+  assert.match(migration, /idea_kind:/, '覆盖点子类型')
+  // 已有颜色必须跳过 —— 否则用户自己配的色会被出厂值覆盖
+  assert.match(migration, /if \(typeof config\.color === 'string' && config\.color\.trim\(\) !== ''\) continue/, '已有颜色跳过')
+  assert.match(migration, /SELECT config FROM dictionaries WHERE kind = \? AND code = \?/, '先读后写')
+})
+
+test('分页档位：默认 10，可选 10/20/50/100', () => {
+  const presentation = readFileSync('src/client/listPresentation.ts', 'utf8')
+  assert.match(presentation, /PAGE_SIZES: readonly number\[\] = Object\.freeze\(\[10, 20, 50, 100\]\)/, '档位')
+  assert.match(presentation, /DEFAULT_PAGE_SIZE = 10/, '默认 10')
+})
+
+test('标签区：单行 + 「更多」浮层，且**不再只渲染前 12 个**（静默截断是禁区）', () => {
+  const tagFilter = readFileSync('src/client/components/TagFilter.tsx', 'utf8')
+  assert.match(tagFilter, /data-tagmore/, '有「更多」入口')
+  assert.match(tagFilter, /data-tagmenu/, '有浮层')
+  assert.doesNotMatch(knowledgeSource, /tagCounts\.slice\(0, 12\)/, '旧的"只显示前 12 个"必须消失')
+  // 浮层的定位前提与点子菜单一致：portal + fixed + 高于面板宿主
+  assert.match(tagFilter, /createPortal\(menu, document\.body\)/, '浮层 portal 到 body')
+  const css = readFileSync('src/client/styles.ts', 'utf8')
+  const rule = css.match(/\.wb-tagmenu \{[^}]*\}/)
+  assert.ok(rule !== null, 'styles.ts 有 .wb-tagmenu 规则')
+  assert.match(rule[0], /position:fixed/, 'fixed')
+  const menuZ = Number((rule[0].match(/z-index:(\d+)/) ?? [, '0'])[1])
+  const hostZ = Number((css.match(/\.wb-panel-host \{[^}]*z-index:\s*(\d+)/) ?? [, '0'])[1])
+  assert.ok(menuZ > hostZ, `标签浮层 z-index(${menuZ}) 必须高于面板宿主(${hostZ})`)
+  assert.match(css, /\.wb-kb-tags \{[^}]*flex-wrap:nowrap/, '标签区必须单行（不再 wrap 占多行）')
 })

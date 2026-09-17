@@ -65,8 +65,9 @@ export const DEFAULT_SORT_KEY: SortKey = 'updatedAt'
 /** 默认方向：更新时间倒序（与验收要求一致）。 */
 export const DEFAULT_SORT_DIR: SortDir = 'desc'
 
-export const PAGE_SIZES: readonly number[] = Object.freeze([50, 100, 200])
-export const DEFAULT_PAGE_SIZE = 50
+/** 每页条数档位。**默认 10**（用户要求）：列表区一屏约 7 行，10 条最接近"一屏看完、少滚"。 */
+export const PAGE_SIZES: readonly number[] = Object.freeze([10, 20, 50, 100])
+export const DEFAULT_PAGE_SIZE = 10
 
 /** 少于这个条数的组不单独占一行组头，并回下一组。 */
 export const MIN_GROUP = 6

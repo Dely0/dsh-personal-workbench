@@ -150,6 +150,29 @@ export function countTaskTreeBy<T>(roots: TaskTreeNode<T>[], keep: (task: T) => 
   return roots.reduce((sum, node) => sum + (keep(node.task) ? 1 : 0) + countTaskTreeBy(node.children, keep), 0)
 }
 
+/**
+ * 每个任务类型各有多少条 —— 供类型 Tab 的条数徽标使用（与知识库的 `tabCounts` 同语义）。
+ *
+ * ## 口径：**排除类型维度自身**
+ *
+ * 徽标要回答的是"**切过去能看到几条**"，所以计算时套用搜索 + 状态 + 优先级，
+ * 但**不能**套用当前的类型筛选 —— 否则切到某个类型后，其他 Tab 会一律显示 0。
+ * 按**每一行**计数（含树里的子任务），与列表里实际渲染出的行数口径一致。
+ */
+export function countTasksByType<T extends TaskLike>(
+  roots: TaskTreeNode<T>[],
+  filter: TaskFilterState,
+  typeCodes: readonly string[],
+): { byType: Record<string, number>; all: number } {
+  const withoutType: TaskFilterState = { ...filter, typeCodes: [] }
+  // 复用 countTaskTreeBy：条数口径与列表渲染（filterTaskTree + 同样的谓词）保持同一个实现
+  const byType: Record<string, number> = {}
+  for (const code of typeCodes) {
+    byType[code] = countTaskTreeBy(roots, (t) => matchesTaskFilter(t, withoutType) && t.typeCode === code)
+  }
+  return { byType, all: countTaskTreeBy(roots, (t) => matchesTaskFilter(t, withoutType)) }
+}
+
 const sameDay = (a: Date, b: Date): boolean => a.toDateString() === b.toDateString()
 
 /** 判断任务是否在某一天有有效截止时间，且未取消。日历标记统一使用该条件。 */

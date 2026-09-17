@@ -4,7 +4,7 @@
  */
 import type { DatabaseSync } from 'node:sqlite'
 
-export const SCHEMA_VERSION = 15
+export const SCHEMA_VERSION = 16
 
 export interface Migration {
   version: number
@@ -377,6 +377,47 @@ export const MIGRATIONS: Migration[] = [
       //   acknowledged_at —— 用户点了「知道了」：终态，但可重置
       db.exec('ALTER TABLE task_reminders ADD COLUMN skipped_at TEXT')
       db.exec('ALTER TABLE task_reminders ADD COLUMN acknowledged_at TEXT')
+    },
+  },
+  {
+    version: 16,
+    name: 'kind-colors',
+    up(db) {
+      /**
+       * 给「知识库分类」与「点子类型」回填出厂颜色。
+       *
+       * 背景：这两类字典的种子原先写的是空 `config: {}`（任务类型/状态/优先级一直有 color），
+       * 而知识库的 Tab 圆点、行前缀点、类型徽标，以及点子卡片的左侧色条都取 `config.color`，
+       * 取不到就统一落到灰色兜底 —— 用户看到的现象是「设计稿有颜色，装盘后全灰」。
+       *
+       * 为什么必须用迁移而不是只改种子：种子只在**首次安装**时 INSERT，已存在的库不会被更新，
+       * 现存用户（本机就是）改完种子依然是灰的。
+       *
+       * 只补**没有 color 的**行：用户若已经自己在「字典管理」里配过色，一律保留。
+       * 已重命名/停用的行也照补 —— 颜色与名字无关，缺了就补。
+       */
+      const DEFAULT_COLORS: Record<string, Record<string, string>> = {
+        knowledge_kind: { note: '#4F86F7', lesson: '#E7634C', decision: '#8B7BE8', snippet: '#2E9B7B' },
+        idea_kind: { project: '#4F86F7', skill: '#2E9B7B', plugin: '#8B7BE8', spark: '#E7634C', random: '#D98E32' },
+      }
+      const select = db.prepare('SELECT config FROM dictionaries WHERE kind = ? AND code = ?')
+      const update = db.prepare('UPDATE dictionaries SET config = ?, updated_at = ? WHERE kind = ? AND code = ?')
+      const at = new Date().toISOString()
+      for (const [kind, byCode] of Object.entries(DEFAULT_COLORS)) {
+        for (const [code, color] of Object.entries(byCode)) {
+          const row = select.get(kind, code) as { config: string } | undefined
+          if (row === undefined) continue
+          let config: Record<string, unknown> = {}
+          try {
+            const parsed = JSON.parse(row.config) as unknown
+            if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) config = parsed as Record<string, unknown>
+          } catch {
+            // config 不是合法 JSON（手工改过库）→ 当作空对象，只补颜色这一个字段
+          }
+          if (typeof config.color === 'string' && config.color.trim() !== '') continue
+          update.run(JSON.stringify({ ...config, color }), at, kind, code)
+        }
+      }
     },
   },
 ]

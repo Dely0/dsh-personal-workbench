@@ -17,6 +17,7 @@ const KNOWLEDGE_LIST = 'src/client/components/KnowledgeList.tsx'
 const IDEA_GRID = 'src/client/components/IdeaCardGrid.tsx'
 const INDEX = 'src/client/index.tsx'
 const STYLES = 'src/client/styles.ts'
+const TAB_BAR = 'src/client/components/TabBar.tsx'
 
 /** 每个变异：改哪个文件、怎么改、应该让哪些测试文件变红。 */
 const MUTATIONS = [
@@ -43,11 +44,11 @@ const MUTATIONS = [
     tests: ['test/listPresentation.test.mjs', 'test/listViews.test.mjs'],
   },
   {
-    name: 'Tab 高亮写死 all（切 Tab 看不到高亮变化）',
-    file: KNOWLEDGE_LIST,
-    from: 'current={selectedKind(filters)}',
-    to: "current={'all'}",
-    tests: ['test/listViewWiring.test.mjs'],
+    name: 'Tab 高亮写死「全部」（切 Tab 看不到高亮变化）',
+    file: TAB_BAR,
+    from: "  if (code === ALL) return selected.length === 0 || selected.every((c) => c === ALL) || selected.includes(ALL)\n  return selected.includes(code)",
+    to: '  void selected\n  return code === ALL',
+    tests: ['test/listViews.test.mjs'],
   },
   {
     name: '标签两侧归一化不一致（chip 点下去 0 条）',
@@ -59,7 +60,7 @@ const MUTATIONS = [
   {
     name: '存下来的分类不与字典对账（删过分类的用户看到空列表且无高亮）',
     file: KNOWLEDGE_LIST,
-    from: '  if (knownCodes.includes(current)) return null\n  return { ...filters, kinds: [\'all\'], page: 0 }',
+    from: "  if (knownCodes.length === 0) return null\n  if (knownCodes.includes(current)) return null\n  return { ...filters, kinds: [ALL], page: 0 }",
     to: '  void knownCodes\n  return null',
     tests: ['test/listViews.test.mjs'],
   },
@@ -101,7 +102,7 @@ const MUTATIONS = [
   {
     name: '「清空筛选」按钮的可用性判据改成恒假（永远点不动）',
     file: KNOWLEDGE_LIST,
-    from: "  return f.keyword.trim() !== '' || f.tags.length > 0 || selectedKind(f) !== 'all'",
+    from: "  return f.keyword.trim() !== '' || f.tags.length > 0 || selectedKind(f) !== ALL",
     to: '  return false',
     tests: ['test/listViews.test.mjs'],
   },

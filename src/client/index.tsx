@@ -10,6 +10,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, use
 import {
   buildTaskTree,
   countTaskTreeBy,
+  countTasksByType,
   createTaskSorter,
   filterTaskTree,
   isTaskDueOnDay,
@@ -29,7 +30,7 @@ import {
   ENTRY_TITLE, OFFICIAL_MAIN_SLOT, OFFICIAL_OVERLAY_SLOT, OFFICIAL_PANEL_LIST_SLOT,
 } from './entryContract.js'
 import { Modal } from './components/Modal.js'
-import { SettingsModal } from './components/SettingsModal.js'
+import { SettingsModal, type DictKind } from './components/SettingsModal.js'
 import { DraftBanner, type DraftConfirmOutcome } from './components/DraftBanner.js'
 import { MarkdownText } from './components/MarkdownText.js'
 import { ToastHost, useToasts } from './components/Toast.js'
@@ -46,6 +47,8 @@ import type {
 } from '../shared/contracts.js'
 import { Icon } from './components/Icon.js'
 import { Badge, MultiSelectDropdown, TaskTreeRows, countTaskTree } from './components/TaskList.js'
+import { ALL, buildTabs, TabBar, toggleTab } from './components/TabBar.js'
+import { LocalDocModal, type LocalDirListing } from './components/LocalDocModal.js'
 import { KnowledgeList, KnowledgePager, KnowledgeToolbar, EMPTY_KNOWLEDGE_FILTERS, kindTabs, reconcileKnowledgeKinds, selectedKind, type KnowledgeFilters } from './components/KnowledgeList.js'
 import { IdeaCardGrid, type IdeaCardItem } from './components/IdeaCardGrid.js'
 import {
@@ -751,7 +754,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   const [reminderChannel, setReminderChannel] = useState<ReminderChannelView | null>(null)
   const [reminderOptions, setReminderOptions] = useState<ReminderOptionsView | null>(null)
   const [reminderBusy, setReminderBusy] = useState(false)
-  const [dictKind, setDictKind] = useState<'type' | 'status' | 'priority' | 'idea_kind'>('type')
+  const [dictKind, setDictKind] = useState<DictKind>('type')
   const [dictForm, setDictForm] = useState<{ name: string; code: string; color: string; sortOrder: number } | null>(null)
   const [dictEditCode, setDictEditCode] = useState<string | null>(null)
   const [dictError, setDictError] = useState<string | null>(null)
@@ -775,9 +778,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   const [knowledgeRefreshKey, setKnowledgeRefreshKey] = useState(0)
   const [localDocPath, setLocalDocPath] = useState('')
   const [filePickerOpen, setFilePickerOpen] = useState(false)
-  const [filePickerDir, setFilePickerDir] = useState('')
-  const [filePickerParent, setFilePickerParent] = useState<string | null>(null)
-  const [filePickerEntries, setFilePickerEntries] = useState<Array<{ name: string; path: string; isDirectory: boolean; isFile: boolean; hidden: boolean }>>([])
+  const [filePickerListing, setFilePickerListing] = useState<LocalDirListing | null>(null)
   const [filePickerLoading, setFilePickerLoading] = useState(false)
   const [filePickerError, setFilePickerError] = useState<string | null>(null)
   const [taskKnowledge, setTaskKnowledge] = useState<KnowledgeEntry[]>([])
@@ -1503,14 +1504,13 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
     }
   }
 
-  const loadFilePickerDir = async (path?: string): Promise<void> => {
+  const loadFilePickerDir = async (path?: string | null): Promise<void> => {
     setFilePickerLoading(true); setFilePickerError(null)
     try {
-      const qs = path === undefined || path === '' ? '' : `?path=${encodeURIComponent(path)}`
-      const res = await api<{ path: string; parent: string | null; entries: Array<{ name: string; path: string; isDirectory: boolean; isFile: boolean; hidden: boolean }> }>(`/api/workbench/knowledge/list-local-dir${qs}`)
-      setFilePickerDir(res.path)
-      setFilePickerParent(res.parent)
-      setFilePickerEntries(res.entries)
+      // `null` = 要看「此电脑」（盘符列表）；不传 = 默认落在主目录
+      const qs = path === undefined || path === null || path === '' ? '' : `?path=${encodeURIComponent(path)}`
+      const res = await api<LocalDirListing>(`/api/workbench/knowledge/list-local-dir${qs}`)
+      setFilePickerListing(res)
     } catch (e) {
       setFilePickerError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -1530,7 +1530,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
     }
     setLocalDocPath(entry.path)
     setFilePickerOpen(false)
-    setNotice('已选择本地文件，可点击“AI 总结本地文档”')
+    setNotice('已选择本地文件，可点击「开始总结」')
   }
 
   const pickAndSummarizeLocalFile = (entry: { path: string; isDirectory: boolean; isFile: boolean }): void => {
@@ -1767,6 +1767,16 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
     const source = archivedMode ? archivedTasks : tasks
     return filterTaskTree(buildTaskTree(source, undefined, taskSorter), (t) => matchesTaskFilter(t, taskFilter))
   }, [archivedMode, archivedTasks, tasks, taskSorter, taskFilter])
+  /**
+   * 任务页的类型 Tab：条数按"搜索 + 状态 + 优先级"算，**不含类型自身** ——
+   * 每个 Tab 显示的是"切过去能看到几条"（与知识库的 Tab 徽标同一套口径，走同一个 buildTabs）。
+   */
+  const taskTypeDicts = useMemo(() => dictOf('type'), [dictOf])
+  const taskTypeTabs = useMemo(() => {
+    const source = archivedMode ? archivedTasks : tasks
+    const { byType, all } = countTasksByType(buildTaskTree(source, undefined, taskSorter), taskFilter, taskTypeDicts.map((d) => d.code))
+    return buildTabs(taskTypeDicts, { ...byType, all }, { includeOther: false })
+  }, [archivedMode, archivedTasks, tasks, taskSorter, taskFilter, taskTypeDicts])
 
   /**
    * 知识库：把「条目 + 筛选状态」交给 `listPresentation.ts` 判定，组件只渲染结果。
@@ -2496,45 +2506,20 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
           </div>
         </div>
       )}
-      {filePickerOpen && (
-        <div className="wb-modal-mask" onClick={() => setFilePickerOpen(false)}>
-          <div className="wb-modal" style={{ width: 'min(640px, 94vw)' }} onClick={(e) => e.stopPropagation()}>
-            <h4><Icon name="folder" />选择本地文档</h4>
-            <p>浏览并选择一个文件；目录可点击进入，文件可“选择”或“选择并 AI 总结”。</p>
-            <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
-              <button className="wb-btn" disabled={filePickerParent === null || filePickerLoading} onClick={() => filePickerParent !== null && void loadFilePickerDir(filePickerParent)}>上级</button>
-              <code style={{ flex: 1, fontSize: 12, wordBreak: 'break-all', color: 'var(--dsw-alias-label-secondary)', background: 'var(--dsw-alias-bg-base,#17171a)', border: '1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.15))', borderRadius: 6, padding: '4px 8px' }}>{filePickerDir || '加载中…'}</code>
-              <button className="wb-btn" onClick={() => void loadFilePickerDir()}>主页</button>
-            </div>
-            {filePickerError !== null && <div style={{ color: '#E74C3C', fontSize: 12, marginBottom: 6 }}>{filePickerError}</div>}
-            {filePickerLoading ? (
-              <div style={{ padding: 16, color: '#999', fontSize: 13 }}>加载中…</div>
-            ) : (
-              <div style={{ maxHeight: 320, overflow: 'auto', border: '1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.15))', borderRadius: 8 }}>
-                {filePickerEntries.length === 0 && <div style={{ padding: 12, color: '#999', fontSize: 12 }}>此目录没有可选择的文件</div>}
-                {filePickerEntries.map((entry) => (
-                  <div key={entry.path} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px', cursor: 'pointer', borderBottom: '1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.06))' }} onClick={() => entry.isDirectory ? void loadFilePickerDir(entry.path) : undefined}>
-                    <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 13 }}>
-                      <Icon name={entry.isDirectory ? 'folder' : 'file'} size={13} /> {entry.name}
-                    </span>
-                    {entry.isDirectory ? (
-                      <button className="wb-btn" onClick={(e) => { e.stopPropagation(); void loadFilePickerDir(entry.path) }}>进入</button>
-                    ) : (
-                      <div style={{ display: 'flex', gap: 6 }}>
-                        <button className="wb-btn" onClick={(e) => { e.stopPropagation(); pickLocalFile(entry) }}>选择</button>
-                        <button className="wb-btn primary" onClick={(e) => { e.stopPropagation(); pickAndSummarizeLocalFile(entry) }}>选择并总结</button>
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-            <div className="wb-modal-actions">
-              <button className="wb-btn" onClick={() => setFilePickerOpen(false)}>取消</button>
-            </div>
-          </div>
-        </div>
-      )}
+      <LocalDocModal
+        open={filePickerOpen}
+        path={localDocPath}
+        listing={filePickerListing}
+        loading={filePickerLoading}
+        error={filePickerError}
+        busy={busy}
+        onPathChange={setLocalDocPath}
+        onClose={() => setFilePickerOpen(false)}
+        onNavigate={(target) => void loadFilePickerDir(target)}
+        onPick={pickLocalFile}
+        onPickAndSummarize={pickAndSummarizeLocalFile}
+        onSummarize={() => void summarizeLocalDoc()}
+      />
       {reminders.length > 0 && reminderModalOpen && (
         <Modal
           title={<><Icon name="bell" />到期提醒（{reminders.length}）</>}
@@ -2906,14 +2891,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
 
           {view === 'knowledge' && (
             <>
-              <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
-                <input style={{ flex: 1, minWidth: 180, background: 'var(--dsw-alias-bg-base,#17171a)', border: '1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.15))', color: 'inherit', borderRadius: 8, padding: '7px 10px' }} placeholder="本地文档路径或 file://，如 D:\docs\方案.md、/mnt/d/docs/方案.md" value={localDocPath} onChange={(e) => setLocalDocPath(e.target.value)} />
-                <button className="wb-btn" disabled={busy} onClick={openFilePicker}><Icon name="folder" />选择文件</button>
-                <button className="wb-btn primary" disabled={busy} onClick={() => void summarizeLocalDoc()}><Icon name="file" />AI 总结本地文档</button>
-              </div>
-              <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
-                <button className="wb-btn primary" onClick={() => { setKnowledgeEditId(null); setKnowledgeDraft({ title: '', contentMd: '', kindCode: 'note', tags: '', sourceTaskId: '', sourceReviewId: '', fileLink: '' }) }}><Icon name="plus" />新建</button>
-              </div>
+              {/* 本地文档三件套已收进弹窗（LocalDocModal）；工具栏只留一个按钮，和「新建」「清空筛选」同一行右对齐 */}
               <KnowledgeToolbar
                 filters={knowledgeFilters}
                 tabs={kindTabs(knowledgeDicts, knowledgePage.tabCounts)}
@@ -2921,6 +2899,9 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                 total={knowledgePage.total}
                 onChange={updateKnowledgeFilters}
                 onClear={() => updateKnowledgeFilters({ keyword: '', kinds: ['all'], tags: [], page: 0 })}
+                onCreate={() => { setKnowledgeEditId(null); setKnowledgeDraft({ title: '', contentMd: '', kindCode: 'note', tags: '', sourceTaskId: '', sourceReviewId: '', fileLink: '' }) }}
+                onSummarizeDoc={openFilePicker}
+                busy={busy}
               />
               {knowledgeEntries.length === 0 ? (
                 <div className="wb-empty" style={{ padding: '28px 18px' }}>
@@ -3076,17 +3057,18 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                   onClose={() => setOpenFilter(null)}
                   onChange={(codes) => setTaskFilter((prev) => ({ ...prev, priorityCodes: codes }))}
                 />
-                <MultiSelectDropdown
-                  label="类型"
-                  options={dictOf('type')}
-                  selected={taskFilter.typeCodes}
-                  open={openFilter === 'type'}
-                  onToggle={() => setOpenFilter((prev) => prev === 'type' ? null : 'type')}
-                  onClose={() => setOpenFilter(null)}
-                  onChange={(codes) => setTaskFilter((prev) => ({ ...prev, typeCodes: codes }))}
-                  alignRight
-                />
               </div>
+              {/* 类型从「多选下拉」升为 Tab（与知识库一致）；点=单选，Ctrl/Cmd+点=多选。
+                  状态与优先级仍保留下拉（同维度多选在那里更合适）。 */}
+              <TabBar
+                tabs={taskTypeTabs}
+                selected={taskFilter.typeCodes.length === 0 ? [ALL] : taskFilter.typeCodes}
+                onSelect={(code, multi) => setTaskFilter((prev) => {
+                  const next = toggleTab(prev.typeCodes.length === 0 ? [ALL] : prev.typeCodes, code, multi)
+                  return { ...prev, typeCodes: next.includes(ALL) ? [] : next }
+                })}
+                ariaLabel="任务类型"
+              />
               <div style={{ display: 'flex', gap: 8, marginBottom: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                 <span style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)' }}>排序</span>
                 <select

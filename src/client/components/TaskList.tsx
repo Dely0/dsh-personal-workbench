@@ -59,8 +59,9 @@ export function TaskRow({ task, dicts, onOpen, selected, bare = false }: { task:
   const content = (
     <>
       <div className="wb-row-title" style={{ fontWeight: 600 }}>{task.title}</div>
-      <div className="wb-row-meta">
-        <Badge dict={dicts.filter((d) => d.kind === 'type')} code={task.typeCode} />
+      {/* 类型徽标已去掉：类型升成列表上方的 Tab 后，行内再重复一次是冗余，腾出的宽度给标题。
+          `.wb-row-meta` 的默认列宽是按 4 列写的，所以这里显式给 3 列。 */}
+      <div className="wb-row-meta" style={{ gridTemplateColumns: '46px 56px minmax(88px, 1fr)' }}>
         <Badge dict={dicts.filter((d) => d.kind === 'priority')} code={task.priorityCode} />
         <Badge dict={dicts.filter((d) => d.kind === 'status')} code={task.statusCode} />
         <span className="wb-due">{dueText}</span>

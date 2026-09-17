@@ -1,5 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import {
@@ -12,6 +13,9 @@ import {
   reconcileKnowledgeKinds,
 } from '../lib/client/components/KnowledgeList.js'
 import { IdeaCardGrid, folderMenuAnchor, placeFolderMenu } from '../lib/client/components/IdeaCardGrid.js'
+import { ALL, buildTabs, isTabActive, toggleTab } from '../lib/client/components/TabBar.js'
+import { filterTagOptions, pinnedVisibleTags, visibleTags } from '../lib/client/components/TagFilter.js'
+import { EMPTY_TASK_FILTER, countTasksByType } from '../lib/client/taskFilterSort.js'
 import { placePopover } from '../lib/client/popoverPlacement.js'
 import { buildListPage, toContentItem } from '../lib/client/listPresentation.js'
 
@@ -99,12 +103,79 @@ test('KnowledgeToolbar: Tab 是 Tab 页而不是下拉（长列表不再需要�
     onChange: () => {},
     onClear: () => {},
   }))
-  assert.match(html, /data-kind-tab="all"/)
-  assert.match(html, /data-kind-tab="note"/)
-  assert.match(html, /data-kind-tab="lesson"/)
+  assert.match(html, /data-tabbar/, '有 Tab 条')
+  assert.match(html, /data-tab="all"/)
+  assert.match(html, /data-tab="note"/)
+  assert.match(html, /data-tab="lesson"/)
   assert.doesNotMatch(html, /<select[^>]*data-kind/, '分类不许再是下拉')
   assert.match(html, /全部/, '有「全部」入口')
   assert.match(html, /data-kb-search/, '有搜索框')
+})
+
+test('kindTabs: 知识类型带字典里的颜色（不再一律落灰色兜底）', () => {
+  const tabs = kindTabs(KINDS, { all: 3, note: 2, lesson: 1 })
+  assert.equal(tabs.find((t) => t.code === 'note')?.color, '#4F86F7', '沿用字典里的 color')
+  assert.equal(tabs[0].color, undefined, '「全部」不带点')
+})
+
+test('KnowledgeToolbar: 三个按钮（新建 / AI 总结 / 清空筛选）在同一条工具栏里右对齐', () => {
+  const page = pageOf([entry('a')])
+  const html = renderToStaticMarkup(KnowledgeToolbar({
+    filters: EMPTY_KNOWLEDGE_FILTERS,
+    tabs: kindTabs(KINDS, page.tabCounts),
+    tagCounts: [], total: 1,
+    onChange: () => {}, onClear: () => {}, onCreate: () => {}, onSummarizeDoc: () => {},
+  }))
+  assert.match(html, /data-kb-new[^>]*>.*新建/, '新建按钮')
+  assert.match(html, /data-kb-summarize[^>]*>.*AI 总结本地文档/, 'AI 总结按钮')
+  assert.match(html, /data-kb-clear[^>]*>.*清空筛选/, '清空筛选按钮')
+  // 三者必须在**同一个** `.wb-kb-bar` 里（用户要的一行右对齐）
+  const bar = html.match(/<div class="wb-kb-bar">[\s\S]*?<\/div>/)?.[0] ?? ''
+  assert.ok(bar.includes('data-kb-new') && bar.includes('data-kb-summarize') && bar.includes('data-kb-clear'), '三个按钮都在工具栏这一行')
+  // 右对齐靠一个 spacer 把按钮推过去
+  assert.match(bar, /wb-kb-spacer/, '有 spacer 把按钮推到右侧')
+  // 本地文档路径输入框已收进弹窗，工具栏里不该再有它
+  assert.doesNotMatch(bar, /本地文档路径/, '工具栏不再放路径输入框')
+})
+
+test('KnowledgeToolbar: 按钮不会被 flex 压成竖排（三重宽度保护写在 CSS 里）', () => {
+  const css = readFileSync('src/client/styles.ts', 'utf8')
+  const barRule = css.match(/\.wb-kb-bar \{[^}]*\}/)
+  assert.ok(barRule !== null, '.wb-kb-bar 规则存在')
+  const childRule = css.match(/\.wb-kb-bar > \* \{[^}]*\}/)
+  assert.ok(childRule !== null, '有 `.wb-kb-bar > *` 保护规则')
+  assert.match(childRule[0], /flex:none/, '按钮不许被压缩')
+  assert.match(childRule[0], /white-space:nowrap/, '不许逐字换行成竖排')
+  // 唯一可缩的是搜索框与 spacer
+  const search = css.match(/\.wb-kb-search \{[^}]*\}/)
+  assert.ok(search !== null && /flex:1 1 auto/.test(search[0]), '搜索框可缩（宽度不够时降它）')
+  assert.match(search[0], /min-width:\d+px/, '搜索框要给下限，别缩成 0')
+})
+
+test('KnowledgeToolbar: 切 Tab / 清空 / 新建都只回传意图，不自己算状态', () => {
+  const page = pageOf([entry('a', { kindCode: 'note' }), entry('b', { kindCode: 'lesson' })])
+  const patches = []
+  const html = renderToStaticMarkup(KnowledgeToolbar({
+    filters: { ...EMPTY_KNOWLEDGE_FILTERS, kinds: ['note'] },
+    tabs: kindTabs(KINDS, page.tabCounts),
+    tagCounts: page.tagCounts, total: 2,
+    onChange: (patch) => patches.push(patch), onClear: () => patches.push('clear'), onCreate: () => patches.push('new'), onSummarizeDoc: () => patches.push('sum'),
+  }))
+  assert.ok(html.length > 0)
+  assert.deepEqual(patches, [], '渲染期不许触发任何回调（副作用只在交互里）')
+})
+
+test('KnowledgeToolbar: 多选时「全部」不高亮，选中的类型 aria-selected=true', () => {
+  const html = renderToStaticMarkup(KnowledgeToolbar({
+    filters: { ...EMPTY_KNOWLEDGE_FILTERS, kinds: ['note', 'lesson'] },
+    tabs: kindTabs(KINDS, { all: 2, note: 1, lesson: 1 }),
+    tagCounts: [], total: 2,
+    onChange: () => {}, onClear: () => {}, onCreate: () => {}, onSummarizeDoc: () => {},
+  }))
+  const allBtn = html.match(/<button[^>]*data-tab="all"[^>]*>/)?.[0] ?? ''
+  assert.match(allBtn, /aria-selected="false"/, '多选时「全部」不选中')
+  const noteBtn = html.match(/<button[^>]*data-tab="note"[^>]*>/)?.[0] ?? ''
+  assert.match(noteBtn, /aria-selected="true"/, '选中的类型要 aria-selected')
 })
 
 test('KnowledgeToolbar: 标签 chip 显示各自条数，选中项高亮', () => {
@@ -115,7 +186,7 @@ test('KnowledgeToolbar: 标签 chip 显示各自条数，选中项高亮', () =>
     tagCounts: page.tagCounts,
     total: page.total,
     onChange: () => {},
-    onClear: () => {},
+    onClear: () => {}, onCreate: () => {}, onSummarizeDoc: () => {},
   }))
   assert.match(html, /data-kb-tag="踩坑"/)
   assert.match(html, /data-kb-tag="DSH"/)
@@ -335,4 +406,96 @@ test('placePopover 的 prefer：菜单要往下弹，选择器要往上弹（同
   assert.equal(placePopover({ anchor, viewport: both, menu }).side, 'top', '缺省仍是往上（模型选择器的老行为）')
   assert.equal(placePopover({ anchor, viewport: both, menu, prefer: 'bottom' }).side, 'bottom', 'prefer=bottom 时往下')
   assert.equal(placePopover({ anchor, viewport: both, menu, prefer: 'bottom' }).top, 236)
+})
+
+/* ------------------------------ 分类 Tab（纯函数，两页共用） ------------------------------ */
+
+test('toggleTab: 点击 = 单选；Ctrl/Cmd 点 = 多选切换', () => {
+  assert.deepEqual(toggleTab([ALL], 'note', false), ['note'], '单选替换')
+  assert.deepEqual(toggleTab(['note'], 'lesson', false), ['lesson'], '单选再点别的是替换')
+  assert.deepEqual(toggleTab([ALL], 'note', true), ['note'], '第一次多选：从"全部"进入具体类型')
+  assert.deepEqual(toggleTab(['note'], 'lesson', true), ['note', 'lesson'], '多选累加')
+  assert.deepEqual(toggleTab(['note', 'lesson'], 'note', true), ['lesson'], '再点已选的 = 取消')
+  assert.deepEqual(toggleTab(['note'], 'note', true), [ALL], '取消最后一个 → 回到"全部"')
+  assert.deepEqual(toggleTab(['note', 'lesson'], ALL, true), [ALL], 'Ctrl 点"全部" = 清空')
+  assert.deepEqual(toggleTab([ALL], ALL, false), [ALL], '点"全部"就是全部')
+})
+
+test('isTabActive: 「全部」只在真的全选时高亮（多选时不该亮）', () => {
+  assert.equal(isTabActive([ALL], ALL), true)
+  assert.equal(isTabActive([ALL], 'note'), false)
+  assert.equal(isTabActive(['note'], ALL), false, '选了具体类型时"全部"不高亮')
+  assert.equal(isTabActive(['note'], 'note'), true)
+  assert.equal(isTabActive(['note', 'lesson'], 'lesson'), true)
+  assert.equal(isTabActive(['note'], 'lesson'), false)
+})
+
+test('buildTabs: 全部 + 字典条目 + 「其他」，条数取自判定结果', () => {
+  const tabs = buildTabs(KINDS, { all: 10, note: 4, lesson: 3, decision: 2, snippet: 1, other: 0 })
+  assert.deepEqual(tabs.map((t) => t.code), [ALL, 'note', 'lesson', 'decision', 'snippet'], '没有「其他」时不加它')
+  assert.equal(tabs[0].count, 10)
+  assert.equal(tabs.find((t) => t.code === 'note')?.count, 4)
+  const withOther = buildTabs(KINDS, { all: 3, note: 2, other: 1 })
+  assert.equal(withOther.at(-1)?.code, 'other', '字典外的 kindCode 有去处（不静默丢件）')
+  assert.equal(withOther.at(-1)?.count, 1)
+  assert.equal(buildTabs(KINDS, { all: 3, note: 2, other: 1 }, { includeOther: false }).some((t) => t.code === 'other'), false, '可关掉')
+})
+
+/* ------------------------------ 标签筛选（纯函数） ------------------------------ */
+
+const tags = (n) => Array.from({ length: n }, (_, i) => ({ tag: 't' + i, count: n - i }))
+
+test('visibleTags: 只取前 N 个（按传入顺序 = 出现次数倒序）', () => {
+  assert.deepEqual(visibleTags(tags(10), 6).map((t) => t.tag), ['t0', 't1', 't2', 't3', 't4', 't5'])
+  assert.equal(visibleTags(tags(3), 6).length, 3, '不足 N 个就全部显示')
+  assert.deepEqual(visibleTags(tags(5), 0), [], 'limit 0 不崩')
+})
+
+test('pinnedVisibleTags: 已选标签必须常显，哪怕它排在前 N 个之外', () => {
+  const shown = pinnedVisibleTags(tags(10), ['t9'])
+  assert.ok(shown.some((t) => t.tag === 't9'), '选了「更多」里的标签后，单行上必须看得见（否则取消不掉）')
+  assert.equal(shown[0].tag, 't0', '前 N 个照旧')
+})
+
+test('filterTagOptions: 按子串过滤，大小写不敏感，空词全返回', () => {
+  const list = [{ tag: 'TTS', count: 2 }, { tag: '性能', count: 1 }, { tag: 'DSH', count: 3 }]
+  assert.equal(filterTagOptions(list, '').length, 3)
+  assert.deepEqual(filterTagOptions(list, 'tt').map((t) => t.tag), ['TTS'])
+  assert.deepEqual(filterTagOptions(list, 'dsh').map((t) => t.tag), ['DSH'])
+  assert.deepEqual(filterTagOptions(list, '不存在'), [])
+})
+
+/* ------------------------------ 任务页类型计数 ------------------------------ */
+
+const taskNode = (task, children = []) => ({ task, children })
+const taskLike = (id, typeCode, overrides = {}) => ({
+  id, parentId: null, title: id, description: '', statusCode: 'todo', priorityCode: 'p2',
+  typeCode, dueAt: null, completedAt: null, createdAt: '2024-01-01T00:00:00.000Z', ...overrides,
+})
+
+test('countTasksByType: 每个类型各多少条，且**不受当前类型筛选影响**', () => {
+  const tree = [
+    taskNode(taskLike('a', 'code_impl'), [taskNode(taskLike('a1', 'code_impl'))]),
+    taskNode(taskLike('b', 'feature_opt')),
+  ]
+  const base = { ...EMPTY_TASK_FILTER, typeCodes: [] }
+  const all = countTasksByType(tree, base, ['code_impl', 'feature_opt'])
+  assert.equal(all.all, 3, '按每一行计数（含子任务）')
+  assert.deepEqual(all.byType, { code_impl: 2, feature_opt: 1 })
+
+  // 已经筛选了 code_impl，但别的 Tab 的条数仍要显示"切过去能看到几条"
+  const filtered = countTasksByType(tree, { ...base, typeCodes: ['code_impl'] }, ['code_impl', 'feature_opt'])
+  assert.deepEqual(filtered.byType, { code_impl: 2, feature_opt: 1 }, '排除类型维度自身')
+})
+
+test('countTasksByType: 搜索/状态/优先级照常生效（它们与类型是叠加关系）', () => {
+  const tree = [
+    taskNode(taskLike('a', 'code_impl', { title: '登录闪退', statusCode: 'doing' })),
+    taskNode(taskLike('b', 'code_impl', { title: '登录慢', statusCode: 'todo' })),
+  ]
+  const base = { ...EMPTY_TASK_FILTER, typeCodes: [] }
+  assert.equal(countTasksByType(tree, { ...base, keyword: '登录' }, ['code_impl']).all, 2)
+  assert.equal(countTasksByType(tree, { ...base, keyword: '闪退' }, ['code_impl']).all, 1)
+  assert.equal(countTasksByType(tree, { ...base, statusCodes: ['doing'] }, ['code_impl']).all, 1)
+  assert.deepEqual(countTasksByType(tree, { ...base, statusCodes: ['doing'] }, ['code_impl']).byType, { code_impl: 1 })
 })
