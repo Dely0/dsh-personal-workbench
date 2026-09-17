@@ -4,7 +4,7 @@
  */
 import type { DatabaseSync } from 'node:sqlite'
 
-export const SCHEMA_VERSION = 17
+export const SCHEMA_VERSION = 18
 
 export interface Migration {
   version: number
@@ -456,6 +456,28 @@ export const MIGRATIONS: Migration[] = [
         CREATE INDEX idx_knowledge_recall_session ON knowledge_recall_log(session_id, id DESC);
         CREATE INDEX idx_knowledge_recall_created ON knowledge_recall_log(created_at DESC);
       `)
+    },
+  },
+  {
+    version: 18,
+    name: 'knowledge-supersede',
+    up(db) {
+      /**
+       * 知识条目的**过期 / 被取代**语义（P2）。
+       *
+       * 实证（用户 2026-09-17）：删掉一条写错的条目、新建一条修正条，两条并存了一段时间，
+       * 而"哪条取代了哪条"**只能靠正文里手写一句"本条修正已入库的另一条"**——
+       * 召回时两条都会被带出来，模型没有任何结构化的信号判断该信哪条。
+       *
+       * - `superseded_by_id`：本条已被哪条取代（非空即在召回时**压制**）。
+       * - `valid_until`：有效期截止（ISO 时间；到点后同样压制）。
+       *
+       * 两条都**不改历史行**（只加列、默认 NULL）：老条目行为完全不变，
+       * 直到有人显式标注取代关系。
+       */
+      db.exec('ALTER TABLE knowledge_entries ADD COLUMN superseded_by_id TEXT')
+      db.exec('ALTER TABLE knowledge_entries ADD COLUMN valid_until TEXT')
+      db.exec('CREATE INDEX idx_knowledge_superseded ON knowledge_entries(superseded_by_id)')
     },
   },
 ]

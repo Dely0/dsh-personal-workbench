@@ -14,10 +14,13 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  citationMatch,
   extractTerms,
   formatHintText,
   formatRelevance,
   formatRecallText,
+  idfOf,
+  isSuperseded,
   isTrivialQuery,
   normalizeText,
   mergeRecallOutcomes,
@@ -29,6 +32,7 @@ import {
   scoreCandidate,
   scoreFromRelevance,
   taskIdFromWorkspacePath,
+  termStatsOf,
   willInject,
 } from '../lib/shared/knowledgeRecall.js'
 
@@ -60,6 +64,24 @@ function candidate(over = {}, fromTask = false) {
   return { entry: entry(over), fromTask }
 }
 
+/**
+ * ## 为什么 v1.15.7 起测试要带一个"有规模"的语料
+ *
+ * P1b 给词按**信息量**加权（`idf = ln(1+N/df)/ln(1+N)`），而信息量是**语料的属性**：
+ * 单条语料上任何出现过的词都是 `df = N = 1 → idf = 1`，于是
+ * "关键词"与"常用字"在那样的 fixture 里**完全没有区别** ——
+ * 用它做断言，等于把这条改动最容易错的地方（谁该被压下去）留在无人看守的地方。
+ *
+ * 填充条目共享一批常用词（让它们的 `df ≈ N`、idf 趋近 0），
+ * 测试里真正关心的词只出现在被测条目里（`df = 1`、idf = 1）。
+ */
+const COMMON_TEXT = '修复 选择 文件 记录 说明 内容 使用 方法 相关 系统 数据 配置 检查 处理 问题 版本 修改 测试 结果 出'
+function filler(count = 40, extra = '') {
+  return Array.from({ length: count }, (_, index) => candidate({ id: `filler-${index}`, title: `填充条目 ${index}`, contentMd: `${COMMON_TEXT} ${extra}` }))
+}
+/** 单条语料的统计（给直接调 `scoreCandidate` 的断言用）。 */
+const statsOfOne = (cand) => termStatsOf([cand])
+
 const NOW = new Date('2026-09-17T00:00:00.000Z')
 
 test('抽词：汉字逐字、拉丁按词，停用词与纯数字被丢掉', () => {
@@ -87,38 +109,51 @@ test('琐碎消息：寒暄与过短提问不检索（但调用方能区分"跳�
 test('标题命中 > 标签命中 > 正文命中（权重次序不可反）', () => {
   /**
    * 用**拉丁词 `ab`** 当查询：它被当成一个关键词（不像单字中文会被判琐碎），
-   * 于是三个候选的"长度因子"与"覆盖率"完全一致，分数差异**只来自权重**
-   * （0.55 / 0.45 / 0.25）——不会被其他因子干扰。
+   * 于是三个候选的强度因子与覆盖率完全一致，分数差异**只来自权重**
+   * （0.55 / 0.45 / 0.25）。
    *
-   * ⚠️ 顺带钉住一条**刻意的口径**：关键词只有 1 个时，长度因子只有 1/3，
-   * 于是**任何**字段的单命中都够不到阈值（标题 0.183 / 标签 0.15 / 正文 0.083）。
-   * 也就是说"只给一个笼统的词就指望带出知识"是不成立的 ——
-   * 提问要么落在标题/标签上，要么得给出几个具体词。这是噪声控制的代价，写在文档里而不是靠猜。
-   *
-   * 这条测试踩过两次坑，都留在注释里：
-   * 1. 用「阈值」当查询时，只含"阈"的候选覆盖率只有 1/2，三档的次序读不出来；
-   * 2. 占位标题曾用「无关标题」，它的「关」被查询词命中、白送覆盖率 —— 占位标题一律「无题」。
+   * ⚠️ 口径提醒（v1.15.7 变了）：单条语料上 `ab` 的 `df = N = 1` → `idf = 1`
+   * → 强度因子饱和、覆盖率 1 → 三个档位**直接等于权重本身**。
+   * 于是"只给一个词"在**信息量足够**时是能带出知识的（这是 IDF 想要的效果：
+   * 一个只出现在一条条目里的词，本身就是很强的信号）；
+   * 但一个**笼统**的词仍然不行 —— 见下面第二个断言（把它放进 40 条常用语料里）。
    */
   const q = 'ab'
-  const scoreOf = (over) => scoreCandidate(candidate(over), { terms: extractTerms(q), now: NOW })
-  const titleHit = scoreOf({ id: 'a', title: 'ab 的坑' })
-  const tagHit = scoreOf({ id: 'b', title: '无题', tags: ['ab'] })
-  const bodyHit = scoreOf({ id: 'c', title: '无题', contentMd: '这里提到 ab' })
-  const expected = (weight) => weight * (1 / 3) * (0.5 + 0.5 * 1) // 命中 1 个词、覆盖率 1
-  assert.equal(titleHit?.score, expected(0.55), '标题档 = 0.55 × 1/3 × 1')
-  assert.equal(tagHit?.score, expected(0.45), '标签档 = 0.45 × 1/3 × 1')
-  assert.equal(bodyHit?.score, expected(0.25), '正文档 = 0.25 × 1/3 × 1')
+  const titleCand = candidate({ id: 'a', title: 'ab 的坑' })
+  const tagCand = candidate({ id: 'b', title: '无题', tags: ['ab'] })
+  const bodyCand = candidate({ id: 'c', title: '无题', contentMd: '这里提到 ab' })
+  const scoreOf = (cand) => scoreCandidate(cand, { terms: extractTerms(q), now: NOW, stats: statsOfOne(cand) })
+  const titleHit = scoreOf(titleCand)
+  const tagHit = scoreOf(tagCand)
+  const bodyHit = scoreOf(bodyCand)
+  assert.equal(titleHit?.score, 0.55, '标题档 = 权重 × 饱和强度 × 覆盖率 1')
+  assert.equal(tagHit?.score, 0.45, '标签档')
+  assert.equal(bodyHit?.score, 0.25, '正文档（0.25 < 阈值 → 永远不过线）')
   assert.ok((titleHit?.score ?? 0) > (tagHit?.score ?? 0), '标题命中必须高于标签命中')
   assert.ok((tagHit?.score ?? 0) > (bodyHit?.score ?? 0), '标签命中必须高于正文命中')
-  assert.ok(expected(0.55) < RECALL_DEFAULTS.minScore, '单关键词的标题命中仍不过阈值（刻意的：一个笼统词不足以带出知识）')
+
+  /**
+   * 笼统的单关键词**仍然过不了**（这是"按信息量加权"的核心判据）：
+   * 把「条」放进 40 条都含它的语料 → `df = N` → `idf ≈ 0.19` →
+   * 强度只有 `0.19/0.6 ≈ 0.31` → 标题档 `0.55 × 0.31 × 1 ≈ 0.17`，连提示档都够不到。
+   */
+  const common = recallKnowledge({
+    query: '条',
+    candidates: [candidate({ id: 'x', title: '条目', contentMd: COMMON_TEXT }), ...filler()],
+    now: NOW,
+  })
+  assert.equal(common.hits.length, 0, '笼统的单关键词不得过线（换了量纲这条判据仍然成立）')
+  assert.ok(idfOf(termStatsOf([...filler()].map((c) => c)), '条') < 0.3, '前置：常用字的 idf 必须很低')
+
   /**
    * 经 `recallKnowledge` 走一遍，确认"过不了阈值的那些"被如实记成 `droppedByScore`
    * 而不是被悄悄丢掉 —— `matched` 与命中集必须能对上账。
    */
   const body = recallKnowledge({ query: q, candidates: [candidate({ id: 'c', title: '无题', contentMd: '这里提到 ab' })], now: NOW })
-  assert.equal(body.hits.length, 0, '正文 1 个词 = 0.083，低于阈值，不注入')
+  assert.equal(body.hits.length, 0, '正文 1 个词 = 0.25，低于阈值，不注入')
   assert.equal(body.matched, 1, '但 matched 要记下"确实命中过"')
-  assert.equal(body.droppedByScore, 1)
+  // 0.25 落在提示档 [0.20, 0.33) 里 → 会留一行提示，不算被"完全挡下"
+  assert.equal(body.nearMisses.length, 1, '落在提示档里（账仍要能对上：不进 hits）')
 })
 
 test('正文弱命中会被阈值挡下：与"零命中"分属两种结论', () => {
@@ -130,7 +165,9 @@ test('正文弱命中会被阈值挡下：与"零命中"分属两种结论', () 
   const weak = recallKnowledge({ query: '盘符', candidates: [candidate({ id: 'c', title: '无题', contentMd: '这里只提到盘' })], now: NOW })
   assert.equal(weak.hits.length, 0)
   assert.equal(weak.matched, 1, 'matched 要记下"确实命中过"')
-  assert.equal(weak.droppedByScore, 1, '被阈值挡下的条数要单独记')
+  // 正文档 0.25 落在提示档 [0.20, 0.33) 里 → 不注入完整块，但会留一行提示
+  assert.equal(weak.nearMisses.length, 1, '0.25 落在提示档里（"不进 hits"这条判据不变）')
+  assert.equal(weak.droppedByScore, 0, '提示档不算"被阈值挡下"')
   assert.equal(weak.skippedReason, undefined, '这不是"跳过检索"')
 
   const none = recallKnowledge({ query: '盘符', candidates: [candidate({ id: 'd', title: '完全无关', contentMd: '别的内容' })], now: NOW })
@@ -141,54 +178,58 @@ test('正文弱命中会被阈值挡下：与"零命中"分属两种结论', () 
   assert.equal(skipped.skippedReason, '琐碎消息', '跳过检索要给出原因，否则日志里"没有检索行"无法归因')
 })
 
-test('相关度 = 权重 × 命中覆盖率：命中越多词越高，但长提问必须成比例命中', () => {
+test('信息量加权（P1b）：有信息量的词命中得高分，长提问里的一堆常用字不能把分数撑起来', () => {
+  // 单条语料上出现的词 idf=1 → 强度饱和、覆盖率 1 → 分数 = 权重
   const one = recallKnowledge({ query: '盘符', candidates: [candidate({ id: 'a', title: '盘符' })], now: NOW })
+  assert.equal(one.hits[0].score, 0.55, '两个词都命中标题 → 标题档满分')
+
   const two = recallKnowledge({ query: '盘符迁移', candidates: [candidate({ id: 'b', title: '盘符迁移' })], now: NOW })
-  // 汉字**逐字**抽词：'盘符' → 2 个词、'盘符迁移' → 4 个词；两条候选各自**全覆盖**
-  assert.equal(one.hits[0].score.toFixed(4), (0.55 * (2 / 3)).toFixed(4), '2 个词：0.55 × 2/3 × 1.0')
-  assert.equal(two.hits[0].score, 0.55, '4 个词（≥3 饱和）：0.55 × 1 × 1.0 —— 分与提问长度无关')
+  assert.equal(two.hits[0].score, 0.55, '命中更多词不会超过权重上限（饱和）')
+
   /**
-   * 这条是本轮实测教训的**回归防线**：长提问里"只碰巧共享几个字"的条目必须掉到阈值以下。
-   * 第一版打分（`0.55 + 0.06*(命中词数-1)`）在这里会给 1.00 —— 阈值与排序同时失效。
-   * 所以断言的**判据是分数**（0.21 < 0.34），而不是"没命中"。
+   * 这条是本仓最贵的回归防线（v1.15.7 换的就是这里）：
+   * 长提问里**只碰巧共享几个常用字**的条目必须掉到阈值以下。
+   *
+   * 构造：41 条语料，其中 40 条填充条目共享那批常用词；被测条目与提问
+   * 只共享「文、件」这种遍地都是的字 → idf 很低 → 强度与覆盖率双双塌掉。
+   * 对照：把同样的提问换成**有信息量的词**（盘符/根目录只出现在这一条里）→ 稳过线。
    */
-  const partial = recallKnowledge({
-    query: '盘符迁移调试排障日志记录异常堆栈跟踪调用链路依赖注入容器启动参数环境变量配置文件读取顺序优先级冲突解决',
-    candidates: [candidate({ id: 'c', title: '盘符迁移磁盘目录选择文件' })],
+  const crowded = recallKnowledge({
+    query: '排查 调试 记录 说明 使用 方法 相关 系统 数据 配置 检查 处理 问题 版本 修改 测试 结果 文件',
+    candidates: [candidate({ id: 'c', title: '盘符迁移磁盘目录选择' }), ...filler()],
     now: NOW,
   })
-  assert.equal(partial.matched, 1, '确实共享了若干字，所以算命中过')
-  /**
-   * v1.15.6 起这里记成 `nearMisses`（提示档）而不是 `droppedByScore`：
-   * 分数 0.21 落在 `[hintScore 0.20, minScore 0.34)` 里 → **不注入完整块**（意图不变），
-   * 但会在会话里留一行"可能相关"。判据仍是"不进 hits"。
-   */
-  assert.equal(partial.hits.length, 0, '覆盖率太低 → 绝不注入完整块')
-  assert.equal(partial.nearMisses.length, 1, '但落在了提示档里（0.21 ∈ [0.20, 0.34)）')
-  assert.equal(partial.droppedByScore, 0, '提示档不算"被阈值挡下"（它确实留了痕迹）')
-  /**
-   * 反方向也要守：**提问与标题几乎同字时不该被过度惩罚**（这是真实性门槛）。
-   * 早期"命中数÷提问长度"的写法会在这里给出 0.31，把真实提问全挡在门外。
-   */
-  const realistic = recallKnowledge({
-    query: '盘符 根目录 文件选择',
-    candidates: [candidate({ id: 'e', title: '盘符根目录的坑', contentMd: '盘符 parent null' })],
+  assert.equal(crowded.hits.length, 0, '只共享一堆常用字 → 绝不注入完整块')
+  const specific = recallKnowledge({
+    query: '盘符 迁移 磁盘 目录 选择',
+    candidates: [candidate({ id: 'c', title: '盘符迁移磁盘目录选择' }), ...filler()],
     now: NOW,
   })
-  assert.equal(realistic.hits.length, 1, '真实提问（与标题共享 5 个字）必须过线')
-  assert.ok(realistic.hits[0].score > RECALL_DEFAULTS.minScore, `实测 ${realistic.hits[0].score.toFixed(3)}`)
+  assert.equal(specific.hits.length, 1, '有信息量的词命中标题 → 该被带出来')
+  assert.ok(specific.hits[0].score > RECALL_DEFAULTS.minScore, `实测 ${specific.hits[0].score.toFixed(3)}`)
 })
-test('长度因子的边界：命中 3 个词即饱和（0.55 × 2/3 < 阈值 < 0.55 × 1）', () => {
+test('信息量饱和的边界：强度因子在 massHit 达到 massSat 时封顶', () => {
   /**
-   * 这条把公式里那两个因子的**边界**钉死，免得将来有人把 3 改成别的数而不自知。
-   * 标题档、覆盖率固定为 1（提问就是这三个字），只让命中词数从 2 变 3：
-   * 2 个词 = 0.55 × 2/3 = 0.367（过线）／3 个词 = 0.55 × 1 = 0.55。
+   * 这条把公式里那个饱和阈值钉死，免得将来有人改 `massSat` 而不自知
+   * （P1b 就是这么一次改动：量纲从"命中词数/3"换成"信息量总量"）。
+   *
+   * 单条语料上每个出现过的词 idf=1：
+   * - 2 个词 → massHit = 2 ≥ massSat 0.6 → 强度封顶 1 → 0.55
+   * - 1 个词 → massHit = 1 → 强度仍封顶（1/0.6 > 1）→ 0.55
+   * 所以"饱和"这件事要在**大语料**上才看得出来：常用字的 idf 远小于 1，
+   * 得攒够信息量才封顶 —— 见下面第二个断言。
    */
-  const two = scoreCandidate(candidate({ id: 'a', title: '盘符' }), { terms: extractTerms('盘符'), now: NOW })
-  const three = scoreCandidate(candidate({ id: 'b', title: '盘符根' }), { terms: extractTerms('盘符根'), now: NOW })
-  assert.equal(two?.score, 0.55 * (2 / 3))
+  const two = scoreCandidate(candidate({ id: 'a', title: '盘符' }), { terms: extractTerms('盘符'), now: NOW, stats: statsOfOne(candidate({ id: 'a', title: '盘符' })) })
+  const three = scoreCandidate(candidate({ id: 'b', title: '盘符根' }), { terms: extractTerms('盘符根'), now: NOW, stats: statsOfOne(candidate({ id: 'b', title: '盘符根' })) })
+  assert.equal(two?.score, 0.55, '2 个词的信息量已经超过 massSat → 封顶')
   assert.equal(three?.score, 0.55)
-  assert.ok((two?.score ?? 0) > RECALL_DEFAULTS.minScore, '2 个词也已经过线（标题命中不该被过度惩罚）')
+
+  // 大语料：一个常用字的 massHit = idf ≈ 0.19 → 强度 = 0.19/0.6 ≈ 0.31 → 远不到封顶
+  const crowded = [candidate({ id: 'x', title: '条目', contentMd: COMMON_TEXT }), ...filler()]
+  const commonStats = termStatsOf(crowded)
+  const common = scoreCandidate(crowded[0], { terms: extractTerms('条'), now: NOW, stats: commonStats })
+  assert.equal(common?.score, 0.55 * (idfOf(commonStats, '条') / RECALL_DEFAULTS.massSat), '强度因子 = massHit/massSat（未封顶）')
+  assert.ok((common?.score ?? 1) < RECALL_DEFAULTS.minScore, `常用字单命中不得过线，实测 ${common?.score?.toFixed(3)}`)
 })
 
 test('新旧不进分数，只做同分排序（这条差点变成噪声来源）', () => {
@@ -268,18 +309,31 @@ test('理由与片段：每条命中都要能解释"为什么是它"', () => {
   const hit = outcome.hits[0]
   assert.match(hit.reason, /标题命中/, '理由要写出命中了哪个字段（得分最高的那一档）')
   assert.match(hit.reason, /盘/, '理由要写出命中了哪些词')
-  assert.match(hit.reason, /该字段命中 \d+\/\d+ 个关键词/, '理由要给出该字段的命中比例（可解释）')
+  assert.match(hit.reason, /该字段信息量 \d+\.\d\d\/\d+\.\d\d/, '理由要给出该字段的信息量占比（可解释）')
+  assert.match(hit.reason, /命中 \d+\/\d+ 个关键词/, '同时保留"命中几个词"这个直观口径')
   assert.match(hit.snippet, /盘符/, '片段要落在命中词附近，而不是永远取开头')
   assert.equal(hit.id, 'a')
-  // 旧 fixture 那种"跨字段凑分"的形态：不命中，且如实记成"命中过但被挡下"
-  const mixed = recallKnowledge({
-    query: '盘符',
-    candidates: [candidate({ id: 'b', title: '选择文件出不了 C 盘', contentMd: 'x'.repeat(300) + '盘符根目录的 parent 是 null' })],
-    now: NOW,
-  })
-  assert.equal(mixed.hits.length, 0, '标题 1 个字 + 正文 2 个字不足以过线')
-  assert.equal(mixed.matched, 1, '但 matched 要记下"确实命中过"')
-  assert.equal(mixed.droppedByScore, 1)
+  /**
+   * 「跨字段凑分」形态之一：正文命中一大堆、标题**一个都不中** → 分数只能由**正文档**决定，
+   * 上限就是正文档权重 0.25（必被闸门挡下）。v1.15.4 的分字段算分在这里仍是硬约束。
+   */
+  const bodyOnly = `工程 ${'用法 同步 校验 计划 任务 变异 证据 链路 规则 坑 '.repeat(30)}`
+  const bodyCand = candidate({ id: 'c', title: '代码审查 Agent 的 8 条工程经验', contentMd: bodyOnly })
+  const bodyHit2 = scoreCandidate(bodyCand, { terms: extractTerms('知识库 自动调用 会话 注入 计划 任务 变异 证据'), now: NOW, stats: statsOfOne(bodyCand) })
+  assert.match(bodyHit2.reason, /正文命中/, '标题 0 命中 → 胜出的是正文档档')
+  assert.ok(bodyHit2.score <= 0.25, `正文档档上限就是权重 0.25，实测 ${bodyHit2.score}`)
+
+  /**
+   * 形态之二：标题与正文**都**命中时，分数只能由胜出的那个字段决定，**不是并集**。
+   * 精确值 0.4125 = 0.55 × 满强度 × (0.5 + 0.5 × 1/2)：
+   * 标题命中「盘」（信息量 1），提问的信息量总量是 2（盘 + 符），覆盖率 1/2。
+   * 若退回"权重取最高档、覆盖率取并集"的旧写法，这里会是 0.55（并集覆盖率 1）——
+   * 那正是 v1.15.4 修掉的噪声根因。
+   */
+  const mixedEntry = candidate({ id: 'b', title: '选择文件出不了 C 盘', contentMd: 'x'.repeat(300) + '盘符根目录的 parent 是 null' })
+  const mixedHit = scoreCandidate(mixedEntry, { terms: extractTerms('盘符'), now: NOW, stats: statsOfOne(mixedEntry) })
+  assert.match(mixedHit.reason, /^全库 · 标题命中/, '标题命中「盘」→ 胜出的是标题档')
+  assert.ok(Math.abs(mixedHit.score - 0.4125) < 1e-12, `分字段算分：0.55 × 1 × (0.5 + 0.5 × 1/2)，实测 ${mixedHit.score}`)
 })
 
 test('渲染：命中才产出文本；文本自带"检索词 + 逐条依据 + 下一步动作"', () => {
@@ -287,7 +341,7 @@ test('渲染：命中才产出文本；文本自带"检索词 + 逐条依据 + �
   const text = formatRecallText(outcome)
   assert.match(text, /【工作台知识库】/)
   assert.match(text, /盘符/)
-  assert.match(text, /相关度 0\.\d\d/)
+  assert.match(text, /相关度 [01]\.\d\d/)
   assert.match(text, /workbench_search_knowledge/)
   assert.match(text, /report_usage/)
   assert.equal(formatRecallText({ ...outcome, hits: [] }), '', '零命中必须产出空串（不插占位，保前缀缓存）')
@@ -337,9 +391,9 @@ test('权重与覆盖率必须来自**同一个字段**（v1.15.4 修的噪声�
   const query = '知识库 自动调用 会话 注入 计划 任务 变异 证据'
   const outcome = recallKnowledge({ query, candidates: [dangerous], now: NOW })
   assert.equal(outcome.matched, 1, '确实共享了若干字，所以算命中过')
-  assert.equal(outcome.hits.length, 0, '但"标题里 1 个字 + 正文一大堆"必须挡下')
-  const hit = scoreCandidate(dangerous, { terms: extractTerms(query), now: NOW })
-  assert.ok((hit?.score ?? 1) < 0.2, `实测 ${hit?.score?.toFixed(3)}（旧写法约 0.5）`)
+  assert.equal(outcome.hits.length, 0, '但"标题里没中、正文一大堆"必须挡下')
+  const hit = scoreCandidate(dangerous, { terms: extractTerms(query), now: NOW, stats: statsOfOne(dangerous) })
+  assert.ok((hit?.score ?? 1) < RECALL_DEFAULTS.minScore, `实测 ${hit?.score?.toFixed(3)}（正文档上限只有权重 0.25）`)
   // 反方向：同一篇长文，若提问**在标题上命中得多**，仍应正常召回（不能矫枉过正）
   const good = recallKnowledge({ query: '代码审查 工程经验', candidates: [dangerous], now: NOW })
   assert.equal(good.hits.length, 1, '标题真正相关时照样命中')
@@ -351,7 +405,7 @@ test('阈值是**严格大于**：分数正好等于 minScore 不算命中', () 
    * （反向探针实测过：改完三个测试文件全绿）。
    * 把 `minScore` 显式设成那个分数本身，两边各偏一点点 → 只有严格大的进来。
    */
-  const at = 0.55 * (2 / 3) // '盘符' 查标题 '盘符'：0.55 × 2/3 × 1
+  const at = 0.55 // '盘符' 查标题 '盘符'：权重 0.55 × 饱和强度 1 × 覆盖率 1
   const exact = recallKnowledge({ query: '盘符', candidates: [candidate({ id: 'a', title: '盘符' })], minScore: at, now: NOW })
   assert.equal(exact.matched, 1)
   assert.equal(exact.hits.length, 0, '正好等于阈值 → 不算命中')
@@ -378,29 +432,37 @@ test('多句 query 合并：**分句检索**才算得准，拼成一句会把最
   const entry = { id: 'k', kindCode: 'lesson', title: '盘符根目录的坑', contentMd: '', tags: [], sourceTaskId: null, sourceSessionId: null, sourceReviewId: null, fileLink: null, createdAt: '2026-09-01T00:00:00.000Z', updatedAt: '2026-09-01T00:00:00.000Z' }
   const title = '修复选择文件出不了 C 盘'
   const description = '盘符 根目录'
+  const pool = [{ entry, fromTask: true }, ...filler()]
 
   const split = mergeRecallOutcomes([
-    { query: title, outcome: recallKnowledge({ query: title, candidates: [{ entry, fromTask: true }], now: NOW }) },
-    { query: description, outcome: recallKnowledge({ query: description, candidates: [{ entry, fromTask: true }], now: NOW }) },
+    { query: title, outcome: recallKnowledge({ query: title, candidates: pool, now: NOW }) },
+    { query: description, outcome: recallKnowledge({ query: description, candidates: pool, now: NOW }) },
   ])
-  const joined = recallKnowledge({ query: `${title} ${description}`, candidates: [{ entry, fromTask: true }], now: NOW })
+  const joined = recallKnowledge({ query: `${title} ${description}`, candidates: pool, now: NOW })
 
   assert.equal(split.hits.length, 1, '分句检索能带出最相关的那条')
   assert.ok(split.hits[0].score > RECALL_DEFAULTS.minScore, `分句：实测 ${split.hits[0].score.toFixed(3)}`)
   assert.equal(split.hits[0].query, description, '要如实标出是哪句话带出来的')
-  assert.ok(joined.hits.length === 0 || joined.hits[0].score < split.hits[0].score, '拼成一句更差（分母被稀释）')
+  assert.ok(joined.hits.length === 0 || joined.hits[0].score < split.hits[0].score, '拼成一句更差（提问的信息量总量被摊大）')
 })
 
 test('合并按 id 去重并保留更高的分（同一篇被两句各算一次会让账虚高一倍）', () => {
   const entry = { id: 'k', kindCode: 'lesson', title: '盘符根目录的坑', contentMd: '', tags: [], sourceTaskId: null, sourceSessionId: null, sourceReviewId: null, fileLink: null, createdAt: '2026-09-01T00:00:00.000Z', updatedAt: '2026-09-01T00:00:00.000Z' }
-  const weak = recallKnowledge({ query: '盘符', candidates: [{ entry, fromTask: false }], now: NOW })
-  const strong = recallKnowledge({ query: '盘符根目录的坑', candidates: [{ entry, fromTask: false }], now: NOW })
-  assert.ok(strong.hits[0].score > weak.hits[0].score, '前置：后者分更高')
+  // 填充语料也含「盘符」→ 它们是**常用词**（idf 低）；「根目录的坑」只在这条里 → 稀有的才值钱
+  const pool = [{ entry, fromTask: false }, ...filler(40, '盘符')]
+  const weak = recallKnowledge({ query: '盘符', candidates: pool, now: NOW })
+  const strong = recallKnowledge({ query: '盘符根目录的坑', candidates: pool, now: NOW })
+  assert.ok(strong.hits[0].score > weak.hits[0].score, '前置：后者分更高（稀有词命中）')
   const merged = mergeRecallOutcomes([{ query: '盘符', outcome: weak }, { query: '盘符根目录的坑', outcome: strong }])
   assert.equal(merged.hits.length, 1, '同一条只出现一次')
   assert.equal(merged.hits[0].score, strong.hits[0].score, '保留更高的那份')
   assert.equal(merged.hits[0].query, '盘符根目录的坑')
-  assert.equal(merged.matched, 1, 'matched 不能同一篇算两次')
+  /**
+   * `matched` 的账：两句各自"命中过"的条数加起来，**共享的那一条只算一次**。
+   * 这条语料里两句都命中同样的 41 条，所以 41 + 41 − 1 = 81。
+   * 写死数字没意义（fixture 一改就漂），写成恒等式 —— 它恰好能抓住"同一篇算两次"的缺陷。
+   */
+  assert.equal(merged.matched, weak.matched + strong.matched - 1, 'matched 不能同一篇算两次（共享的那条要扣掉）')
 })
 
 test('合并保留**逐句**的 query 归属：拼成一句会让"是哪句话带出来的"失真', () => {
@@ -415,7 +477,7 @@ test('合并保留**逐句**的 query 归属：拼成一句会让"是哪句话�
 })
 
 test('缺省阈值与上限是唯一来源（改这里必须连带改测试，防止悄悄放宽）', () => {
-  assert.equal(RECALL_DEFAULTS.minScore, 0.34)
+  assert.equal(RECALL_DEFAULTS.minScore, 0.33)
   assert.equal(RECALL_DEFAULTS.maxEntries, 3)
 })
 
@@ -434,7 +496,7 @@ test('相关度归一化：原始分上限 0.55 → 展示 1.00，两个口径�
   assert.ok(relevanceOf(0.52) > relevanceOf(0.4), '单调：分高的相关度不会更低')
   // 阈值在两种口径下必须指向同一件事（换算可逆）
   assert.ok(Math.abs(scoreFromRelevance(relevanceOf(RECALL_DEFAULTS.minScore)) - RECALL_DEFAULTS.minScore) < 1e-12)
-  assert.equal(formatRelevance(RECALL_DEFAULTS.minScore), '0.62', '阈值换算成展示口径是 0.62，不是 0.34')
+  assert.equal(formatRelevance(RECALL_DEFAULTS.minScore), '0.60', '阈值换算成展示口径是 0.60，不是 0.33')
 })
 
 test('命中同时带原始分与展示相关度，注入文案只露归一化那个', () => {
@@ -466,8 +528,8 @@ test('P1 两档闸门：差一点点的进 nearMisses（不注入完整块），
   const mid = recallKnowledge({ query: '盘符', candidates: [cand], now: NOW })
   assert.equal(mid.hits.length, 1, '0.367 > 0.34 → 完整命中')
 
-  // 把注入闸门抬到 0.40：同一个分数落进 [0.20, 0.40) → 提示档
-  const hinted = recallKnowledge({ query: '盘符', candidates: [cand], minScore: 0.4, now: NOW })
+  // 把注入闸门抬到 0.6：同一个分数（0.55）落进 [0.20, 0.6) → 提示档
+  const hinted = recallKnowledge({ query: '盘符', candidates: [cand], minScore: 0.6, now: NOW })
   assert.equal(hinted.hits.length, 0, '没过注入闸门 → 不进 hits')
   assert.equal(hinted.nearMisses.length, 1, '但落在提示档里 → 值得提一行')
   assert.equal(hinted.nearMisses[0].id, 'mid')
@@ -475,7 +537,7 @@ test('P1 两档闸门：差一点点的进 nearMisses（不注入完整块），
 
   // 抬到 0.50：分数 0.367 < hintScore? 不 —— hintScore 仍是 0.20，所以**还是提示档**。
   // 真正该被完全丢掉的是"连提示档都没够到"的（这里用 hintScore 显式抬高来构造）
-  const dropped = recallKnowledge({ query: '盘符', candidates: [cand], minScore: 0.4, hintScore: 0.4, now: NOW })
+  const dropped = recallKnowledge({ query: '盘符', candidates: [cand], minScore: 0.6, hintScore: 0.6, now: NOW })
   assert.equal(dropped.nearMisses.length, 0)
   assert.equal(dropped.droppedByScore, 1, '连提示档都没够到 → 才算被挡下')
 })
@@ -485,7 +547,7 @@ test('P1 提示行：只给 id + 标题 + 相关度，明确"未达闸门"，且
   const out = recallKnowledge({
     query: '盘符',
     candidates: [candidate({ id: 'k-1', title: '盘符根目录的坑', contentMd: long })],
-    minScore: 0.4,
+    minScore: 0.6,
     now: NOW,
   })
   assert.equal(out.nearMisses.length, 1)
@@ -502,14 +564,14 @@ test('P1 提示行：只给 id + 标题 + 相关度，明确"未达闸门"，且
 
 test('P1 提示档也守条数上限与会话去重（不重复提示同一条）', () => {
   const many = Array.from({ length: 6 }, (_, i) => candidate({ id: `m${i}`, title: '盘符' }))
-  const out = recallKnowledge({ query: '盘符', candidates: many, minScore: 0.4, now: NOW })
+  const out = recallKnowledge({ query: '盘符', candidates: many, minScore: 0.6, now: NOW })
   assert.equal(out.nearMisses.length, RECALL_DEFAULTS.maxHints, `提示最多 ${RECALL_DEFAULTS.maxHints} 条`)
-  const excluded = recallKnowledge({ query: '盘符', candidates: many, minScore: 0.4, excludeIds: ['m0'], now: NOW })
+  const excluded = recallKnowledge({ query: '盘符', candidates: many, minScore: 0.6, excludeIds: ['m0'], now: NOW })
   assert.ok(!excluded.nearMisses.some((hit) => hit.id === 'm0'), '已注入过的条目不再当"差一点点"')
 })
 
 test('P1 合并多句 query 时提示档也要按 id 去重、取高分、守上限', () => {
-  const a = recallKnowledge({ query: '盘符', candidates: [candidate({ id: 'x', title: '盘符' })], minScore: 0.4, now: NOW })
+  const a = recallKnowledge({ query: '盘符', candidates: [candidate({ id: 'x', title: '盘符' })], minScore: 0.6, now: NOW })
   const b = recallKnowledge({ query: '盘符迁移', candidates: [candidate({ id: 'x', title: '盘符迁移' })], minScore: 0.9, now: NOW })
   const merged = mergeRecallOutcomes([{ query: '盘符', outcome: a }, { query: '盘符迁移', outcome: b }])
   assert.equal(merged.nearMisses.length, 1, '同一条只出现一次')
@@ -518,11 +580,58 @@ test('P1 合并多句 query 时提示档也要按 id 去重、取高分、守上
 
 test('P1 willInject：有提示也算"会在会话里留下东西"（否则日志与事实对不上）', () => {
   const hit = recallKnowledge({ query: '盘符', candidates: [candidate({ id: 'a', title: '盘符' })], now: NOW })
-  const hint = recallKnowledge({ query: '盘符', candidates: [candidate({ id: 'a', title: '盘符' })], minScore: 0.4, now: NOW })
-  const none = recallKnowledge({ query: '盘符', candidates: [candidate({ id: 'a', title: '盘符' })], minScore: 0.4, hintScore: 0.4, now: NOW })
+  const hint = recallKnowledge({ query: '盘符', candidates: [candidate({ id: 'a', title: '盘符' })], minScore: 0.6, now: NOW })
+  const none = recallKnowledge({ query: '盘符', candidates: [candidate({ id: 'a', title: '盘符' })], minScore: 0.6, hintScore: 0.6, now: NOW })
   assert.equal(willInject(hit), true)
   assert.equal(willInject(hint), true, '只有提示也必须算"会留下东西"')
   assert.equal(willInject(none), false, '两级都没够到 → 真的什么都不插（不占位）')
+})
+
+/**
+ * ## P2：取代 / 过期语义
+ *
+ * 实证：用户删掉一条写错的条目、新建一条修正条，两条并存的那段时间里，
+ * "哪条取代了哪条"只能靠正文里手写一句"本条修正已入库的另一条" ——
+ * 召回时两条都会被带出来，模型没有任何结构化信号判断该信哪条。
+ */
+test('P2 已被取代 / 已过期的条目不参与召回（压制，不是降权）', () => {
+  const alive = candidate({ id: 'alive', title: '盘符根目录的坑' })
+  const replaced = candidate({ id: 'replaced', title: '盘符根目录的坑', supersededById: 'new-id' })
+  const expired = candidate({ id: 'expired', title: '盘符根目录的坑', validUntil: '2026-01-01T00:00:00.000Z' })
+  const future = candidate({ id: 'future', title: '盘符根目录的坑', validUntil: '2027-01-01T00:00:00.000Z' })
+
+  const out = recallKnowledge({ query: '盘符根目录', candidates: [replaced, expired, future, alive], now: NOW })
+  assert.deepEqual([...out.hits.map((hit) => hit.id)].sort(), ['alive', 'future'], '被取代/已过期的必须让位')
+  assert.equal(out.droppedAsSuperseded, 2, '压制了几条要单独记账（不是"分数不够"）')
+  assert.equal(out.matched, 2, '被压制的条目根本不算"命中过"')
+  assert.equal(out.droppedByScore, 0)
+
+  // 精确判定：坏掉的时间串**不压制**（宁可多召回一条，也不因格式问题把有效知识永久藏起来）
+  assert.equal(isSuperseded({ supersededById: null, validUntil: '不是时间' }, NOW), false)
+  assert.equal(isSuperseded({ supersededById: null, validUntil: null }, NOW), false)
+  assert.equal(isSuperseded({ supersededById: 'x', validUntil: null }, NOW), true)
+  assert.equal(isSuperseded({ supersededById: '', validUntil: null }, NOW), false, '空串 = 没有取代关系')
+
+  // 多句合并也要把压制条数带上（否则开关前那次的账会丢）
+  const merged = mergeRecallOutcomes([
+    { query: '盘符根目录', outcome: out },
+    { query: '盘符根目录', outcome: recallKnowledge({ query: '盘符根目录', candidates: [replaced], now: NOW }) },
+  ])
+  assert.equal(merged.droppedAsSuperseded, 3, '合并后压制条数是各句之和')
+})
+
+/**
+ * ## P4：引用自动判定（纯函数部分）
+ *
+ * 判据只有一条：回答里出现该条目的 **id** 或**标题前缀**（12 字符）。
+ * 保守优先 —— 宁可漏标，不可瞎标。
+ */
+test('P4 引用判定：命中标题前缀或 id 才算引用，普通复述不算', () => {
+  const delivered = [{ id: '7532f45e-cb93-4f1a-9c2e-6d2f3a1b0c9d', title: '复盘：团队记忆系统落地搭建：试点接入 + 使用规范' }]
+  assert.deepEqual(citationMatch('参考《复盘：团队记忆系统落地搭建：试点接入》，要点是…', delivered), [delivered[0].id], '标题前缀命中')
+  assert.deepEqual(citationMatch('见 7532f45e-cb93-4f1a-9c2e-6d2f3a1b0c9d 这条', delivered), [delivered[0].id], 'id 命中')
+  assert.deepEqual(citationMatch('复盘做完了，团队记忆这块可以改进三点。', delivered), [], '只复述了几个词、没写标题 → 不算引用（宁可漏标）')
+  assert.deepEqual(citationMatch('', delivered), [], '没有回答 → 不算')
 })
 
 

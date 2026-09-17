@@ -98,8 +98,20 @@ export function searchKnowledgeTool(manager: KnowledgeRecallManager) {
           matched: 1,
         })
         const body = String(entry.contentMd ?? '').trim()
+        /**
+         * P2：被取代 / 已过期的条目**仍然可以按 id 直读**（那是显式动作），
+         * 但回执必须**明确标注**，否则"作废的结论"会被当成事实用 —— 这正是压制要防的事。
+         */
+        const supersededNote = entry.supersededById !== null && entry.supersededById !== ''
+          ? `⚠️ 本条已被 [${entry.supersededById}] 取代，内容可能已经作废（自动召回不会带出它）。`
+          : ''
+        const expiredNote = entry.validUntil !== null && entry.validUntil !== '' && Date.parse(entry.validUntil) <= Date.now()
+          ? `⚠️ 本条已过期（有效期至 ${entry.validUntil}），内容可能已经作废（自动召回不会带出它）。`
+          : ''
         const lines = [
           `知识条目 [${entry.id}] ${entry.title}（${entry.kindCode} · 全文）`,
+          supersededNote,
+          expiredNote,
           `标签：${entry.tags.length > 0 ? entry.tags.join('、') : '（无）'}`,
           `更新：${entry.updatedAt}`,
           entry.fileLink !== null && entry.fileLink !== '' ? `文档：${entry.fileLink}` : '',
@@ -123,6 +135,8 @@ export function searchKnowledgeTool(manager: KnowledgeRecallManager) {
       const outcome = recallKnowledge({
         query,
         candidates: manager.candidates(resolvedTask),
+        // 词信息量统计与候选集同源（同一个管理器实例，同一份缓存）
+        stats: manager.corpusStats(),
         /**
          * `min_score` 是**归一化相关度**（0~1），与输出里显示的数字同一把尺子；
          * 内部判定仍用原始分，所以这里换算一次 —— 换算是单向的、只有一个入口。
@@ -145,8 +159,9 @@ export function searchKnowledgeTool(manager: KnowledgeRecallManager) {
         droppedByScore: outcome.droppedByScore,
       })
       if (limited.length === 0) {
-        return `检索「${query}」零命中（关键词：${terms.join('、') || '无'}；候选池 ${outcome.matched} 条，无一条过阈值 ${formatRelevance(RECALL_DEFAULTS.minScore)}）。`
-          + '这不代表库里没有 —— 换更具体的现象词/报错原文再试一次；确实没有就直接继续。'
+        return `检索「${query}」零命中（关键词：${terms.join('、') || '无'}；候选池 ${outcome.matched} 条，无一条过阈值 ${formatRelevance(RECALL_DEFAULTS.minScore)}）`
+          + (outcome.droppedAsSuperseded > 0 ? `；另有 ${outcome.droppedAsSuperseded} 条已被取代/已过期，未参与检索` : '')
+          + '。这不代表库里没有 —— 换更具体的现象词/报错原文再试一次；确实没有就直接继续。'
       }
       const scope = resolvedTask === null ? '全库' : `任务 ${resolvedTask.slice(0, 8)} 及全库`
       const lines = [

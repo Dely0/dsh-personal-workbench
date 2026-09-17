@@ -97,6 +97,30 @@ export function makeKnowledgeRoutes(db: DatabaseSync): WebRoute[] {
           if ('sourceTaskId' in body) patch.sourceTaskId = typeof body.sourceTaskId === 'string' ? body.sourceTaskId : null
           if ('sourceReviewId' in body) patch.sourceReviewId = typeof body.sourceReviewId === 'string' ? body.sourceReviewId : null
           if ('fileLink' in body) patch.fileLink = typeof body.fileLink === 'string' ? body.fileLink : null
+          /**
+           * P2：取代 / 有效期。
+           *
+           * `supersededById` 显式传 `null` 表示**解除取代**（用户把标注撤了）；
+           * 传非空字符串必须指向一条真实存在的条目 —— 指向不存在的 id 会让
+           * "已被 X 取代"变成一句查不到出处的话，而压制行为照样生效（静默的多余压制）。
+           * 所以当场 400，不做静默接受。
+           */
+          if ('supersededById' in body) {
+            if (body.supersededById === null) patch.supersededById = null
+            else if (typeof body.supersededById === 'string' && body.supersededById.trim() !== '') {
+              const target = getKnowledge(db, body.supersededById.trim())
+              if (target === undefined) return writeJson(res, 400, { error: `supersededById 指向的条目不存在：${body.supersededById.trim()}` })
+              if (target.id === id) return writeJson(res, 400, { error: 'supersededById 不能指向自己' })
+              patch.supersededById = target.id
+            } else return writeJson(res, 400, { error: 'supersededById 必须是条目 id 或 null' })
+          }
+          if ('validUntil' in body) {
+            if (body.validUntil === null) patch.validUntil = null
+            else if (typeof body.validUntil === 'string' && body.validUntil.trim() !== '') {
+              if (!Number.isFinite(Date.parse(body.validUntil))) return writeJson(res, 400, { error: 'validUntil 必须是可解析的时间串或 null' })
+              patch.validUntil = body.validUntil.trim()
+            } else return writeJson(res, 400, { error: 'validUntil 必须是时间串或 null' })
+          }
           const entry = updateKnowledge(db, id, patch)
           if (entry === undefined) return writeJson(res, 404, { error: 'knowledge not found' })
           return writeJson(res, 200, { ok: true, knowledge: entry })

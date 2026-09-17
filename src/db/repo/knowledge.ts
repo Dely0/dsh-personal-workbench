@@ -18,6 +18,10 @@ export interface KnowledgeInput {
   sourceSessionId?: string | null
   sourceReviewId?: string | null
   fileLink?: string | null
+  /** 本条已被哪条取代（非空即在召回时压制，见 schema v18）。 */
+  supersededById?: string | null
+  /** 有效期截止（ISO 时间；到点后压制）。 */
+  validUntil?: string | null
 }
 
 export interface KnowledgeRow {
@@ -30,6 +34,10 @@ export interface KnowledgeRow {
   sourceSessionId: string | null
   sourceReviewId: string | null
   fileLink: string | null
+  /** 已被哪条取代（null = 仍然有效）。 */
+  supersededById: string | null
+  /** 有效期截止（null = 不过期）。 */
+  validUntil: string | null
   createdAt: string
   updatedAt: string
 }
@@ -44,6 +52,8 @@ interface RawKnowledgeRow {
   source_session_id: string | null
   source_review_id: string | null
   file_link: string | null
+  superseded_by_id?: string | null
+  valid_until?: string | null
   created_at: string
   updated_at: string
 }
@@ -77,6 +87,8 @@ function parseKnowledge(row: RawKnowledgeRow | undefined): KnowledgeRow | undefi
     sourceSessionId: row.source_session_id,
     sourceReviewId: row.source_review_id,
     fileLink: row.file_link ?? null,
+    supersededById: row.superseded_by_id ?? null,
+    validUntil: row.valid_until ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }
@@ -86,9 +98,9 @@ export function createKnowledge(db: DatabaseSync, input: KnowledgeInput, at = no
   const id = randomUUID()
   const fileLink = assertValidFileLink(input.fileLink)
   db.prepare(`
-    INSERT INTO knowledge_entries (id, kind_code, title, content_md, tags_json, source_task_id, source_session_id, source_review_id, file_link, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(id, input.kindCode ?? 'note', input.title, input.contentMd ?? '', JSON.stringify(input.tags ?? []), input.sourceTaskId ?? null, input.sourceSessionId ?? null, input.sourceReviewId ?? null, fileLink, at, at)
+    INSERT INTO knowledge_entries (id, kind_code, title, content_md, tags_json, source_task_id, source_session_id, source_review_id, file_link, superseded_by_id, valid_until, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(id, input.kindCode ?? 'note', input.title, input.contentMd ?? '', JSON.stringify(input.tags ?? []), input.sourceTaskId ?? null, input.sourceSessionId ?? null, input.sourceReviewId ?? null, fileLink, input.supersededById ?? null, input.validUntil ?? null, at, at)
   return getKnowledge(db, id)!
 }
 
@@ -131,12 +143,14 @@ export function updateKnowledge(db: DatabaseSync, id: string, patch: Partial<Kno
     sourceSessionId: patch.sourceSessionId === undefined ? before.sourceSessionId : patch.sourceSessionId,
     sourceReviewId: patch.sourceReviewId === undefined ? before.sourceReviewId : patch.sourceReviewId,
     fileLink: patch.fileLink === undefined ? before.fileLink : assertValidFileLink(patch.fileLink),
+    supersededById: patch.supersededById === undefined ? before.supersededById : patch.supersededById,
+    validUntil: patch.validUntil === undefined ? before.validUntil : patch.validUntil,
     updatedAt: at,
   }
   db.prepare(`
-    UPDATE knowledge_entries SET kind_code = ?, title = ?, content_md = ?, tags_json = ?, source_task_id = ?, source_session_id = ?, source_review_id = ?, file_link = ?, updated_at = ?
+    UPDATE knowledge_entries SET kind_code = ?, title = ?, content_md = ?, tags_json = ?, source_task_id = ?, source_session_id = ?, source_review_id = ?, file_link = ?, superseded_by_id = ?, valid_until = ?, updated_at = ?
     WHERE id = ?
-  `).run(next.kindCode, next.title, next.contentMd, JSON.stringify(next.tags), next.sourceTaskId, next.sourceSessionId, next.sourceReviewId, next.fileLink, next.updatedAt, id)
+  `).run(next.kindCode, next.title, next.contentMd, JSON.stringify(next.tags), next.sourceTaskId, next.sourceSessionId, next.sourceReviewId, next.fileLink, next.supersededById, next.validUntil, next.updatedAt, id)
   return next
 }
 
@@ -147,7 +161,7 @@ export function deleteKnowledge(db: DatabaseSync, id: string): boolean {
 export function confirmKnowledgeDraft(db: DatabaseSync, draftId: string, actor = 'user', at = nowIso()): KnowledgeRow | undefined {
   const draft = getDraft(db, draftId)
   if (draft === undefined || draft.kindCode !== 'knowledge') return undefined
-  const payload = draft.payload as { title?: string; contentMd?: string; kindCode?: string; tags?: string[]; sourceTaskId?: string; sourceSessionId?: string; sourceReviewId?: string; fileLink?: string | null }
+  const payload = draft.payload as { title?: string; contentMd?: string; kindCode?: string; tags?: string[]; sourceTaskId?: string; sourceSessionId?: string; sourceReviewId?: string; fileLink?: string | null; supersededById?: string | null; validUntil?: string | null }
   const title = typeof payload.title === 'string' ? payload.title.trim() : ''
   if (title === '') throw new Error('knowledge requires a non-empty title')
   const contentMd = typeof payload.contentMd === 'string' ? payload.contentMd : ''
@@ -161,6 +175,8 @@ export function confirmKnowledgeDraft(db: DatabaseSync, draftId: string, actor =
     sourceSessionId: typeof payload.sourceSessionId === 'string' ? payload.sourceSessionId : draft.sessionId,
     sourceReviewId: typeof payload.sourceReviewId === 'string' ? payload.sourceReviewId : null,
     fileLink: typeof payload.fileLink === 'string' ? payload.fileLink : null,
+    supersededById: typeof payload.supersededById === 'string' ? payload.supersededById : null,
+    validUntil: typeof payload.validUntil === 'string' ? payload.validUntil : null,
   }, at), { at })
 }
 

@@ -341,19 +341,20 @@ test('工具：未知 id 当场说"没有这条"，不伪装成零命中', async
 
 test('工具：min_score 用归一化相关度（与输出里的"相关度"同一把尺子）', async () => {
   await withDb(async (db) => {
-    // query 4 个关键词、标题命中 3 个 → 原始分 0.55×1×(0.5+0.5×0.75)=0.48125 → 相关度 0.875
-    // （原始分口径下它 0.48 也算"过线"，但按 0.8 当原始分传就会被全挡下 —— 这正是修复点）
+    // 单条语料上"语料里存在的词"只有 盘/符/根 三个（「本」不在任何条目里，不进分母）
+    // → 标题 3/3 命中、覆盖率 1 → 原始分 0.55 → 相关度 1.00
+    // （若把 0.9 当**原始分**传，就会把这条相关度 1.00 的命中挡下 —— 这正是修复点）
     createKnowledge(db, { title: '盘符根目录', contentMd: '无关正文' })
     const manager = new KnowledgeRecallManager(db, { log: () => {} })
     const tool = searchKnowledgeTool(manager)
     const exec = { agent: { session: { id: 'sess-score' } } }
 
-    const pass = await tool.execute({ query: '盘符根本', min_score: 0.8 }, exec)
-    assert.match(pass, /命中 1 条/, '相关度 0.875 要过 0.8 这条线')
-    assert.match(pass, /相关度 0\.8\d/, '展示的必须是归一化相关度')
+    const pass = await tool.execute({ query: '盘符根本', min_score: 0.9 }, exec)
+    assert.match(pass, /命中 1 条/, '相关度 1.00 要过 0.9 这条线')
+    assert.match(pass, /相关度 1\.00/, '展示的必须是归一化相关度（不是 0.55 的原始分）')
 
-    const blocked = await tool.execute({ query: '盘符根本', min_score: 0.9 }, exec)
-    assert.match(blocked, /零命中/, '相关度 0.875 < 0.9 → 要被挡下')
+    const blocked = await tool.execute({ query: '盘符根本', min_score: 1 }, exec)
+    assert.match(blocked, /零命中/, '阈值是严格大于，相关度 1.00 不 > 1.00 → 要被挡下')
   })
 })
 

@@ -204,6 +204,49 @@ test('manual plan editing PUT removes an item and keeps remaining done task', as
   })
 })
 
+/**
+ * P2：取代 / 有效期必须**能从 API 设置**，且非法输入当场 400。
+ *
+ * 为什么必须校验 `supersededById` 指向的条目存在：指向一个不存在的 id
+ * 会让"已被 X 取代"变成一句查不到出处的话，而**压制照样生效**（静默的多余压制）。
+ * 这类"界面说 A、行为是 B"的偏差是本仓罚过多次的一类。
+ */
+test('knowledge API：supersededById / validUntil 可设置，非法输入当场 400', async () => {
+  await withServer(async ({ db, request }) => {
+    seedDictionaries(db)
+    const oldOne = await request('POST', '/api/workbench/knowledge', { title: '修正前的条目', contentMd: '写错了', kindCode: 'lesson' })
+    const newOne = await request('POST', '/api/workbench/knowledge', { title: '修正后的条目', contentMd: '正确的做法', kindCode: 'lesson' })
+    const oldId = oldOne.body.knowledge.id
+    const newId = newOne.body.knowledge.id
+
+    const marked = await request('PATCH', `/api/workbench/knowledge/${oldId}`, { supersededById: newId })
+    assert.equal(marked.status, 200)
+    assert.equal(marked.body.knowledge.supersededById, newId)
+
+    const bad = await request('PATCH', `/api/workbench/knowledge/${oldId}`, { supersededById: 'nope-not-a-real-id' })
+    assert.equal(bad.status, 400, '指向不存在的条目必须当场拒绝（不能静默接受）')
+    assert.match(bad.body.error, /不存在/)
+
+    const self = await request('PATCH', `/api/workbench/knowledge/${oldId}`, { supersededById: oldId })
+    assert.equal(self.status, 400, '不能自己取代自己')
+
+    const badTime = await request('PATCH', `/api/workbench/knowledge/${newId}`, { validUntil: '不是时间' })
+    assert.equal(badTime.status, 400)
+
+    const withTime = await request('PATCH', `/api/workbench/knowledge/${newId}`, { validUntil: '2027-01-01T00:00:00.000Z' })
+    assert.equal(withTime.status, 200)
+    assert.equal(withTime.body.knowledge.validUntil, '2027-01-01T00:00:00.000Z')
+
+    const cleared = await request('PATCH', `/api/workbench/knowledge/${oldId}`, { supersededById: null })
+    assert.equal(cleared.status, 200)
+    assert.equal(cleared.body.knowledge.supersededById, null, '显式 null = 解除取代（用户把标注撤了）')
+
+    const listed = await request('GET', '/api/workbench/knowledge')
+    const entry = listed.body.entries.find((item) => item.id === newId)
+    assert.equal(entry.validUntil, '2027-01-01T00:00:00.000Z', '列表也要带上这两个字段（界面才能标注）')
+  })
+})
+
 test('knowledge API supports file_link and local document reading', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-workbench-knowledge-file-'))
   const docPath = join(dir, 'note.md')

@@ -176,6 +176,13 @@ test('开工前必须**分句**检索：标题与描述拼成一句会把最相�
      */
     const t = task(db, { title: '修复选择文件出不了 C 盘', description: '盘符 根目录' })
     createKnowledge(db, { title: '盘符根目录的坑', contentMd: 'x', sourceTaskId: t.id })
+    /**
+     * P1b 起 IDF 是**语料的属性**：单条语料上什么词都是"稀有词"，分句/拼句的差别测不出来。
+     * 补一批填充条目，让"标题那句里的字"真的是常用字（真实库里也是这样）。
+     */
+    for (let index = 0; index < 40; index += 1) {
+      createKnowledge(db, { title: `填充条目 ${index}`, contentMd: '修复 选择 文件 记录 说明 使用 方法 相关 系统 数据 配置 检查 处理 问题 版本 修改 测试 结果 出' })
+    }
     linkTaskSession(db, { taskId: t.id, sessionId: 'sess-split', roleCode: 'execute' })
     const manager = new KnowledgeRecallManager(db, { log: () => {} })
     const outcome = manager.prime('sess-split', undefined)
@@ -185,7 +192,8 @@ test('开工前必须**分句**检索：标题与描述拼成一句会把最相�
     // 对照：把两句拼成一句会差多少（同一份数据，同一个打分函数）
     const joined = scoreCandidate(
       { entry: { id: 'k', kindCode: 'lesson', title: '盘符根目录的坑', contentMd: 'x', tags: [], sourceTaskId: t.id, sourceSessionId: null, sourceReviewId: null, fileLink: null, createdAt: '2026-09-01T00:00:00.000Z', updatedAt: '2026-09-01T00:00:00.000Z' }, fromTask: true },
-      { terms: extractTerms('修复选择文件出不了 C 盘 盘符 根目录'), now: new Date('2026-09-17T00:00:00.000Z') },
+      // 语料统计与召回走同一份（`manager.corpusStats()`），否则"对照"用的 df 与线上不一致
+      { terms: extractTerms('修复选择文件出不了 C 盘 盘符 根目录'), now: new Date('2026-09-17T00:00:00.000Z'), stats: manager.corpusStats() },
     )
     assert.ok((joined?.score ?? 1) < (outcome?.hits[0].score ?? 0), `拼成一句必须更差：${joined?.score} vs ${outcome?.hits[0].score}`)
   })
@@ -313,7 +321,7 @@ test('P1 提示档：未达注入闸门时只留一行提示，且日志如实�
     createKnowledge(db, { title: '盘符根目录的坑', contentMd: '盘符 parent null' })
     const manager = new KnowledgeRecallManager(db, { log: () => {} })
     // 把注入闸门抬到 0.4，让 0.367 落进提示档（真实场景里阈值没动，这里是构造边界）
-    const hinted = new KnowledgeRecallManager(db, { minScore: 0.4, log: () => {} })
+    const hinted = new KnowledgeRecallManager(db, { minScore: 0.6, log: () => {} })
     hinted.prefetch('sess-h1', undefined, '盘符')
     const text = hinted.injectionFor('sess-h1', 1)
     assert.match(text, /未达注入闸门/, '会话里要有那行提示')
@@ -331,7 +339,7 @@ test('P1 提示档：未达注入闸门时只留一行提示，且日志如实�
 test('P1 提示档：同一条不会在同一会话里反复提示', () => {
   withDb((db) => {
     createKnowledge(db, { title: '盘符根目录的坑', contentMd: '盘符 parent null' })
-    const manager = new KnowledgeRecallManager(db, { minScore: 0.4, log: () => {} })
+    const manager = new KnowledgeRecallManager(db, { minScore: 0.6, log: () => {} })
     manager.prefetch('sess-h2', undefined, '盘符')
     assert.match(manager.injectionFor('sess-h2', 1), /未达注入闸门/, '第一回合给提示')
     // 第二回合再问同样的事：提示过的不再提示（噪声控制）

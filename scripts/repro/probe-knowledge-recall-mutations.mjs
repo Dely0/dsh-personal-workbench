@@ -35,32 +35,33 @@ const MUTATIONS = [
     file: CORE,
     from: /const score = clamp01\(Math\.max\(titleScore, tagScore, bodyScore\)\);/,
     to: [
-      'const allHits = new Set([...titleTerms, ...tagTerms, ...bodyTerms]).size;',
+      'const allTerms = [...new Set([...titleTerms, ...tagTerms, ...bodyTerms])];',
+      '    const massAll = allTerms.reduce((sum, term) => sum + idfOf(context.stats, term), 0);',
       '    const weight = Math.max(titleTerms.length > 0 ? WEIGHT.title : 0, tagTerms.length > 0 ? WEIGHT.tag : 0, bodyTerms.length > 0 ? WEIGHT.body : 0);',
-      '    const score = clamp01(weight * Math.min(1, allHits / LENGTH_SATURATION) * (0.5 + 0.5 * Math.min(1, allHits / totalTerms)));',
+      '    const score = clamp01(weight * Math.min(1, massAll / (context.massSat ?? RECALL_DEFAULTS.massSat)) * (0.5 + 0.5 * Math.min(1, massAll / massQuery)));',
     ].join('\n    '),
     expect: '权重与覆盖率必须来自同一个字段',
   },
   {
-    name: 'M2 长度因子不封顶（长正文靠体量白拿分）',
+    name: 'M2 信息量因子不封顶（massSat 调到天上 → 打分整体塌掉）',
     file: CORE,
-    from: /const LENGTH_SATURATION = 3/,
-    to: 'const LENGTH_SATURATION = 1000',
-    expect: '命中 3 个词即饱和',
+    from: /massSat: 0\.6,/,
+    to: 'massSat: 1000,',
+    expect: 'massSat 是量出来的标定值，不能随手改',
   },
   {
     name: 'M3 去掉覆盖率因子（只共享一个字也拿满分权重）',
     file: CORE,
-    from: /return weight \* lengthFactor \* \(0\.5 \+ 0\.5 \* coverage\);/,
-    to: 'return weight * lengthFactor;',
+    from: /return \{ score: weight \* strength \* \(0\.5 \+ 0\.5 \* coverage\), massHit \};/,
+    to: 'return { score: weight * strength, massHit };',
     expect: '命中覆盖率必须参与打分',
   },
   {
     name: 'M4 阈值降到"正文命中即过"（等于把噪声放进来）',
     file: CORE,
-    from: /minScore: 0\.34,/,
+    from: /minScore: 0\.33,/,
     to: 'minScore: 0.2,',
-    expect: '正文单命中（0.083~0.25）必须被挡下',
+    expect: '正文单命中（≤0.25）必须被挡下',
   },
   {
     name: 'M5 阈值比较从"严格大于"改成"大于等于"（边界条目混进来）',
@@ -72,9 +73,16 @@ const MUTATIONS = [
   {
     name: 'M6 时间重新进分数（"新旧"污染相关性档位 —— 实测踩过的原形态）',
     file: CORE,
-    from: /return weight \* lengthFactor \* \(0\.5 \+ 0\.5 \* coverage\);/,
-    to: 'return weight * lengthFactor * (0.5 + 0.5 * coverage) + 0.04;',
+    from: /return \{ score: weight \* strength \* \(0\.5 \+ 0\.5 \* coverage\), massHit \};/,
+    to: 'return { score: weight * strength * (0.5 + 0.5 * coverage) + 0.04, massHit };',
     expect: '新旧只做同分排序，不进分数',
+  },
+  {
+    name: 'M32 IDF 拉平（每个词等权 → 常用字把真实命中摊薄，P1b 的全部收益消失）',
+    file: CORE,
+    from: /return Math\.log\(1 \+ stats\.size \/ df\) \/ Math\.log\(1 \+ stats\.size\);/,
+    to: 'return 1;',
+    expect: '按信息量加权是 P1b 的唯一机制（拉平后真实提问的完整注入率必须掉回去）',
   },
   {
     name: 'M7 琐碎消息也去检索（"好的"这种消息也会带出知识）',
@@ -135,8 +143,8 @@ const MUTATIONS = [
   {
     name: 'M20 关联晚到时不再补做「开工前」（新会话的开工前召回静默消失）',
     file: MANAGER,
-    from: /if \(!state\.primed\) \{/,
-    to: 'if (false) {',
+    from: /primeIfNeeded\(sessionId, cwd\) \{\r?\n\s*if \(this\.state\(sessionId\)\.primed\)\r?\n\s*return undefined;\r?\n\s*return this\.prime\(sessionId, cwd\);/,
+    to: 'primeIfNeeded(sessionId, cwd) {\n        return undefined;\n        // eslint-disable-next-line no-unreachable\n        if (this.state(sessionId).primed) return undefined;\n        return this.prime(sessionId, cwd);',
     expect: '关联到手后要补一次开工前召回',
   },
   /**
@@ -252,6 +260,68 @@ const MUTATIONS = [
     from: /return outcome\.hits\.length > 0 \|\| \(outcome\.nearMisses\?\.length \?\? 0\) > 0;/,
     to: 'return outcome.hits.length > 0;',
     expect: '有提示也算"会留下东西"',
+  },
+  /**
+   * v1.15.7（P1 检索时机重构）的四条 —— 治的是**静默漏检索**：
+   * 实测 turn 16 那一轮有两条用户本人消息（实质提问 + 「停」），旧实现只取最后一条
+   * → 那句实质提问**从未被检索过**（失败发生在打分之前），而库里有一条 0.72 相关度的条目。
+   */
+  {
+    name: 'M28 取词范围退回"只取最后一条用户消息"（一轮两条消息时前一条被静默丢掉）',
+    file: MANAGER,
+    from: /export function currentTurnUserMessages\(agent\) \{[\s\S]*?\n\}\n/,
+    to: 'export function currentTurnUserMessages(agent) {\n'
+      + '    const session = agent?.session;\n'
+      + '    const events = snapshotEvents(session);\n'
+      + '    const fallback = latestUserMessage(events);\n'
+      + '    return fallback === undefined ? [] : [fallback];\n'
+      + '}\n',
+    expect: '本回合每一条用户消息都要被检索（只取最后一条 = 静默丢件）',
+  },
+  {
+    name: 'M29 检索退回"回合收尾预取"（装配期看不到当轮提问 → 问题那一轮永远没有知识）',
+    file: MANAGER,
+    from: /return manager\.assemblyInjection\(sessionId, agent\?\.session\?\.header\?\.cwd, agent\);/,
+    to: 'return manager.injectionFor(sessionId, currentTurnOf(agent));',
+    expect: '检索必须发生在装配期（用当前这条用户消息）',
+  },
+  {
+    name: 'M30 开工前那份直接覆盖 pendingText（算了却送不达：实测 turn 15 被 prime 覆盖）',
+    file: MANAGER,
+    from: /state\.primeOutcome = willInject\(outcome\) \? outcome : undefined;/,
+    to: 'this.buildPending(state, outcome);',
+    expect: '开工前那份要挂起并与当轮结果合并，不能覆盖',
+  },
+  {
+    name: 'M31 未纳入检索不留痕（有用户消息却没检索，账上看不出来 = 静默丢件）',
+    file: MANAGER,
+    from: /appendRecallLog\(this\.db, \{ sessionId, taskId: this\.resolveTaskId\(sessionId, cwd\), trigger: 'turn', outcome, injected: false \}\);/,
+    to: 'void outcome;',
+    expect: '任何"有用户消息但没纳入检索"的情形都要在账上留一行',
+  },
+  /**
+   * v1.15.7 的 P2 / P4 / P5 三条。
+   */
+  {
+    name: 'M33 不过滤"已被取代/已过期"（作废的结论照样进上下文）',
+    file: CORE,
+    from: /if \(isSuperseded\(candidate\.entry, now\)\) \{\r?\n\s*droppedAsSuperseded \+= 1;\r?\n\s*continue;\r?\n\s*\}/,
+    to: 'if (false) {\n            droppedAsSuperseded += 1;\n            continue;\n        }',
+    expect: '被取代/已过期的条目必须被压制（不是降权）',
+  },
+  {
+    name: 'M34 引用判定放宽成"瞎标"（注入过的全标成被引用 → 证据失真）',
+    file: CORE,
+    from: /if \(title\.length >= CITE_TITLE_PREFIX && text\.includes\(title\.slice\(0, CITE_TITLE_PREFIX\)\)\)\r?\n\s*out\.push\(item\.id\);/,
+    to: 'out.push(item.id);',
+    expect: '只有回答里真的出现标题/id 才算引用（宁可漏标，不可瞎标）',
+  },
+  {
+    name: 'M35 suggested_miss 不再看"像不像报错"（每回合都记一行 = 噪声淹没观测）',
+    file: MANAGER,
+    from: /if \(!looksLikeErrorReport\(text\)\)\r?\n\s*return;/,
+    to: 'if (false)\n            return;',
+    expect: '只对"像报错"的提问记 suggested_miss',
   },
 ]
 

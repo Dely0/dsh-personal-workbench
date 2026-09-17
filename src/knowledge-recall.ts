@@ -37,20 +37,39 @@ import { findTaskIdBySession } from './db/repo/task-sessions.js'
 import { readMeta } from './db/repo/meta.js'
 import { appendRecallLog, citeRecallLog, readSessionOverrides, writeSessionOverride } from './knowledge-recall-log.js'
 import {
+  citationMatch,
   formatHintText,
   formatRecallText,
   formatRelevance,
+  looksLikeErrorReport,
   mergeRecallOutcomes,
   recallKnowledge,
   RECALL_DEFAULTS,
   taskIdFromWorkspacePath,
+  termStatsOf,
   willInject,
   type RecallCandidate,
   type RecallOutcome,
+  type TermStats,
 } from './shared/knowledgeRecall.js'
 
 /** 完整知识条目 id（uuid v4 形态）。工具按 id 直读时只认这个，不做前缀模糊匹配。 */
 const ENTRY_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/** 空结论：构造"没有可检索内容"的结论时只有一处实现（少写一遍就少一处漏字段）。 */
+const EMPTY_OUTCOME: RecallOutcome = {
+  query: '', hits: [], nearMisses: [], matched: 0, droppedByScore: 0, droppedByLimit: 0, droppedAsSeen: 0, droppedAsSuperseded: 0, terms: [],
+}
+
+/**
+ * 装配键：`回合号 + 本回合用户消息原文`。
+ *
+ * 一个语义一个实现 —— "同一回合内文本是否稳定"与"本回合消息是否被检索过"
+ * 这两件事都读它，各写一遍迟早会出现"缓存说是同一回合、观测说没检索"的自相矛盾。
+ */
+function assemblyKeyOf(turn: number, queries: readonly string[]): string {
+  return `${turn}\u0000${queries.join('\u0001')}`
+}
 
 /**
  * 剥掉注入文本里的包裹符号（`[id]` / `【id】` / `entry_id:id`）后取 id。
@@ -109,10 +128,26 @@ interface SessionState {
   override?: 'off' | 'on'
   /** 「开工前」这一时机是否已经成功做过（没成功就允许在关联到手后补一次）。 */
   primed: boolean
-  /** 已算好、等下一回合注入的文本。 */
+  /**
+   * 「开工前」算出来、**还没随装配送达**的那一份（v1.15.7 起）。
+   *
+   * 为什么挂在这里而不是直接写 `pendingText`：实测（turn 15）当轮算出的结果
+   * 被随后一次 `session_start` 的 `prime` **覆盖** → 从未送达（"算了却没送到"）。
+   * 两份各存各的、装配期**合并**，覆盖在结构上就不可能发生。
+   */
+  primeOutcome?: RecallOutcome
+  /** 已算好、等装配期取走的文本。 */
   pendingText: string
   /** 已注入文本（同一回合内保持稳定 —— 保前缀缓存）。 */
   cachedText: string
+  /**
+   * 本回合装配的键（`turn` + 本回合用户消息原文）。
+   *
+   * 作用有二：① 同一回合内多次装配返回同一份文本（保提示前缀缓存）；
+   * ② 回合收尾据此判断"这一回合的用户消息**是否被纳入过检索**" ——
+   * 键不同就说明没检索，必须留一行痕迹（静默丢件是本仓禁区）。
+   */
+  assemblyKey: string
   injectedTurn: number
   lastQuery: string
   /** 已经注入过的条目 id：默认不再重复占额度（噪声控制的关键一条）。 */
@@ -128,6 +163,17 @@ interface SessionState {
   hintedIds: Set<string>
   /** 最近一次召回的结论（供日志页/工具回显）。 */
   lastOutcome?: RecallOutcome
+  /**
+   * **本回合真的注入给模型的条目**（id → 标题）。P4 的引用自动判定用它：
+   * 只判"刚注入过、且回答里出现其标题/id"的那些，不给历史注入翻旧账。
+   */
+  delivered: Map<string, string>
+  /** `delivered` 属于哪个回合（引用判定只在**同一回合**内成立）。 */
+  deliveredTurn: number
+  /** 已算好、等装配期真正取走的那一批条目（`injectionFor` 落成 `delivered`）。 */
+  pendingHits: Array<{ id: string; title: string }>
+  /** 这一回合模型是否调用过检索工具（P5 的 suggested_miss 判据之一）。 */
+  toolUsedThisTurn: boolean
 }
 
 /** 知识候选快照的缓存时长：题目是"每个回合算一次"，但同一回合内可能装配多次。 */
@@ -148,6 +194,8 @@ export interface KnowledgeRecallOptions {
   /** 阈值 / 条数上限覆盖（测试与用户偏好用；缺省取 `RECALL_DEFAULTS`）。 */
   minScore?: number
   maxEntries?: number
+  /** 信息量饱和阈值覆盖（IDF 标定脚本用；正常路径走 `RECALL_DEFAULTS.massSat`）。 */
+  massSat?: number
   /** 日志回调（宿主 logger 或 console）。 */
   log?: (message: string) => void
   /** 是否注册自动注入（`false` 只注册工具与开关）。 */
@@ -158,7 +206,7 @@ export class KnowledgeRecallManager {
   private readonly db: DatabaseSync
   private readonly sessions = new Map<string, SessionState>()
   private readonly options: KnowledgeRecallOptions
-  private candidateCache: { at: number; rows: KnowledgeRow[] } | undefined
+  private candidateCache: { at: number; rows: KnowledgeRow[]; stats: TermStats } | undefined
   /** 最近日志行（上限 500，见 `drainLogs`）。 */
   private readonly recentLogs: string[] = []
 
@@ -211,8 +259,10 @@ export class KnowledgeRecallManager {
     if (!effective) {
       // 关掉时把待注入内容一并清空：否则"关了还是注入了上一次算好的内容"。
       state.pendingText = ''
+      state.primeOutcome = undefined
       state.cachedText = ''
       state.injectedTurn = -1
+      state.assemblyKey = ''
     } else {
       /**
        * 重新打开时**清掉去重集合**：用户关掉再打开，语义是"重新开始"，而不是
@@ -230,7 +280,7 @@ export class KnowledgeRecallManager {
   private state(sessionId: string): SessionState {
     let state = this.sessions.get(sessionId)
     if (state === undefined) {
-      state = { primed: false, pendingText: '', cachedText: '', injectedTurn: -1, lastQuery: '', seenIds: new Set(), hintedIds: new Set() }
+      state = { primed: false, pendingText: '', cachedText: '', injectedTurn: -1, lastQuery: '', assemblyKey: '', seenIds: new Set(), hintedIds: new Set(), delivered: new Map(), deliveredTurn: -1, pendingHits: [], toolUsedThisTurn: false }
       this.sessions.set(sessionId, state)
     }
     return state
@@ -251,17 +301,26 @@ export class KnowledgeRecallManager {
   private buildPending(state: SessionState, outcome: RecallOutcome): void {
     if (outcome.hits.length > 0) {
       state.pendingText = formatRecallText(outcome)
+      // P4：记下"这一批准备送出去的条目"；真正**送达**由 `injectionFor` 落账
+      state.pendingHits = outcome.hits.map((hit) => ({ id: hit.id, title: hit.title }))
       state.injectedTurn = -1
       return
     }
     const fresh = (outcome.nearMisses ?? []).filter((hit) => !state.hintedIds.has(hit.id))
     if (fresh.length === 0) {
       state.pendingText = ''
+      state.pendingHits = []
       state.injectedTurn = -1
       return
     }
     for (const hit of fresh) state.hintedIds.add(hit.id)
     state.pendingText = formatHintText(outcome, fresh)
+    /**
+     * P4：**提示行不参与引用自动判定**。提示的语义是"未必相关、仅供参考"，
+     * 模型顺着它去查是正常动作，把"我怀疑过这条"记成"我引用了这条"会让证据失真。
+     * 所以这里清空待送达集合，只有完整注入才有资格被自动标记引用。
+     */
+    state.pendingHits = []
     this.log(`提示 ${fresh.length} 条"可能相关"（未达注入闸门，仅一行提示）：${fresh.map((hit) => `${hit.id.slice(0, 8)}(${formatRelevance(hit.score)})`).join(' ')}`)
     state.injectedTurn = -1
   }
@@ -332,8 +391,20 @@ export class KnowledgeRecallManager {
       this.log(`读取知识库失败（本回合不召回）：${error instanceof Error ? error.message : String(error)}`)
       rows = []
     }
-    this.candidateCache = { at: now, rows }
+    this.candidateCache = { at: now, rows, stats: termStatsOf(rows.map((entry) => ({ entry, fromTask: false }))) }
     return rows
+  }
+
+  /**
+   * 语料的词信息量统计（与候选集**同一次**缓存）。
+   *
+   * 为什么和候选集一起缓存：`termStatsOf` 要扫全库正文（本机 60 条毫秒级，
+   * 涨到几千条就不该每个回合重扫）。缓存键与候选集完全一致 ——
+   * 分开缓存迟早会出现"候选换了、统计还是旧的"这种静默偏差。
+   */
+  corpusStats(): TermStats {
+    this.allEntries()
+    return this.candidateCache?.stats ?? { size: 0, df: new Map() }
   }
 
   /**
@@ -453,8 +524,10 @@ export class KnowledgeRecallManager {
     return recallKnowledge({
       query: input.query,
       candidates: input.candidates,
+      stats: this.corpusStats(),
       minScore: this.options.minScore ?? RECALL_DEFAULTS.minScore,
       maxEntries: this.options.maxEntries ?? RECALL_DEFAULTS.maxEntries,
+      massSat: this.options.massSat,
       excludeIds: input.explicit === true || input.seen === undefined ? [] : [...input.seen],
     })
   }
@@ -483,6 +556,8 @@ export class KnowledgeRecallManager {
     }
     const skip = outcome.skippedReason !== undefined ? `跳过（${outcome.skippedReason}）` : ''
     const hints = outcome.nearMisses ?? []
+    // P2：被压制（已取代/已过期）的条数必须单独报出来，否则"为什么新写的那条没被召回"没法归因
+    const suppressed = (outcome.droppedAsSuperseded ?? 0) > 0 ? `，另有 ${outcome.droppedAsSuperseded} 条已被取代/已过期（压制）` : ''
     const tail = outcome.hits.length > 0
       ? `命中 ${outcome.hits.length} 条${outcome.droppedByScore > 0 ? `（另有 ${outcome.droppedByScore} 条低于阈值）` : ''}`
       : hints.length > 0
@@ -494,7 +569,7 @@ export class KnowledgeRecallManager {
     const detail = outcome.hits.length > 0
       ? outcome.hits.map((hit) => `${hit.id.slice(0, 8)}(${formatRelevance(hit.score)})`).join(' ')
       : hints.map((hit) => `${hit.id.slice(0, 8)}(${formatRelevance(hit.score)})`).join(' ')
-    this.log(`[${input.trigger}]${skip} 检索「${input.query.slice(0, 60)}」关键词=[${outcome.terms.join(' ')}] → ${tail}`
+    this.log(`[${input.trigger}]${skip} 检索「${input.query.slice(0, 60)}」关键词=[${outcome.terms.join(' ')}] → ${tail}${suppressed}`
       + (detail === '' ? '' : `：${detail}`)
       + (logId === undefined ? '（日志未落库）' : `（日志 #${logId}）`))
   }
@@ -550,7 +625,14 @@ export class KnowledgeRecallManager {
     state.primed = true
     state.lastOutcome = outcome
     state.lastQuery = outcome.query
-    this.buildPending(state, outcome)
+    /**
+     * 只**挂起**，不直接写 `pendingText`（v1.15.7）。
+     *
+     * 实测事故：turn 15 当轮算出的结果（`#27 … matched=61`）被 10:04:33 一次晚到的
+     * `session_start` prime（`#29`）**覆盖** → 从未送达。两份各存各的、装配期合并，
+     * 覆盖在结构上就不可能发生。
+     */
+    state.primeOutcome = willInject(outcome) ? outcome : undefined
     for (const hit of outcome.hits) state.seenIds.add(hit.id)
     return outcome
   }
@@ -561,42 +643,55 @@ export class KnowledgeRecallManager {
   }
 
   /**
-   * 回合收尾预取：拿这一回合的用户提问检索，结果**下一回合**注入。
+   * 「开工前」还没成功过就补做一次（返回是否补做了）。
    *
-   * 为什么不在装配时算：装配在模型步之前的关键路径上，任何查询/打分都在"用户等待"里；
-   * 而且团队记忆踩过更狠的一条 —— 在装配期做重活会破坏提示前缀缓存。预取与之同构。
-   *
-   * 另外它顺带补一件事：**「开工前」还没成功过就补做一次**
-   * （`state.primed === false`）。会话开始那一刻通常还没有 `task_sessions` 关联，
-   * 于是 `prime()` 只能空手而归（v1.15.4 修的 F4：那时它既不检索也不注入，
-   * 整条"开工前"链路对新会话是断的）。补做与本次回合检索的结果**合并后一起注入**，
-   * 但**各落一行日志**（`session_start` 与 `turn` 分开记账，账才对得上）。
+   * 判据只有一处：`state.primed`。会话开始时 `task_sessions` 往往还没建立
+   * （客户端先 `sessions.prompt()`、随后才 POST 关联），所以不能把
+   * "那一刻查不到任务"当成"这个会话永远不做开工前召回"。
    */
-  prefetch(sessionId: string, cwd: string | undefined, query: string): RecallOutcome | undefined {
-    if (!this.sessionEnabled(sessionId)) return undefined
-    const state = this.state(sessionId)
-    const parts: Array<{ query: string; outcome: RecallOutcome }> = []
+  primeIfNeeded(sessionId: string, cwd?: string): RecallOutcome | undefined {
+    if (this.state(sessionId).primed) return undefined
+    return this.prime(sessionId, cwd)
+  }
 
-    if (!state.primed) {
-      const late = this.prime(sessionId, cwd)
-      if (late !== undefined && willInject(late)) parts.push({ query: late.query, outcome: late })
+  /**
+   * **本回合的检索（唯一实现）**：开工前挂起的那一份 + 本回合**每一句**用户消息，
+   * 合并后写成"待装配取走"的文本。
+   *
+   * 为什么必须是"每一句"而不是"最后一句"：实测 turn 16 那一轮里有两条用户本人消息 ——
+   * 实质提问 + 随后的「停」。旧实现只取最后一条（「停」）、被 `isTrivialQuery` 判为琐碎 →
+   * **那句实质提问从未被检索过**，而库里明明有一条 0.72 相关度的条目。
+   * 这是"静默丢件"（账上看不出来的丢），所以取词范围与记账口径都在这一处。
+   */
+  private recallForTurn(sessionId: string, cwd: string | undefined, queries: string[]): RecallOutcome {
+    const state = this.state(sessionId)
+    // 「开工前」还没成功过就补做一次（v1.15.4 修的 F4：会话开始时通常还没有 task_sessions 关联）
+    this.primeIfNeeded(sessionId, cwd)
+
+    const parts: Array<{ query: string; outcome: RecallOutcome }> = []
+    if (state.primeOutcome !== undefined) {
+      parts.push({ query: state.primeOutcome.query, outcome: state.primeOutcome })
+      state.primeOutcome = undefined
+    }
+    const { taskId } = this.primeQueries(sessionId, cwd)
+    for (const query of queries) {
+      const turn = this.recallWith({
+        sessionId,
+        taskId,
+        query,
+        candidates: this.candidates(taskId),
+        trigger: 'turn',
+        seen: state.seenIds,
+      })
+      this.logOutcome({ trigger: 'turn', query, outcome: turn, injected: willInject(turn), sessionId, taskId })
+      parts.push({ query, outcome: turn })
     }
 
-    const { taskId } = this.primeQueries(sessionId, cwd)
-    const turn = this.recallWith({
-      sessionId,
-      taskId,
-      query,
-      candidates: this.candidates(taskId),
-      trigger: 'turn',
-      seen: state.seenIds,
-    })
-    this.logOutcome({ trigger: 'turn', query, outcome: turn, injected: willInject(turn), sessionId, taskId })
-    parts.push({ query, outcome: turn })
-
-    const outcome = parts.length === 1
-      ? turn
-      : mergeRecallOutcomes(parts, { maxEntries: this.maxEntries() })
+    const outcome = parts.length === 0
+      ? { ...EMPTY_OUTCOME, query: '', skippedReason: '本回合没有可检索的用户消息' }
+      : parts.length === 1
+        ? parts[0].outcome
+        : mergeRecallOutcomes(parts, { maxEntries: this.maxEntries() })
     state.lastOutcome = outcome
     state.lastQuery = outcome.query
     this.buildPending(state, outcome)
@@ -605,19 +700,112 @@ export class KnowledgeRecallManager {
   }
 
   /**
-   * 装配期取本回合要注入的内容（**纯读**，不检索、不写库）。
+   * 回合收尾预取（**保留的底层入口**：测试与诊断脚本直接驱动它）。
+   *
+   * v1.15.7 起自动路径不再走这里 —— 检索移到**装配期**（`assemblyInjection`），
+   * 因为本仓检索是本地 SQLite 毫秒级，"回合收尾预取 → 下回合注入"那个形状
+   * 是从团队记忆照搬的，而团队记忆延后的前提是**它的检索要出网**（5s 超时、云端优先）。
+   * 抄一个带网络前提的设计，代价是：知识晚一轮到、话题一换就错位、
+   * 一轮多条用户消息时前一条被静默丢掉（实测事故）。
+   */
+  prefetch(sessionId: string, cwd: string | undefined, query: string): RecallOutcome | undefined {
+    if (!this.sessionEnabled(sessionId)) return undefined
+    return this.recallForTurn(sessionId, cwd, [query])
+  }
+
+  /**
+   * **装配期取本回合要注入的内容**（自动召回的唯一权威入口，v1.15.7）。
+   *
+   * 用**当前正在被回答的那条用户消息**检索：会话日志事件顺序是
+   * `turn/start` → `user/message` → `request/header`，所以装配期消息已经在事件里
+   * （`test/knowledgeRecallWiring.test.mjs` 用真实 `SessionEvent` 形状钉住了这一点）。
+   *
+   * 三条纪律：
+   * 1. **同一回合内文本稳定**：键（turn + 本回合用户消息）没变就直接复用缓存 ——
+   *    保提示前缀缓存，也保证"装配多次只算一次检索"（账不被装配次数放大）；
+   * 2. **不插占位**：没有内容返回空串；
+   * 3. **不静默**：读取失败、没有消息、跳过检索都留一行可读日志或一条召回日志。
+   */
+  assemblyInjection(sessionId: string, cwd: string | undefined, agent: unknown): string {
+    if (!this.sessionEnabled(sessionId)) return ''
+    const state = this.state(sessionId)
+    const turn = currentTurnOf(agent)
+    const queries = currentTurnQueries(agent)
+    const key = assemblyKeyOf(turn, queries)
+    if (state.assemblyKey === key) return state.cachedText
+    state.assemblyKey = key
+
+    if (queries.length > 0) {
+      this.recallForTurn(sessionId, cwd, queries)
+      const text = this.injectionFor(sessionId, turn)
+      state.cachedText = text
+      return text
+    }
+    /**
+     * 本回合还没有用户消息（罕见：装配早于 `user/message` 落进事件）。
+     * **不写 assemblyKey 的终态** —— 否则那条消息到达后这一回合就再也不会被检索，
+     * 正好复现我们要修的那个 bug。所以这里把键还原成"未装配过"。
+     */
+    const text = this.injectionFor(sessionId, turn)
+    state.cachedText = text
+    state.assemblyKey = ''
+    return text
+  }
+
+  /**
+   * 回合收尾的**观测**：本回合有用户消息、但装配期一次检索都没发生 → 留一行痕迹。
+   *
+   * 为什么必须有：本仓最忌讳"该做的事没做、账上看不出来"。turn 16 那次事故在账上
+   * 只剩一行「停」，实质提问**一个字都没提** —— 有了这条，同样的丢失会立刻现形。
+   * 只观测、不强制检索（不改变行为，也就不引入新的行为风险）。
+   */
+  noteUnretrieved(sessionId: string, cwd: string | undefined, agent: unknown): void {
+    if (!this.sessionEnabled(sessionId)) return
+    const queries = currentTurnQueries(agent)
+    if (queries.length === 0) return
+    const turn = currentTurnOf(agent)
+    if (this.state(sessionId).assemblyKey === assemblyKeyOf(turn, queries)) return
+    const query = queries.join(' ／ ')
+    this.logLine(`[turn] ${turn} 回合有用户消息但**未纳入检索**（装配期没发生）：「${query.slice(0, 120)}」`)
+    const outcome: RecallOutcome = {
+      ...EMPTY_OUTCOME,
+      query,
+      skippedReason: '未纳入检索（本回合装配期没有发生检索）',
+    }
+    try {
+      appendRecallLog(this.db, { sessionId, taskId: this.resolveTaskId(sessionId, cwd), trigger: 'turn', outcome, injected: false })
+    } catch (error) {
+      this.log(`写"未纳入检索"日志失败：${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  /**
+   * 装配期取本回合要注入的内容（**不检索、不写库**）。
    *
    * 同一回合内返回同一份文本（保前缀缓存）；没有就绪内容返回空串（**不插占位**）。
+   *
+   * ⚠️ v1.15.7 起自动路径的入口是 `assemblyInjection`（它在调用本方法**之前**做当轮检索）。
+   * 本方法保留为底层入口：测试与 `prime` 单独驱动时（只挂起开工前那一份）也能取到文本。
    */
   injectionFor(sessionId: string, turn: number): string {
     const state = this.sessions.get(sessionId)
     if (state === undefined) return ''
     if (!this.sessionEnabled(sessionId)) return ''
     if (state.injectedTurn === turn) return state.cachedText
+    // 开工前那份如果还挂着（本回合没有当轮检索），在这里落成待注入文本。
+    if (state.pendingText === '' && state.primeOutcome !== undefined) {
+      const prime = state.primeOutcome
+      state.primeOutcome = undefined
+      this.buildPending(state, prime)
+    }
     if (state.pendingText !== '') {
       state.cachedText = state.pendingText
       state.injectedTurn = turn
       state.pendingText = ''
+      // P4：这一刻才算"送达"—— 引用自动判定只认真正进过会话的条目
+      state.delivered = new Map(state.pendingHits.map((hit) => [hit.id, hit.title]))
+      state.deliveredTurn = turn
+      state.pendingHits = []
       /**
        * 日志要如实区分**注入了完整块**还是**只给了一行提示** ——
        * 两者在会话里的分量完全不同，混成一句"注入知识 N 条"会让日志失去判据价值
@@ -633,12 +821,80 @@ export class KnowledgeRecallManager {
     return ''
   }
 
+  /**
+   * 回合收尾的最后一步：把"本回合用过检索工具"的标记复位（P5 的判据要按回合算）。
+   *
+   * 为什么不放在回合开始时清：`agent/turn-stopping` 是每个回合的确定终点，
+   * 而"回合开始"没有等价的可靠钩子（装配期会被调用多次）。在终点复位，
+   * 语义就是"下一次收尾之前有没有用过工具"，简单且可判定。
+   */
+  noteTurnStopped(sessionId: string): void {
+    const state = this.sessions.get(sessionId)
+    if (state !== undefined) state.toolUsedThisTurn = false
+  }
+
   /** 模型回报"用到了哪几条"（写进召回日志，作为"是否被引用"的证据）。 */
   reportUsage(sessionId: string, entryIds: string[]): { updated: number; unknown: string[] } {
     const known = new Set(this.allEntries().map((entry) => entry.id))
     const unknown = entryIds.filter((id) => !known.has(id))
     const updated = citeRecallLog(this.db, { sessionId, ids: entryIds.filter((id) => known.has(id)) })
     return { updated, unknown }
+  }
+
+  /**
+   * **回合收尾的引用自动判定**（P4）—— 替代/补足"靠模型自觉调 report_usage"。
+   *
+   * 判据只有一条（`citationMatch`）：这一回合**刚注入过**的条目，其 id 或标题前缀
+   * 出现在模型这一回合的回答里。不提就不标（**不许瞎标**：标错会让"注入过但没人引用"
+   * 这条证据失真，而失真的证据会让人删掉有用的知识）。
+   *
+   * 三个刻意的边界：
+   * 1. 只判**本回合注入**的条目（`deliveredTurn === 当前回合`）—— 不翻旧账；
+   * 2. **提示行注入的不算**（`buildPending` 里已清空 delivered）—— 那是"仅供参考"；
+   * 3. 每次自动标记都留一行日志（含命中了几条、落到几行日志），可回看可申诉。
+   */
+  autoCite(sessionId: string, agent: unknown): number {
+    const state = this.sessions.get(sessionId)
+    if (state === undefined || state.delivered.size === 0) return 0
+    if (state.deliveredTurn !== currentTurnOf(agent)) return 0
+    const answer = assistantTextOf(agent)
+    if (answer === '') return 0
+    const items = [...state.delivered].map(([id, title]) => ({ id, title }))
+    const ids = citationMatch(answer, items)
+    if (ids.length === 0) return 0
+    for (const id of ids) state.delivered.delete(id)
+    const updated = citeRecallLog(this.db, { sessionId, ids })
+    this.log(`[cite] 回答里出现本回合注入条目的标题/id → 自动标记引用 ${ids.length} 条（落到 ${updated} 行召回日志）：${ids.map((id) => id.slice(0, 8)).join(' ')}`)
+    return updated
+  }
+
+  /**
+   * **「该查未查」观测**（P5）：用户这句话像在报错，而这一回合模型一次检索工具都没调过
+   * → 落一行 `suggested_miss`。
+   *
+   * 只观测、不强制（不替模型做决定，也不改变任何既有行为）。为什么还是必须落库：
+   * 本仓的插件可读日志（`manager.logLine`）在本机**没落盘**（`dsh-web.log` 是 0 字节），
+   * 只打一行控制台等于没有证据 —— 那正是"静默丢件"的另一种形态。
+   */
+  noteSuggestedMiss(sessionId: string, cwd: string | undefined, agent: unknown): void {
+    if (!this.sessionEnabled(sessionId)) return
+    if (this.sessions.get(sessionId)?.toolUsedThisTurn === true) return
+    const queries = currentTurnQueries(agent)
+    if (queries.length === 0) return
+    const text = queries.join(' ')
+    if (!looksLikeErrorReport(text)) return
+    this.logLine(`[suggested_miss] 本轮像在报错但没调用检索工具：「${text.slice(0, 80)}」（只观测，不强制）`)
+    try {
+      appendRecallLog(this.db, {
+        sessionId,
+        taskId: this.resolveTaskId(sessionId, cwd),
+        trigger: 'suggested_miss',
+        outcome: { ...EMPTY_OUTCOME, query: text, skippedReason: 'suggested_miss：本轮疑似报错但没有调用检索工具（只观测）' },
+        injected: false,
+      })
+    } catch (error) {
+      this.log(`写 suggested_miss 日志失败：${error instanceof Error ? error.message : String(error)}`)
+    }
   }
 
   /** 给界面/端点：本会话最近的召回记录（含"是否被引用"）。 */
@@ -698,8 +954,10 @@ export class KnowledgeRecallManager {
     return recallKnowledge({
       query: input.query,
       candidates: this.candidates(input.taskId),
+      stats: this.corpusStats(),
       minScore: this.options.minScore ?? RECALL_DEFAULTS.minScore,
       maxEntries: this.options.maxEntries ?? RECALL_DEFAULTS.maxEntries,
+      massSat: this.options.massSat,
     })
   }
 
@@ -720,6 +978,9 @@ export class KnowledgeRecallManager {
     matched?: number
     droppedByScore?: number
   }): number | undefined {
+    // P5：本回合调用过检索工具 → 不再记 suggested_miss（"该查未查"的"查"就是它）
+    const state = this.sessions.get(input.sessionId)
+    if (state !== undefined) state.toolUsedThisTurn = true
     try {
       return appendRecallLog(this.db, {
         sessionId: input.sessionId === '' ? null : input.sessionId,
@@ -737,6 +998,7 @@ export class KnowledgeRecallManager {
           droppedByScore: input.droppedByScore ?? 0,
           droppedByLimit: 0,
           droppedAsSeen: 0,
+          droppedAsSuperseded: 0,
           nearMisses: [],
         },
         injected: false,
@@ -887,12 +1149,24 @@ export function installKnowledgeRecall(
     order: 300,
     text: (assembly) => {
       try {
-        const agent = (assembly as { agent?: { session?: { header?: { id?: string; origin?: string } } } } | undefined)?.agent
+        const agent = (assembly as { agent?: { session?: { header?: { id?: string; origin?: string; cwd?: string } } } } | undefined)?.agent
         const sessionId = agent?.session?.header?.id
         if (sessionId === undefined || sessionId === '') return ''
         // 子会话是"为某个具体委托而开"的短命上下文：把父会话的知识再带一遍是纯噪声。
         if (agent?.session?.header?.origin === 'subagent') return ''
-        return manager.injectionFor(sessionId, currentTurnOf(agent))
+        /**
+         * P1（v1.15.7）：检索就发生在**这一刻**，用**当前正在被回答的那条用户消息**。
+         *
+         * 授权依据（不是推理）：会话日志的事件顺序是 `turn/start` → `user/message`
+         * → `request/header`，即装配期用户消息已经在会话事件里；`currentTurnOf` 拿到的
+         * 也是当前回合号。由 `test/knowledgeRecallWiring.test.mjs` 用真实 `SessionEvent`
+         * 形状钉住（先红后绿）。
+         *
+         * 成本：一次本地 SQLite 查询 + 纯打分（毫秒级）。本仓检索不出网 ——
+         * 团队记忆那套"回合收尾预取 → 下回合注入"之所以成立，前提是它的检索要出网，
+         * 照搬过来只会让知识晚一轮到、话题一换就错位、一轮多条消息时丢掉前一条。
+         */
+        return manager.assemblyInjection(sessionId, agent?.session?.header?.cwd, agent)
       } catch (error) {
         // 绝不因为注入失败影响会话：留一行可读日志，然后什么都不注入。
         manager.logLine(`注入失败（已忽略）：${error instanceof Error ? error.message : String(error)}`)
@@ -915,11 +1189,15 @@ export function installKnowledgeRecall(
   }) as never)
 
   /**
-   * 回合收尾预取：**同步返回、绝不做 I/O 之外的重活**。
+   * 回合收尾：**不再做回合检索**（那已经移到装配期），只剩两件事。
+   *
+   * 1. **补做「开工前」**：会话开始那一刻通常还没有 `task_sessions` 关联，
+   *    `prime()` 只能空手而归（v1.15.4 修的 F4）。关联到手后在这里补一次。
+   * 2. **观测**：本回合若有用户消息没被纳入检索，落一行痕迹（绝不静默丢件）。
    *
    * 团队记忆记过一条硬约束：`agent/turn-stopping` 是串行 await 的收尾钩子，
-   * 在这里 await 网络会让"上传慢 → 对话看起来失效"。这里是本地 SQLite 读 + 纯打分，
-   * 毫秒级，但仍然**全部包在 try/catch 内**：宁可这一回合不召回，也不能影响对话。
+   * 在这里做重活会让"上传慢 → 对话看起来失效"。这里是本地 SQLite 读 + 纯打分，
+   * 毫秒级，但**仍然全部包在 try/catch 内**：宁可这一回合不记，也不能影响对话。
    */
   events.on('agent/turn-stopping', ((payload: { agent?: { session?: { header?: { id?: string; cwd?: string; origin?: string } } }; turn?: number }) => {
     try {
@@ -927,12 +1205,19 @@ export function installKnowledgeRecall(
       const sessionId = header?.id
       if (sessionId === undefined || sessionId === '') return
       if (header?.origin === 'subagent') return
-      const snapshot = snapshotEvents(payload?.agent?.session)
-      const query = textOfUserMessage(latestUserMessage(snapshot))
-      if (query === '') return
-      manager.prefetch(sessionId, header?.cwd, query)
+      if (!manager.sessionEnabled(sessionId)) return
+      // ① 补做开工前（迟到的关联）
+      manager.primeIfNeeded(sessionId, header?.cwd)
+      // ② 观测：这一回合的用户消息到底有没有被检索过
+      manager.noteUnretrieved(sessionId, header?.cwd, payload?.agent)
+      // ③ P4：引用自动判定（回答里出现了刚注入条目的标题/id → 自动标 cited）
+      manager.autoCite(sessionId, payload?.agent)
+      // ④ P5："该查未查"只观测（像报错却没调用检索工具 → 落一行 suggested_miss）
+      manager.noteSuggestedMiss(sessionId, header?.cwd, payload?.agent)
+      // ⑤ 本回合的"用过工具"标记复位（下一回合重新计）
+      manager.noteTurnStopped(sessionId)
     } catch (error) {
-      manager.logLine(`回合预取失败（已忽略，不影响对话）：${error instanceof Error ? error.message : String(error)}`)
+      manager.logLine(`回合收尾处理失败（已忽略，不影响对话）：${error instanceof Error ? error.message : String(error)}`)
     }
   }) as never)
 
@@ -968,4 +1253,78 @@ export function latestUserMessage(events: unknown[]): unknown {
     if (isUserAuthored(message)) return message
   }
   return undefined
+}
+
+/**
+ * **本回合**所有用户本人写的 `user/message`（v1.15.7，P1 的核心修法）。
+ *
+ * 为什么不是"最后一条"：实测 turn 16 那一轮里有两条用户本人消息 ——
+ * 实质提问（10:05:40）+「停」（10:06:37）。只取最后一条 = 「停」→ 判为琐碎 → 跳过检索，
+ * **那句实质提问从未被检索过**。而库里已有一条 0.72 相关度的条目，本应完整块注入。
+ * 失败发生在打分**之前**，所以调阈值/提示档都救不了它。
+ *
+ * 取词范围 = 最后一个 `turn/start`（回合号与 `currentTurnOf` 一致）之后的全部用户消息；
+ * 找不到 `turn/start`（事件形状异常）时退回 `latestUserMessage` —— 少召回也不能拿错消息
+ * （把上一回合的提问当成这一回合的，会把不相关的知识注进来）。
+ */
+export function currentTurnUserMessages(agent: unknown): unknown[] {
+  const session = (agent as { session?: unknown } | undefined)?.session
+  const events = snapshotEvents(session)
+  const turn = currentTurnOf(agent)
+  let start = -1
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index] as { type?: string } | undefined
+    if (event?.type === 'turn/start' && turnNumberOf(event) === turn) { start = index; break }
+  }
+  if (start < 0) {
+    const fallback = latestUserMessage(events)
+    return fallback === undefined ? [] : [fallback]
+  }
+  const messages: unknown[] = []
+  for (let index = start; index < events.length; index += 1) {
+    const event = events[index] as { type?: string } | undefined
+    if (event?.type !== 'user/message') continue
+    const message = messageOf(event)
+    if (isUserAuthored(message)) messages.push(message)
+  }
+  return messages
+}
+
+/** 本回合的用户消息**文本**（去空、保序、去重）。检索与记账都用这一份。 */
+export function currentTurnQueries(agent: unknown): string[] {
+  const queries: string[] = []
+  for (const message of currentTurnUserMessages(agent)) {
+    const text = textOfUserMessage(message)
+    if (text === '' || queries.includes(text)) continue
+    queries.push(text)
+  }
+  return queries
+}
+
+/**
+ * 本回合**模型自己说的**内容（P4 的引用判定要读它）。
+ *
+ * 只看 `assistant/message`，且必须排除插件注入的 `user/message` 快照
+ * （那里面就会抄着知识块的标题 —— 拿它当"模型引用了"会把自动判定变成自激：
+ * 注入什么就自动标成引用了什么，证据全部失真）。这里只读 assistant 角色的事件，
+ * 所以天然不含注入快照。
+ */
+export function assistantTextOf(agent: unknown): string {
+  const session = (agent as { session?: unknown } | undefined)?.session
+  const events = snapshotEvents(session)
+  const turn = currentTurnOf(agent)
+  let start = -1
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index] as { type?: string } | undefined
+    if (event?.type === 'turn/start' && turnNumberOf(event) === turn) { start = index; break }
+  }
+  const scoped = start >= 0 ? events.slice(start) : events
+  const parts: string[] = []
+  for (const item of scoped) {
+    const event = item as { type?: string } | undefined
+    if (event?.type !== 'assistant/message') continue
+    const text = textOfUserMessage(messageOf(event))
+    if (text !== '') parts.push(text)
+  }
+  return parts.join('\n')
 }

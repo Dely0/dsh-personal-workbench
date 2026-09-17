@@ -17,24 +17,47 @@
  *
  * | 约定 | 团队记忆 | 这里 |
  * |---|---|---|
- * | 检索时机 | 回合收尾预取 → 下回合注入 | 同 |
- * | 阈值 | `score >= minScore`（分越大越相关） | 同 |
+ * | 检索时机 | 回合收尾预取 → 下回合注入 | **不同**：装配期当轮检索（v1.15.7，见下） |
+ * | 阈值 | `score >= minScore`（分越大越相关） | 同（但本实现是**严格大于**，理由见 `minScore`） |
  * | 条数上限 | `maxMemories`（缺省 5） | `maxEntries`（缺省 3） |
  * | 零命中 | **不插占位**（保住提示前缀缓存） | 同 |
  * | 琐碎消息 | 跳过检索但**留痕** | 同 |
  * | 可关闭 | `injectMemories=false` | 同（全局 + 单会话） |
  *
- * ## 打分口径（必须写清，否则"相关度 0.62"没人能解释）
+ * **检索时机为什么和团队记忆不同（v1.15.7）**：团队记忆之所以"回合收尾预取 → 下回合注入"，
+ * 前提是**它的检索要出网**（云端优先 + 本地兜底、5s 超时、fire-and-forget），
+ * 放进提示装配的关键路径不合适。本仓是本地 SQLite + 纯打分（毫秒级），
+ * 照搬那个形状的代价实测有三条：①知识晚一轮到（问问题那一轮永远看不到）；
+ * ②话题一换就错位（注入的是上一件事的知识）；③一轮多条用户消息时前一条被**静默丢掉**。
+ * 所以本仓在**装配期**用"当前正在被回答的那条用户消息"检索，见 `assemblyInjection`。
+ *
+ * ## 打分口径（必须写清，否则"相关度 0.60"没人能解释）
  *
  * ```
- * hits     = 命中的不同关键词数
- * coverage = hits / 本次检索的关键词总数
- * score    = clamp01(weight * min(1, hits/3) * (0.5 + 0.5*coverage))   ← 内部原始分
- *   weight: 标题命中 0.55 / 标签命中 0.45 / 正文命中 0.25（取命中的**最高**一档）
- * 命中判定: score > 0.34（原始分口径）
+ * idf(t)     = ln(1 + N/df(t)) / ln(1 + N)   ∈ (0, 1]   N=语料条数，df=含该词的条数（标题∪标签∪正文）
+ * massHit_f  = Σ idf(t)，t ∈ 该字段命中的词
+ * massQuery  = Σ idf(t)，t ∈ 语料里存在的查询词
+ * strength_f = min(1, massHit_f / massSat)               ← v1.15.7 起（原 min(1, 命中词数/3)）
+ * coverage_f = min(1, massHit_f / massQuery)             ← v1.15.7 起按信息量算（原 命中词数/总词数）
+ * score_f    = weight_f * strength_f * (0.5 + 0.5 * coverage_f)
+ * score      = max(标题档, 标签档, 正文档)   ← 三个字段**各自算分**，取最高（v1.15.4 修正）
+ *   weight: 标题 0.55 / 标签 0.45 / 正文 0.25
+ * 命中判定: score > 0.33（原始分口径；提示档 score > 0.20）
  * 展示相关度: relevance = score / 0.55 ∈ (0, 1]        ← 所有给人看的地方用这个
  * 排序: score 降序 → 本任务优先 → 更新时间降序 → id（结果稳定，日志才有可比性）
  * ```
+ *
+ * **v1.15.7（P1b）换掉的是长度因子的量纲**：从"命中几个词"改成"命中的**信息量总量**"。
+ * 中文逐字抽词下 试/测/知/识/库/一 这类字与"盘符""时序"**等权**，长提问里一堆常用字
+ * 把真实命中的质量摊薄了（实测：三条真实提问的 top-1 全是正确答案却卡在 0.327/0.309/0.324，
+ * 而一句无关闲聊命中泛化标题里的「知识库」拿 0.338 —— 噪声比正确答案还高，降阈值等于放它进来）。
+ * 阈值 `0.34` 也随之重新标定到 `0.33`（换尺子必须重新刻度），证据在 `minScore` 的注释里。
+ *
+ * **权重与覆盖率必须来自同一个字段**（v1.15.4 修）：早期写法是"权重取命中的最高一档、
+ * 覆盖率取**三字段并集**"，于是"标题碰巧共享 1 个字 + 长篇正文命中一堆"能拿到 0.5 以上，
+ * 同一篇泛化长文对任何提问都进 top-3（真实库实测 4 次提问进 3 次）。
+ * 现在三个字段各自算分取最大；覆盖率的**分母**（本次提问的信息量总量）属于问题、
+ * 不属于字段，所以三档共用 —— 分子仍各字段自算，那条修复没有被推翻。
  *
  * ## 为什么必须有 `relevance`（展示层归一化）—— 别再把"相关度 0.41"当成低分
  *
@@ -55,17 +78,21 @@
  * 一条判据一个值：`RecallHit.score` 是原始分、`RecallHit.relevance` 是展示分，
  * 两者由 `relevanceOf()` 单向导出，谁都不许自己再除一遍。
  *
- * **两个因子各治一种病**（都是本轮实测踩出来的，改公式前先看完这段）：
+ * **两个因子各治一种病**（都是实测踩出来的，改公式前先看完这段）：
  *
- * - **长度因子 `min(1, hits/3)`**：治"长正文靠体量堆命中"。第一版写的是
- *   `权重 + 0.06*(命中词数-1)`，一篇 3000 字的文章只要正文里出现 8 个常见字就冲到 1.00 ——
- *   实测 20 字长的提问命中 3 条、三条全是 1.00，**阈值与排序同时失效**。
- *   中间试过"命中数 ÷ 提问长度"，又矫枉过正：'盘符 根目录 文件选择'（9 个关键词）
- *   查一条标题只有 6 个字的条目、命中了 5 个，仍然只有 0.31 —— **真实提问全被挡在门外**。
- *   现在"命中 3 个词即给满这一因子"：短条目 5/6 命中≈满分，长正文堆 8 个字也只有 1.0。
+ * - **强度因子 `min(1, massHit/massSat)`**（v1.15.7 起是"信息量饱和"）：
+ *   治"长正文靠体量堆命中"。第一版写的是 `权重 + 0.06*(命中词数-1)`，
+ *   一篇 3000 字的文章只要正文里出现 8 个常见字就冲到 1.00 —— 实测 20 字长的提问
+ *   命中 3 条、三条全是 1.00，**阈值与排序同时失效**。中间试过"命中数 ÷ 提问长度"，
+ *   又矫枉过正：`'盘符 根目录 文件选择'` 查一条标题只有 6 个字的条目、命中 5 个，
+ *   仍然只有 0.31 —— **真实提问全被挡在门外**。v1.15.3~v1.15.6 用"命中 3 个词即饱和"
+ *   兜住它，但那把尺子**每个字等权**：真问题里的关键词与「一」「库」这种常用字同价，
+ *   三条真实提问的正确答案因此全卡在 0.327/0.309/0.324（实测）。
+ *   现在按**信息量总量**饱和：命中几个"有信息量的词"才加分，堆常用字不再白拿分。
  * - **覆盖率 `0.5 + 0.5*coverage`**：治"只共享一两个字也拿满分"。半量起步
- *   （命中即给该字段权重的 50%）保证短提问不被过度惩罚，同时把"11 个关键词里
- *   只碰巧共享 1 个"压到 0.09。
+ *   （命中即给该字段权重的 50%）保证短提问不被过度惩罚，同时把"提问里一大半
+ *   信息量都没被覆盖"的条目压到阈值以下。v1.15.7 起覆盖率也按信息量算
+ *   （`massHit/massQuery`），于是长提问里的常用字不再撑大分母。
  *
  * **"新旧"不进分数，只做排序**（这里与团队记忆的取舍不同，值得说清理由）：
  * 分数是给人看的"多相关"，混进时间会让权重档位被时间污染
@@ -135,6 +162,15 @@ export interface RecallInput {
   excludeIds?: readonly string[]
   /** 注入过是否就不再召回（默认 true）。关掉后已注入的条目仍可再次命中。 */
   dedupe?: boolean
+  /**
+   * 语料词统计（`termStatsOf(candidates)`）。不传就按 `candidates` 现算。
+   *
+   * 管理器会把它与候选集一起缓存（同一个候选集只统计一次）—— 5000 条时
+   * 每次召回都重扫一遍正文是没必要的开销。
+   */
+  stats?: TermStats
+  /** 信息量饱和阈值覆盖（标定脚本用；正常路径走 `RECALL_DEFAULTS.massSat`）。 */
+  massSat?: number
   /** "现在"，用于最近度；注入以便单测固定。 */
   now?: Date
 }
@@ -166,6 +202,14 @@ export interface RecallOutcome {
   droppedByLimit: number
   /** 被会话去重跳过的条数。 */
   droppedAsSeen: number
+  /**
+   * 被**压制**（已被取代 / 已过期）而根本没参与打分的条数（P2）。
+   *
+   * 为什么不并进 `droppedByScore`：那两件事的原因完全不同 ——
+   * 一个是"分数不够"，一个是"这条已经不作数了"。混在一起，日志就答不了
+   * "为什么我刚写的那条新知识没被召回"（答：旧的那条还在库里且没标取代关系 / 或者标反了）。
+   */
+  droppedAsSuperseded: number
   /** 关键词（用于日志：检索了哪些关键词是可观测要求之一）。 */
   terms: string[]
   /** 跳过检索的原因（非空即"没检索"，与"检索了零命中"区分开）。 */
@@ -180,45 +224,98 @@ export interface RecallOutcome {
  */
 export const RECALL_DEFAULTS = {
   /**
-   * 阈值 `0.34` 是**算出来的，不是拍的**。
+   * 阈值 `0.33` 是**在新量纲下重新量出来的**（v1.15.7 的 P1b）。
    *
    * 三条约束同时压在这个数字上：
-   * 1. **正文命中一律不过线**（`正文权重 0.25 < 0.34`，即使全覆盖）——
-   *    "正文里出现关键词"不足以把一条知识推给模型，这是噪声控制的核心口径；
-   * 2. **碰巧共享几个字的长提问也捞不到东西**：中文逐字抽词时标题档是
-   *    `0.55 × 命中覆盖率`，覆盖率低就掉到阈值以下
-   *    （实测"方向图 内存溢出 卡死"里只共享 4/10 的无关条目 0.22 → 挡下）；
-   * 3. **真实的短提问仍然能命中**：标题/标签命中的档位是 0.55 / 0.45，
-   *    哪怕长提问里对应字段覆盖率过半也稳过线（实测"装盘后台 dsh plugin add ENOENT"
-   *    的两条命中都是 0.34 上下，属于跨字段拼出来的边界分）。
+   * 1. **正文命中一律不过线**（`正文权重 0.25 < 0.33`，即使全覆盖）——
+   *    "正文里出现关键词"不足以把一条知识推给模型，这是噪声控制的核心口径。这条
+   *    与量纲无关：只要阈值 > 0.25，结论就成立；
+   * 2. **碰巧共享几个字的长提问也捞不到东西**：标题档是
+   *    `0.55 × 强度 × (0.5 + 0.5×覆盖率)`，命中信息量低/覆盖率低就掉到阈值以下；
+   * 3. **真实的短提问要能命中**：标题/标签档是 0.55 / 0.45。
    *
-   * 结论：**命中要落在标题或标签上，且要有一定覆盖率**。这正是知识条目质量的
-   * 自然要求 —— 一条知识的标题如果命中了你在问的事，它就该被带出来；只有正文擦边的不该。
+   * ## 为什么从 0.34 挪到 0.33（不是"降闸门"，是换了尺子重新刻度）
+   *
+   * `0.34` 是**旧公式**（`min(1, 命中词数/3)` 长度因子）下算出来的；P1b 把长度因子
+   * 换成"命中的信息量总量"（`Σ idf`）之后，同一个数字不再表示同一件事 ——
+   * 必须重新标定，否则就是拿旧尺子的读数去套新尺子。
+   *
+   * 标定证据（`scripts/repro/calibrate-idf.mjs`，本机真实库 61 条 + 12 条真实提问）：
+   *
+   * | 配置 | 真实完整注入 | 有可见内容 | 关键词对照 | A/B/C 诱饵 |
+   * |---|---|---|---|---|
+   * | 旧公式 + 0.34（基线） | 3/12 | 11/12 | 4/4 | 全过 |
+   * | IDF + 0.34 | 3/12 | 12/12 | 4/4 | 全过 |
+   * | **IDF + 0.33** | **5/12** | 12/12 | **4/4** | **全过** |
+   * | IDF + 0.32 | 7/12 | 12/12 | 4/4 | 全过（但**历史那条噪声哨兵 0.322 会进来**）|
+   * | IDF + 0.30 | 11/12 | 12/12 | 4/4 | 全过（同上，且含"库里确实没有"的长 paste）|
+   *
+   * 多出来的两条是**正确答案**（genui 渲染失败 0.339 →「【修正】dsh-ui 围栏整块降级」；
+   * 相关度疑问 0.334 →「复盘：团队记忆系统落地搭建」），
+   * 而 P1 用来守住闸门的那条"闲聊"（0.322）**仍然被挡在门外** ——
+   * 这正是"闸门不降、但新尺子上要重新刻度"的含义。
    *
    * 口径提醒：这是**原始分**阈值，换算成给人看的归一化相关度是
-   * `0.34 / 0.55 ≈ 0.62` —— 也就是说"过线的命中在界面上显示 0.62 以上"，
-   * 别把 0.62 看成低分（对照团队记忆的 0.8~0.99，那是另一套分母，
+   * `0.33 / 0.55 = 0.60` —— 也就是说"过线的命中在界面上显示 0.60 以上"，
+   * 别把 0.60 看成低分（对照团队记忆的 0.8~0.99，那是另一套分母，
    * 见文件头"为什么必须有 relevance"）。
    */
-  minScore: 0.34,
+  minScore: 0.33,
   /**
    * **提示档阈值**（v1.15.6 的 P1）：分数落在 `[hintScore, minScore)` 的条目
    * 不注入完整块，但会在注入位置留**一行**"可能相关"提示（id + 标题 + 相关度）。
    *
-   * `0.20` 是**量出来的**：本会话 11 条真实提问里，正确答案的最低分是 0.275
-   * （「还是不行，genui还是没有渲染」），而唯一一条"库里真的没有对应条目"的提问
-   * （问 GitHub issues 那条）只有 0.052 —— 两者之间有 0.22 的空档，取 0.20 落在空档里。
+   * `0.20` 是 v1.15.6 量出来的（当时阈值 0.34）：11 条真实提问里正确答案的最低分
+   * 0.275，而唯一一条"库里真的没有对应条目"的提问只有 0.052，0.20 落在空档里。
+   * P1b 换了量纲后这条空档仍在（最低的正确答案升到 0.334，'库里没有'那条仍是 0.05 量级），
+   * 所以 **0.20 不动** —— 提示档是"闸门不降"的安全网，它不跟着阈值一起漂。
    *
    * 换算成给模型看的相关度是 `0.20 / 0.55 ≈ 0.36`。
    */
   hintScore: 0.20,
+  /**
+   * **信息量饱和阈值**（v1.15.7 的 P1b）：`strength = min(1, massHit / massSat)`。
+   *
+   * 它替代原来的 `min(1, hits/3)`（"命中 3 个词就满分"）。量纲换成了
+   * `Σ ln(1+N/df)/ln(1+N)`，所以数值必须重新标定 —— 已用本机真实库 + 本会话 12 条
+   * 真实提问跑过 `scripts/repro/calibrate-idf.mjs`（0.6 ~ 4.5 共 9 档）：
+   * 只有 `0.6` 同时满足「关键词式对照 4/4」「B 库外字零命中」「C 无跨提问重复」
+   * 「A 诱饵 ≤ 真实」，且**完整注入率最高**（3/12 → 有可见内容 11/12 → 12/12）。
+   * 再大就只剩 1/12，对照也掉到 1/4 —— 那是"打分被压得太狠"，不是噪声控制。
+   */
+  massSat: 0.6,
   /** 单回合最多注入 3 条：知识条目带正文片段，比团队记忆的摘要更长，额度要更紧。 */
   maxEntries: 3,
   /** 单回合最多提示几条（提示行很短，但同样要防刷屏）。 */
   maxHints: 2,
   /** 注入正文片段长度（字符）。 */
   snippetLength: 160,
+  /**
+   * **top-1 的片段长度**（v1.15.7，P3「减少两步消费」）。
+   *
+   * 实测：98% 的条目正文 > 160 字（平均 1637 字），而注入只给 160 字摘要 + id ——
+   * 于是"检索得回来、消费不下去"，模型还得再调一次工具取全文（两步）。
+   * top-1 通常就是这一回合最该看的那条，给它 ~400 字（典型条目能覆盖到"背景 + 结论"），
+   * 其余条目仍 160 字：额度花在最相关的那一条上，噪声成本不变。
+   */
+  topSnippetLength: 400,
+  /**
+   * 注入表头**回显 query** 的字符上限（v1.15.7 的零风险收尾①）。
+   *
+   * 开工前那一次的 query = 任务标题 + 整段描述（实测 483 字），每回合搬进对话
+   * 白花约 500 字符。表头只需让人认出"这是哪次提问"，60 字 + 关键词足够；
+   * **库里仍存全文**（`appendRecallLog` 用的是 `outcome.query`，不经过这里的截断）。
+   */
+  queryEchoLength: 60,
+  /** 表头回显关键词的个数上限。 */
+  queryEchoTerms: 12,
 } as const
+
+/** 表头回显用的 query（超长截断 + 省略号）。**唯一实现**，日志/文本/工具都走它。 */
+export function echoQuery(query: string, limit: number = RECALL_DEFAULTS.queryEchoLength): string {
+  const flat = String(query ?? '').replace(/\s+/g, ' ').trim()
+  return flat.length <= limit ? flat : `${flat.slice(0, limit)}…`
+}
 
 /** 中文常见虚词 —— 命中它们说明不了任何相关性，必须当停用词去掉。 */
 const STOP_WORDS = new Set([
@@ -249,11 +346,19 @@ export function extractTerms(query: string): string[] {
   const text = normalizeText(query)
   if (text === '') return []
   const terms: string[] = []
+  /**
+   * ⚠️ 去重必须用 `Set` 而不是 `terms.includes()`：P1b 起 `extractTerms` 会被用来
+   * **统计全库每个条目的词集**（`termStatsOf` 扫正文），而正文动辄 1600+ 字、几百个不同词 ——
+   * `includes` 是 O(n)、整条就是 O(n²)。实测把真库首次召回的 62ms 压到 ~20ms（同样结果）。
+   * 顺序语义不变（保留首次出现的次序，`termsIn` 与日志都依赖它）。
+   */
+  const seen = new Set<string>()
   const push = (raw: string): void => {
     const term = raw.trim()
     if (term === '' || STOP_WORDS.has(term)) return
     if (/^[0-9]+$/.test(term)) return
-    if (terms.includes(term)) return
+    if (seen.has(term)) return
+    seen.add(term)
     terms.push(term)
   }
   // 汉字：逐字
@@ -279,10 +384,152 @@ function termsIn(text: string, terms: readonly string[]): string[] {
   return terms.filter((term) => text.includes(term))
 }
 
+/**
+ * 这条知识现在还作数吗（P2）。
+ *
+ * 两种"不作数"：
+ * 1. **已被取代**（`supersededById` 非空）—— 修正条入库后，旧条必须让位；
+ * 2. **已过期**（`validUntil` 早于现在）—— 时效性知识（版本相关的配置、临时方案）。
+ *
+ * 为什么是**压制**而不是降权：一条被明确标注"已被 X 取代"的知识，
+ * 只要它还能进上下文，模型就有机会把作废的结论当成事实用。分数高低不改变这一点。
+ * 需要它时仍有一条路：按 id 直读（`findEntryById`）能取到全文，并在回执里标注"已被 X 取代"。
+ */
+export function isSuperseded(entry: { supersededById?: string | null; validUntil?: string | null }, now: Date): boolean {
+  if (entry.supersededById !== null && entry.supersededById !== undefined && entry.supersededById !== '') return true
+  const until = entry.validUntil
+  if (until === null || until === undefined || until === '') return false
+  const at = Date.parse(until)
+  // 时间串坏掉时**不压制**（不猜）：宁可多召回一条，也不要因为格式问题把有效知识永久藏起来。
+  if (!Number.isFinite(at)) return false
+  return at <= now.getTime()
+}
+
+/**
+ * 引用自动判定的**最小标题前缀长度**（P4）。
+ *
+ * 判据只能是"模型的回答里出现了这条知识的 id 或标题" —— 不提就不标（不许瞎标）。
+ * 完整 uuid 极罕见（模型通常不抄），所以主要靠标题；而模型会改写标题的后半段
+ * （常常写成《复盘：团队记忆系统落地搭建…》），所以取**前缀**匹配。
+ * 12 个字符是保守值：本机真实库的标题前缀在这个长度上已经足够独特
+ * （"复盘：团队记忆系统落" / "工作台子任务重复新建的成"），
+ * 再短就会开始误伤（比如两条都以"工作台"开头）。
+ */
+export const CITE_TITLE_PREFIX = 12
+
+/**
+ * 从"这一回合注入给模型的条目"与"模型这一回合的回答"里，判定**明确被引用**的那些。
+ *
+ * 纯函数、可穷举；判定规则只有一条实现在这里（接线层不许再写一遍）。
+ * 保守优先：**宁可漏标，不可瞎标** —— 标错会让"注入过但没人引用"这条证据失真，
+ * 而失真的证据比没有证据更糟（会让人据此删掉有用的知识）。
+ */
+export function citationMatch(answer: string, delivered: Array<{ id: string; title: string }>): string[] {
+  const text = normalizeText(answer)
+  if (text === '') return []
+  const out: string[] = []
+  for (const item of delivered) {
+    const id = normalizeText(item.id)
+    if (id !== '' && text.includes(id)) { out.push(item.id); continue }
+    const title = normalizeText(item.title)
+    if (title.length >= CITE_TITLE_PREFIX && text.includes(title.slice(0, CITE_TITLE_PREFIX))) out.push(item.id)
+  }
+  return out
+}
+
+/**
+ * 报错特征词（P5：只观测"该查未查"）。
+ *
+ * 判据故意做得**宽**：这里只写一行日志，不强制检索，多报一行的成本接近零；
+ * 而漏报的代价是"用户拿着报错来问、自动层什么都没做、账上也没有" —— 那正是本仓最忌讳的。
+ */
+const ERROR_HINT_WORDS = [
+  '报错', '错误', '失败', '异常', '超时', '崩溃', '卡死', '挂了', '起不来', '没生效', '不生效', '不工作',
+  'error', 'fail', 'failed', 'exception', 'timeout', 'traceback', 'stack', 'undefined', 'nan',
+  'enoent', 'eacces', 'eperm', 'eaddrinuse', 'econnrefused', 'cannot read', 'is not a function',
+]
+
+/** 这句话像不像"在报一件事坏了/报错了"（P5 的 suggested_miss 判据）。 */
+export function looksLikeErrorReport(text: string): boolean {
+  const flat = normalizeText(text)
+  if (flat === '') return false
+  return ERROR_HINT_WORDS.some((word) => flat.includes(word))
+}
+
+/**
+ * 词的信息量统计（**IDF 的唯一来源**）：`df` = 包含该词的条目数（标题 ∪ 标签 ∪ 正文），
+ * `size` = 语料条目数。
+ *
+ * ## 为什么 df 要按**整个条目**统计，而不是按字段
+ *
+ * 只看标题会让「一」这种"标题里稀有、正文里遍地"的字看起来很有信息量
+ * （实测：标题 df=1 → idf 灌满 → 假信号，把不相关的条目顶到 top-1）。
+ *
+ * ## 为什么要它（P1b 的动机，都是实测）
+ *
+ * v1.15.6 的"两档闸门"证明**排序是对的**：三条真实提问的 top-1 全是正确答案，
+ * 只差 0.01~0.03 卡在阈值下；而同一批数据里一句与主题无关的闲聊拿 0.338，
+ * **比两个正确答案还高**（它命中了泛化标题里的「知识库」）。所以不能降阈值。
+ *
+ * 差在哪："命中几个词"不是信息量 —— 长提问里 试/测/知/识/库/一 这类字
+ * 确实"存在于某条标题或标签里"，但携带的信息接近 0，却把命中质量摊薄了。
+ * 两个"改分母"的变体都被实测否掉（标签字段分母太小 → 巧合命中抢走 top-1；
+ * 三字段共用分母 → 仍被常用字撑大、命中率掉回 4/11）。
+ * 真解是给词按信息量加权：命中的**信息量总量**替代"命中词数"。
+ */
+export interface TermStats {
+  size: number
+  df: Map<string, number>
+}
+
+/**
+ * 统计语料里每个词出现在多少条条目里。
+ *
+ * 逐条只对**该条目出现过的不同词**计数（`Set` 去重）：同一条里出现十次也只算 1 条，
+ * 否则 df 会变成"频次"而不是"文档频率"，长文里的常见字反而被当成稀有。
+ *
+ * ## 代价（实测，`scripts/repro/bench-idf-stats.mjs`）
+ *
+ * 它要扫全库正文，是本版**唯一新增的开销**：真库 61 条（约 11 万字）首次召回 41ms、
+ * 之后 15s 内缓存命中约 5ms；压测到 500 / 2000 / 5000 条分别是 213 / 761 / 1921ms。
+ * 所以它与**候选集共用同一份缓存**（`corpusStats()`），不让每个回合都重扫。
+ * 顺带把 `extractTerms` 的去重从 `Array.includes`（O(n²)）改成 `Set`：
+ * 真库首次召回的 62ms 里有一多半花在那上面，改完 41ms。
+ */
+export function termStatsOf(candidates: readonly RecallCandidate[]): TermStats {
+  const df = new Map<string, number>()
+  for (const candidate of candidates) {
+    const entry = candidate.entry
+    const haystack = `${normalizeText(entry.title)} ${entry.tags.map((tag) => normalizeText(tag)).join(' ')} ${normalizeText(entry.contentMd)}`
+    for (const term of new Set(extractTerms(haystack))) {
+      df.set(term, (df.get(term) ?? 0) + 1)
+    }
+  }
+  return { size: candidates.length, df }
+}
+
+/**
+ * 词的信息量：`idf = ln(1 + N/df) / ln(1 + N)`，落在 `(0, 1]`。
+ *
+ * 语料里没有的词给 0（**不猜**）：它既不可能是命中，也不该进覆盖率的分母 ——
+ * 分母只由"语料里存在的查询词"组成（v1.15.6 变体 B 的教训：让不存在于任何条目的
+ * 常用字进分母，等于用噪声稀释真实命中）。
+ *
+ * **为什么要除以 `ln(1+N)`**（这一步是我加的，理由写清楚）：裸的 `ln(1+N/df)`
+ * 量纲随库大小漂移 —— 3 条的小库上任何词都只有 `ln4 ≈ 1.39`，60 条的真实库上
+ * 稀有词能到 `ln61 ≈ 4.11`。而 `massSat`（信息量饱和阈值）是**一个常量**：
+ * 不归一化的话，同一份代码在小库上"什么都不注入"、在大库上"什么都注入"，
+ * 而知识库恰恰是从 0 条长起来的。归一化之后 `1.0` 恒定表示
+ * "命中了只出现在 1 条条目里的词"，与库大小无关。
+ */
+export function idfOf(stats: TermStats, term: string): number {
+  const df = stats.df.get(term) ?? 0
+  if (df <= 0 || stats.size <= 0) return 0
+  return Math.log(1 + stats.size / df) / Math.log(1 + stats.size)
+}
+
 /** 质量权重：标题 > 标签 > 正文。理由要能对用户解释，所以是常量而不是魔法数。 */
 const WEIGHT = { title: 0.55, tag: 0.45, body: 0.25 } as const
-/** 命中多少个关键词算"长度因子"满分（见文件头）。 */
-const LENGTH_SATURATION = 3
 const YEAR_MS = 365 * 24 * 60 * 60 * 1000
 
 function clamp01(value: number): number {
@@ -337,28 +584,68 @@ export function recencyFactor(updatedAt: string, now: Date): number {
 export interface ScoreContext {
   terms: readonly string[]
   now: Date
+  /**
+   * 语料的词信息量统计（**必填**）。
+   *
+   * 为什么必填而不是内部兜底算一遍：df 属于**语料**、不属于单条候选。
+   * 让它可选就会有人传一个"没有统计"的上下文，于是同一个公式出现第二种行为
+   * （本仓第一大 bug 类别）。调用方要么给 `termStatsOf(candidates)` 的结果，
+   * 要么用 `recallKnowledge`（它自己会算）。
+   */
+  stats: TermStats
+  /** 长度因子（信息量）饱和阈值；缺省取 `RECALL_DEFAULTS.massSat`（标定脚本会覆盖它）。 */
+  massSat?: number
 }
 
 /**
- * **单字段**打分（v1.15.4 修的 F5：三个字段各自算分，取最高，不混用）。
+ * **单字段**打分（v1.15.4 分字段算分；v1.15.7 换成功率 = 信息量总量）。
  *
- * 修之前的写法是"权重取命中的最高一档，覆盖率取**所有字段的并集**"，
+ * 修之前（v1.15.4）的写法是"权重取命中的最高一档，覆盖率取**所有字段的并集**"，
  * 于是在真实库上出现了这样一条：某篇泛化长文（正文 3000+ 字）与提问只共享
  * **标题里的 1 个字**，却因为正文命中了 8 个字，覆盖率被抬到 0.9，
  * 最终拿到 `0.55 × 1 × 0.95 ≈ 0.52` —— 在「四时机」的 4 次不同提问里有 3 次都挤进 top-3。
- * 这正是验收标准第 5 条「无明显不相关条目被反复注入」要拦的现象。
+ * 现在：**一个字段自成一个分数**，强度与覆盖率都只在该字段内部计算，最后取三者最大。
  *
- * 现在：**一个字段自成一个分数**，覆盖率与长度因子都只在该字段内部计算，
- * 最后取三者最大。同一例子里标题档只剩 `0.55 × 1/3 × 0.59 ≈ 0.11`，正文档 `≈ 0.22`，
- * 双双低于阈值。
+ * v1.15.7（P1b）再把"命中几个词"换成"命中的**信息量总量**"：
+ *
+ * ```
+ * massHit_f   = Σ idf(t)，t ∈ 该字段命中的词
+ * massQuery   = Σ idf(t)，t ∈ 语料里存在的查询词
+ * strength_f  = min(1, massHit_f / massSat)          ← 原长度因子 min(1, hits/3)
+ * coverage_f  = min(1, massHit_f / massQuery)        ← 原覆盖率 min(1, hits/总词数)
+ * score_f     = weight_f × strength_f × (0.5 + 0.5 × coverage_f)
+ * ```
+ *
+ * 为什么必须换：中文逐字抽词下，"命中几个词"里**每个字的权重都一样**，
+ * 于是 试/测/知/识/库/一 这类几乎无信息量的字与"盘符""时序"这类关键词等价。
+ * 换成信息量总量后，一次"命中 3 个常用字"的巧合只有很小的 massHit → 分数自然低。
  */
-function fieldScore(weight: number, hits: number, totalTerms: number): number {
-  if (hits <= 0) return 0
-  // 长度因子：命中 3 个词就到顶（中文逐字抽词下，"盘符根"这种共享 3 个字已相当具体）
-  const lengthFactor = Math.min(1, hits / LENGTH_SATURATION)
-  // 覆盖率：命中数 / 本次检索的关键词总数，半量起步（短提问不被过度惩罚）
-  const coverage = totalTerms === 0 ? 0 : Math.min(1, hits / totalTerms)
-  return weight * lengthFactor * (0.5 + 0.5 * coverage)
+function fieldScore(weight: number, hitTerms: readonly string[], massQuery: number, context: ScoreContext): { score: number; massHit: number } {
+  if (hitTerms.length === 0) return { score: 0, massHit: 0 }
+  const massHit = hitTerms.reduce((sum, term) => sum + idfOf(context.stats, term), 0)
+  const massSat = context.massSat ?? RECALL_DEFAULTS.massSat
+  const strength = massSat <= 0 ? 1 : Math.min(1, massHit / massSat)
+  const coverage = massQuery === 0 ? 0 : Math.min(1, massHit / massQuery)
+  return { score: weight * strength * (0.5 + 0.5 * coverage), massHit }
+}
+
+/**
+ * 生成正文片段：优先以**第一个命中词**为中心，正文没命中就取开头。
+ *
+ * 抽成导出函数是为了让"注入时的片段"与"top-1 放宽后的片段"共用同一份实现 ——
+ * 两处各写一遍截断逻辑，迟早会出现"放宽了长度但取的位置不一样"这种
+ * 读代码看不出来的偏差（本仓第一大 bug 类别）。
+ */
+export function buildSnippet(entry: KnowledgeRow, terms: readonly string[], length: number): string {
+  const raw = String(entry.contentMd ?? '').replace(/\s+/g, ' ').trim()
+  if (raw === '') return ''
+  const found = firstHit(raw.toLowerCase(), terms)
+  const center = found?.index ?? 0
+  const start = Math.max(0, center - Math.floor(length / 3))
+  let snippet = raw.slice(start, start + length)
+  if (start > 0) snippet = `…${snippet}`
+  if (start + length < raw.length) snippet = `${snippet}…`
+  return snippet
 }
 
 export function scoreCandidate(candidate: RecallCandidate, context: ScoreContext): RecallHit | undefined {
@@ -373,9 +660,18 @@ export function scoreCandidate(candidate: RecallCandidate, context: ScoreContext
   if (titleTerms.length + tagTerms.length + bodyTerms.length === 0) return undefined
 
   const totalTerms = context.terms.length
-  const titleScore = fieldScore(WEIGHT.title, titleTerms.length, totalTerms)
-  const tagScore = fieldScore(WEIGHT.tag, tagTerms.length, totalTerms)
-  const bodyScore = fieldScore(WEIGHT.body, bodyTerms.length, totalTerms)
+  /**
+   * 覆盖率的**分母**（本次提问落在语料里的信息量总量）只算一次、三个字段共用 ——
+   * 它属于"问题"，不属于字段（v1.15.6 变体 B 的结论）。分子 massHit 仍**各字段自算**，
+   * 所以"权重与覆盖率必须来自同一个字段"这条 v1.15.4 的修复没有被推翻。
+   */
+  const massQuery = context.terms.reduce((sum, term) => sum + idfOf(context.stats, term), 0)
+  const titleField = fieldScore(WEIGHT.title, titleTerms, massQuery, context)
+  const tagField = fieldScore(WEIGHT.tag, tagTerms, massQuery, context)
+  const bodyField = fieldScore(WEIGHT.body, bodyTerms, massQuery, context)
+  const titleScore = titleField.score
+  const tagScore = tagField.score
+  const bodyScore = bodyField.score
   const score = clamp01(Math.max(titleScore, tagScore, bodyScore))
 
   /**
@@ -384,27 +680,16 @@ export function scoreCandidate(candidate: RecallCandidate, context: ScoreContext
    * 但**分数只由胜出的那个字段决定** —— 这是 F5 的修复点。
    */
   const winner = score === titleScore && titleScore > 0
-    ? { label: '标题', terms: titleTerms, weight: WEIGHT.title }
+    ? { label: '标题', terms: titleTerms, massHit: titleField.massHit }
     : score === tagScore && tagScore > 0
-      ? { label: '标签', terms: tagTerms, weight: WEIGHT.tag }
-      : { label: '正文', terms: bodyTerms, weight: WEIGHT.body }
+      ? { label: '标签', terms: tagTerms, massHit: tagField.massHit }
+      : { label: '正文', terms: bodyTerms, massHit: bodyField.massHit }
   const terms = [...new Set([...titleTerms, ...tagTerms, ...bodyTerms])]
   const reason = `${candidate.fromTask ? '本任务' : '全库'} · ${winner.label}命中「${winner.terms.join('、')}」`
-    + `（该字段命中 ${winner.terms.length}/${totalTerms} 个关键词）→ 相关度 ${formatRelevance(score)}`
+    + `（该字段信息量 ${winner.massHit.toFixed(2)}/${massQuery.toFixed(2)}，命中 ${winner.terms.length}/${totalTerms} 个关键词）`
+    + ` → 相关度 ${formatRelevance(score)}`
 
-  // 片段：优先取正文里第一个命中词的上下文；正文没命中就取开头。
-  const raw = String(entry.contentMd ?? '').replace(/\s+/g, ' ').trim()
-  const lowerRaw = raw.toLowerCase()
-  const found = firstHit(lowerRaw, context.terms)
-  const snippetLength = RECALL_DEFAULTS.snippetLength
-  let snippet = ''
-  if (raw !== '') {
-    const center = found?.index ?? 0
-    const start = Math.max(0, center - Math.floor(snippetLength / 3))
-    snippet = raw.slice(start, start + snippetLength)
-    if (start > 0) snippet = `…${snippet}`
-    if (start + snippetLength < raw.length) snippet = `${snippet}…`
-  }
+  const snippet = buildSnippet(entry, context.terms, RECALL_DEFAULTS.snippetLength)
 
   return {
     id: entry.id,
@@ -437,7 +722,7 @@ export function recallKnowledge(input: RecallInput): RecallOutcome {
   const now = input.now ?? new Date()
   const exclude = new Set(input.excludeIds ?? [])
   const dedupe = input.dedupe !== false
-  const base = { query, hits: [] as RecallHit[], nearMisses: [] as RecallHit[], matched: 0, droppedByScore: 0, droppedByLimit: 0, droppedAsSeen: 0, terms: [] as string[] }
+  const base = { query, hits: [] as RecallHit[], nearMisses: [] as RecallHit[], matched: 0, droppedByScore: 0, droppedByLimit: 0, droppedAsSeen: 0, droppedAsSuperseded: 0, terms: [] as string[] }
 
   if (query === '') return { ...base, skippedReason: '空提问' }
   if (isTrivialQuery(query)) return { ...base, skippedReason: '琐碎消息' }
@@ -445,10 +730,15 @@ export function recallKnowledge(input: RecallInput): RecallOutcome {
   const terms = extractTerms(query)
   if (terms.length === 0) return { ...base, skippedReason: '关键词为空（全是停用词）' }
 
+  const stats = input.stats ?? termStatsOf(input.candidates)
+  const context: ScoreContext = { terms, now, stats, massSat: input.massSat }
   const scored: RecallHit[] = []
   let anyTermHit = 0
+  let droppedAsSuperseded = 0
   for (const candidate of input.candidates) {
-    const hit = scoreCandidate(candidate, { terms, now })
+    // P2：已被取代 / 已过期的条目根本不参与打分（压制，不是降权）
+    if (isSuperseded(candidate.entry, now)) { droppedAsSuperseded += 1; continue }
+    const hit = scoreCandidate(candidate, context)
     if (hit === undefined) continue
     anyTermHit += 1
     scored.push(hit)
@@ -481,12 +771,26 @@ export function recallKnowledge(input: RecallInput): RecallOutcome {
   })
   const hits = fresh.slice(0, maxEntries)
   const droppedByLimit = fresh.length - hits.length
+  /**
+   * P3：**top-1 放宽到 `topSnippetLength`**（其余仍是 `snippetLength`）。
+   *
+   * 只加长不换位置，而且走同一个 `buildSnippet` —— 片段的取法只有一处实现。
+   * 顺序放在"截断到上限"之后：额度花在**真正会注入**的那一条上，
+   * 被上限截掉的条目不浪费片段长度。
+   */
+  if (hits.length > 0) {
+    const topEntry = input.candidates.find((candidate) => candidate.entry.id === hits[0].id)?.entry
+    if (topEntry !== undefined) {
+      const longer = buildSnippet(topEntry, terms, RECALL_DEFAULTS.topSnippetLength)
+      if (longer.length > hits[0].snippet.length) hits[0] = { ...hits[0], snippet: longer }
+    }
+  }
   // 提示也守会话去重：已经作为完整命中注入过的条目不再当"差一点点"。
   const freshNear = nearMisses
     .filter((hit) => !exclude.has(hit.id))
     .slice(0, RECALL_DEFAULTS.maxHints)
 
-  return { query, hits, nearMisses: freshNear, matched, droppedByScore, droppedByLimit, droppedAsSeen, terms }
+  return { query, hits, nearMisses: freshNear, matched, droppedByScore, droppedByLimit, droppedAsSeen, droppedAsSuperseded, terms }
 }
 
 /**
@@ -525,6 +829,7 @@ export function mergeRecallOutcomes(
     droppedByScore: 0,
     droppedByLimit: 0,
     droppedAsSeen: 0,
+    droppedAsSuperseded: 0,
     terms: [...new Set(inputs.flatMap((item) => item.outcome.terms))],
   }
   // 全部句子都被跳过（空提问 / 琐碎）→ 整次召回就是"跳过"，不能装作查过了。
@@ -540,10 +845,12 @@ export function mergeRecallOutcomes(
   let matched = 0
   let droppedByScore = 0
   let droppedAsSeen = 0
+  let droppedAsSuperseded = 0
   for (const { query, outcome } of inputs) {
     matched += outcome.matched - outcome.hits.length
     droppedByScore += outcome.droppedByScore
     droppedAsSeen += outcome.droppedAsSeen
+    droppedAsSuperseded += outcome.droppedAsSuperseded ?? 0
     for (const hit of outcome.hits) {
       const seen = best.get(hit.id)
       if (seen === undefined) {
@@ -573,7 +880,7 @@ export function mergeRecallOutcomes(
     .map((id) => nearBest.get(id)!)
     .sort((a, b) => b.score - a.score || Number(b.fromTask) - Number(a.fromTask) || a.id.localeCompare(b.id))
     .slice(0, RECALL_DEFAULTS.maxHints)
-  return { ...base, hits, nearMisses, matched, droppedByScore, droppedByLimit: ranked.length - hits.length, droppedAsSeen }
+  return { ...base, hits, nearMisses, matched, droppedByScore, droppedByLimit: ranked.length - hits.length, droppedAsSeen, droppedAsSuperseded }
 }
 
 /**
@@ -619,8 +926,17 @@ export function isTrivialQuery(query: string): boolean {
  */
 export function formatRecallText(outcome: RecallOutcome): string {
   if (outcome.hits.length === 0) return ''
+  /**
+   * 表头**不回显整段 query**（v1.15.7 的零风险收尾①）。
+   *
+   * 开工前那次的 query = 任务标题 + 整段描述（实测 483 字），每回合搬进对话
+   * 白花约 500 字符。改成"前 60 字 + 前 12 个关键词"：表头只承担
+   * "这是哪次提问、检索了什么"这一件事，**全文照旧进召回日志**（落库用 `outcome.query`）。
+   */
+  const terms = outcome.terms.slice(0, RECALL_DEFAULTS.queryEchoTerms)
   const lines = [
-    `【工作台知识库】按本回合提问「${outcome.query}」自动检索到 ${outcome.hits.length} 条相关知识：`,
+    `【工作台知识库】按本回合提问「${echoQuery(outcome.query)}」自动检索到 ${outcome.hits.length} 条相关知识`
+    + (terms.length === 0 ? '：' : `（关键词：${terms.join('、')}）：`),
   ]
   for (const hit of outcome.hits) {
     const source = hit.fromTask ? '本任务' : '全库'
