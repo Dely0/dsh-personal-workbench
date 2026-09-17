@@ -15,6 +15,7 @@
 import { useState, type ReactNode } from 'react'
 import { Modal } from './Modal.js'
 import { MarkdownText } from './MarkdownText.js'
+import { KnowledgeDraftBody } from './KnowledgeDraftBody.js'
 import { api } from '../api.js'
 import { fmtTime } from '../format.js'
 import type { DraftConfirmProblemView, DraftView } from '../../shared/contracts.js'
@@ -566,23 +567,14 @@ function describeDraft(draft: DraftView, kindName: (kind: string, code: string) 
   }
 
   if (draft.kindCode === 'knowledge') {
-    const tags = Array.isArray(payload.tags) ? payload.tags as string[] : []
-    const contentMd = String(payload.contentMd ?? '')
     return {
       title: <>💡 知识条目待确认（{kindName('knowledge_kind', String(payload.kindCode ?? 'lesson'))}）</>,
-      body: (
-        <>
-          <div style={{ fontWeight: 600, marginBottom: 4 }}>{String(payload.title ?? '')}</div>
-          {tags.length > 0 && <div style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)', marginBottom: 6 }}>{tags.map((tag) => `#${tag}`).join(' ')}</div>}
-          {typeof payload.fileLink === 'string' && payload.fileLink !== '' && (
-            <div style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)', marginBottom: 6, wordBreak: 'break-all' }}>📎 {payload.fileLink}</div>
-          )}
-          {typeof payload.sourceTaskId === 'string' && payload.sourceTaskId !== '' && (
-            <div style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)', marginBottom: 6 }}>关联任务：{payload.sourceTaskId.slice(0, 8)}</div>
-          )}
-          <MarkdownText text={contentMd} />
-        </>
-      ),
+      /**
+       * 正文整体交给 `KnowledgeDraftBody`：它会在最前面渲染「本会话已提交 N 次 /
+       * 前几次的内容已被覆盖 / 草稿 id」——覆盖**必须在用户点确认前**就看得见
+       * （按会话去重的知识草稿：不带 draft_id 的重复提交是覆盖，不是新增）。
+       */
+      body: <KnowledgeDraftBody draftId={draft.id} payload={payload} />,
       confirmLabel: '确认入库',
       abandonLabel: '放弃',
       sessionLabel: '回到会话',
