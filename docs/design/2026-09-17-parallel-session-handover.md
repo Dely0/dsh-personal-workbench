@@ -12,10 +12,14 @@
 
 ## 一、当前物理隔离（已经生效，不是计划）
 
+> ✅ **本交接已完成使命（2026-09-17）**：两条分支都已合并进 `main`，独立 worktree 已删除。
+> 合并方式与唯一的那处冲突见文末「五、合并结果」。下面保留原始隔离方案，
+> 作为"下次并行开发该怎么做"的参照。
+
 | | 会话 A（本会话：容量） | 会话 B（另一个会话：知识草稿） |
 |---|---|---|
 | 分支 | `feat/capacity-rules-transparency` | `fix/knowledge-draft-overwrite-visibility` |
-| 工作目录 | `E:\Code\dsh-personal-workbench\capacity-wt`（**独立 git worktree**） | `E:\Code\dsh-personal-workbench\dsh-personal-workbench`（主工作区） |
+| 工作目录 | `E:\Code\dsh-personal-workbench\capacity-wt`（**独立 git worktree**，已删除） | `E:\Code\dsh-personal-workbench\dsh-personal-workbench`（主工作区） |
 | 起点 | `main` @ `03fcdb5` | 同 |
 | 未提交改动 | 在 worktree 里，主工作区看不到 | 在主工作区里，worktree 看不到 |
 
@@ -93,7 +97,9 @@ git worktree remove E:\Code\dsh-personal-workbench\capacity-wt
 ## 三、本会话（A）的进度台账
 
 见 `docs/design/2026-09-25-capacity-rules.md` 的「实施进度」一节（每个阶段完成即更新），
-以及任务共享记忆里的 `[summary]` 记录。**提交策略**：每阶段一个提交，提交信息写清阶段号与验收命令。| 阶段 | 状态 |
+以及任务共享记忆里的 `[summary]` 记录。**提交策略**：每阶段一个提交，提交信息写清阶段号与验收命令。
+
+| 阶段 | 状态 |
 |---|---|
 | P1 纯函数 + 基准/等价性测试 + 变异探针 | ✅ 完成（提交 `4803417`） |
 | P2 规则面板（规则/账本/开关）+ 接线测试 + harness **容量批** | ✅ 完成（提交 `5825037`） |
@@ -119,3 +125,65 @@ git worktree remove E:\Code\dsh-personal-workbench\capacity-wt
 3. **不要跑 `scripts/dev-install.mjs --apply`**。装盘会把 `profiles/web/package.json`
    指到某一个会话的 tgz 上 —— 两个会话各装一次会互相覆盖，且**回滚点会被冲掉**。
    装盘需要用户显式授权，届时由用户决定装哪一个。
+
+---
+
+## 五、合并结果（2026-09-17，已完成）
+
+```powershell
+git switch main                       # 主工作区从 fix/knowledge-… 切回 main（两者都基于 03fcdb5）
+git merge --ff-only feat/capacity-rules-transparency          # 快进 → 1bb2366
+git merge --no-ff  fix/knowledge-draft-overwrite-visibility   # 合并点 → 375ebdb
+git worktree remove E:\Code\dsh-personal-workbench\capacity-wt
+```
+
+**`--no-ff` 的理由**：两条线是**同时并行**推进的。本项目有过"拆分与改动混在一起、
+最后无法归因"的教训；合并点被快进抹掉后就只能靠提交时间猜。留一个合并提交，
+`git log --graph` 一眼能看出哪 4 个提交属于容量线、哪 2 个属于知识草稿线。
+
+### 唯一的一处冲突（正是预判的那处）
+
+`tsconfig.build.json` 的 `include` 白名单 —— 两边各加了一个组件条目且位置相邻：
+
+```text
+  "src/client/components/KnowledgeList.tsx",
+<<<<<<< HEAD
+  "src/client/components/CapacityRulePanel.tsx",
+=======
+  "src/client/components/KnowledgeDraftBody.tsx",
+>>>>>>> fix/knowledge-draft-overwrite-visibility
+```
+
+**解决方式：两边都保留**（这不是二选一，两个组件都必须进构建白名单）：
+
+```text
+  "src/client/components/KnowledgeList.tsx",
+  "src/client/components/CapacityRulePanel.tsx",
+  "src/client/components/KnowledgeDraftBody.tsx",
+```
+
+其余共享文件（`src/client/index.tsx`、`src/shared/contracts.ts`、`src/api/routes*.ts`、
+`test/routes.test.mjs`）两边改的是不同段落，git **自动合并成功** —— 印证了开工时
+"文件级归属先行"的判断。
+
+### 合并后的门禁（在主工作区 `main` 上重跑，不是沿用分支上的结论）
+
+| 门禁 | 结果 |
+|---|---|
+| `pnpm typecheck` | 0 |
+| `pnpm test` | **520/520**（容量线 448→505 的 +57 与知识线 +15 相加，无冲突丢失） |
+| `verify-capacity-fixed-dataset.mjs` | 完全一致（0 处不符） |
+| `probe-capacity-mutations.mjs` | **19/19 全红**（合并没把防线打散） |
+| `harness-real-browser.mjs --case all` | **51/51** |
+
+> 合并必须在**合并后的工作区**重跑门禁：两条线各自的"全绿"只证明各自成立，
+> 不能证明它们合起来成立（这正是并行开发最容易漏的一步）。
+
+### 顺手清掉的两样
+
+1. `scripts/repro/measure-capacity-parent-child.mjs` —— 咨询会话留下的临时测量脚本
+   （方案文档自己标了"可删"）。它的三项内容都已被 `verify-capacity-review-claims.mjs`
+   覆盖（断言 E 继承 / 断言 G 父子对数），**留着就是同一个语义的第二份实现**。
+2. 咨询会话留在主工作区的 5 个未跟踪副本（夹具与探针）：`git merge` 会因"未跟踪文件
+   将被覆盖"而拒绝，所以先把它们移出仓库、合并后核对内容 —— 其中 2 个是本会话的
+   **严格超集**（加了继承分支组与列齐备性自检），3 个逐字节相同，合并后都以入库版本为准。
