@@ -4,7 +4,7 @@
  */
 import type { DatabaseSync } from 'node:sqlite'
 
-export const SCHEMA_VERSION = 16
+export const SCHEMA_VERSION = 17
 
 export interface Migration {
   version: number
@@ -418,6 +418,44 @@ export const MIGRATIONS: Migration[] = [
           update.run(JSON.stringify({ ...config, color }), at, kind, code)
         }
       }
+    },
+  },
+  {
+    version: 17,
+    name: 'knowledge-recall-log',
+    up(db) {
+      /**
+       * 知识库自动召回的**可观测事实源**。
+       *
+       * 为什么用表而不是只写日志文件：验收要求「会话/日志里能看到检索了哪些关键词、
+       * 命中哪几条、是否被引用」，而这三件事要能**按会话、按时间**回看。
+       * 文本日志只能人肉翻，界面/端点查不了的证据等于没有。
+       *
+       * - `trigger_code`：session_start（开工前）/ turn（回合预取）/ tool（模型主动查）
+       * - `skipped_reason` 非空 = **没有检索**（与"检索了零命中"区分开，团队记忆的同一条教训）
+       * - `cited_ids_json`：模型回报"用到了哪几条"，于是"是否被引用"可判定
+       */
+      db.exec(`
+        CREATE TABLE knowledge_recall_log (
+          id                INTEGER PRIMARY KEY AUTOINCREMENT,
+          session_id        TEXT,
+          task_id           TEXT,
+          trigger_code      TEXT NOT NULL,
+          query             TEXT NOT NULL DEFAULT '',
+          terms_json        TEXT NOT NULL DEFAULT '[]',
+          hits_json         TEXT NOT NULL DEFAULT '[]',
+          matched           INTEGER NOT NULL DEFAULT 0,
+          dropped_by_score  INTEGER NOT NULL DEFAULT 0,
+          dropped_by_limit  INTEGER NOT NULL DEFAULT 0,
+          dropped_as_seen   INTEGER NOT NULL DEFAULT 0,
+          injected          INTEGER NOT NULL DEFAULT 0,
+          skipped_reason    TEXT,
+          cited_ids_json    TEXT NOT NULL DEFAULT '[]',
+          created_at        TEXT NOT NULL
+        ) STRICT;
+        CREATE INDEX idx_knowledge_recall_session ON knowledge_recall_log(session_id, id DESC);
+        CREATE INDEX idx_knowledge_recall_created ON knowledge_recall_log(created_at DESC);
+      `)
     },
   },
 ]

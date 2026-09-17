@@ -20,7 +20,7 @@ export interface DictionaryLike {
   sortOrder?: number
 }
 
-type Section = 'general' | 'notify' | 'wechat' | 'dict'
+type Section = 'general' | 'notify' | 'recall' | 'wechat' | 'dict'
 /**
  * 可管理的字典种类。
  *
@@ -43,6 +43,7 @@ const DRAFT_NOTIFY_OPTIONS: Array<{ code: string; label: string }> = [
 const SECTIONS: Array<{ key: Section; label: string }> = [
   { key: 'general', label: '通用' },
   { key: 'notify', label: '通知' },
+  { key: 'recall', label: '知识库召回' },
   { key: 'wechat', label: '微信提醒' },
   { key: 'dict', label: '字典管理' },
 ]
@@ -89,6 +90,19 @@ export interface SettingsModalProps {
   onToggleDictionary: (entry: DictionaryLike) => Promise<void>
   onDeleteDictionary: (entry: DictionaryLike) => Promise<void>
 
+  /**
+   * 知识库自动召回的**可观测回执**（v1.15.3）。
+   *
+   * 验收标准里"会话/日志里能看到检索了哪些关键词、命中哪几条、是否被引用"这一条，
+   * 在界面上的落点就是这里：用户不用翻日志文件、不用调接口，打开设置就能看见
+   * AI 到底查过什么、命中了什么、有没有真的被引用。
+   */
+  recallLog: { lines: string[]; loading: boolean; error: string | null }
+  onRefreshRecallLog: () => void
+  /** 会话级"关掉"的会话列表（可在这里解除）。 */
+  recallSessionOff: string[]
+  onRecallSessionOffChange: (sessionId: string, mode: 'on' | 'clear') => void
+
   onClose: () => void
 }
 
@@ -103,6 +117,7 @@ export function SettingsModal(props: SettingsModalProps): ReactNode {
     dicts, dictKind, onDictKindChange,
     dictForm, onDictFormChange, dictEditCode, onDictEditCodeChange, dictError, onDictErrorChange,
     onSaveDictionary, onToggleDictionary, onDeleteDictionary,
+    recallLog, onRefreshRecallLog, recallSessionOff, onRecallSessionOffChange,
     onClose,
   } = props
 
@@ -187,6 +202,61 @@ export function SettingsModal(props: SettingsModalProps): ReactNode {
                 )}
                 {notifyPermission === 'granted' && <button className="wb-btn" onClick={onSendTestNotification}>发送测试通知</button>}
               </div>
+            </section>
+          )}
+
+          {section === 'recall' && (
+            <section>
+              <h5>知识库自动召回</h5>
+              <label className="wb-switch-row">
+                <input
+                  type="checkbox"
+                  checked={settings.autoKnowledgeRecall}
+                  onChange={(e) => onSettingsChange({ ...settings, autoKnowledgeRecall: e.target.checked })}
+                />
+                <span>
+                  会话里自动检索并带上相关知识
+                  <span className="wb-switch-desc">
+                    开启后，动作前 / 报错时 / 写码前 / 验收前会按你的提问自动检索知识库，
+                    命中的条目会以「【工作台知识库】…」出现在会话里（看得见命中了哪几条）。
+                    关闭后不再自动检索与注入，但你仍可以让 AI 用 workbench_search_knowledge 主动查。
+                    单个会话里想临时关掉，直接让 AI 执行 turn_off 即可。
+                  </span>
+                </span>
+              </label>
+
+              <div className="wb-recall-log">
+                <div className="wb-recall-log-head">
+                  <b>最近的召回记录</b>
+                  <span>检索了哪些关键词、命中哪几条、是否被引用</span>
+                  <button className="wb-btn" onClick={onRefreshRecallLog} disabled={recallLog.loading}>
+                    {recallLog.loading ? '读取中…' : '刷新'}
+                  </button>
+                </div>
+                {recallLog.error !== null && <p className="wb-hint">读取失败：{recallLog.error}</p>}
+                {recallLog.error === null && recallLog.lines.length === 0 && (
+                  <p className="wb-hint">还没有召回记录。开启后来一次会话，这里就会出现每次检索的账。</p>
+                )}
+                {recallLog.lines.length > 0 && (
+                  <ul className="wb-recall-log-lines">
+                    {recallLog.lines.map((line, index) => <li key={`${index}-${line.slice(0, 24)}`}>{line}</li>)}
+                  </ul>
+                )}
+              </div>
+
+              {recallSessionOff.length > 0 && (
+                <div className="wb-recall-sessions">
+                  <b>已单独关闭自动召回的会话</b>
+                  <ul>
+                    {recallSessionOff.map((sessionId) => (
+                      <li key={sessionId}>
+                        <code>{sessionId}</code>
+                        <button className="wb-btn" onClick={() => onRecallSessionOffChange(sessionId, 'clear')}>恢复跟随全局</button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </section>
           )}
 

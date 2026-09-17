@@ -18,6 +18,8 @@ import { isLoopbackRequest, readJsonBody, todayRange, writeJson } from './routes
 import { makeIdeaClusterRoutes } from './routes/idea-clusters.js'
 import { makeIdeaRoutes } from './routes/ideas.js'
 import { makeKnowledgeRoutes } from './routes/knowledge.js'
+import { makeKnowledgeRecallRoutes } from './knowledgeRecallRoute.js'
+import type { KnowledgeRecallManager } from '../knowledge-recall.js'
 import { makeModelModalityRoutes, type LlmModalityProbe } from './routes/model-modalities.js'
 import { makePlanRoutes } from './routes/plans.js'
 import { makeQuickAttachmentRoutes } from './routes/quick-attachments.js'
@@ -27,6 +29,7 @@ import { makeTaskRoutes } from './routes/tasks.js'
 import type { TeamMemoryService } from '../review-memory.js'
 import { teamMemoryAvailable } from '../review-memory.js'
 import { normalizeRecentWorkspaces } from '../shared/quickWorkspaceRecent.js'
+import type { WorkbenchSettings } from '../shared/contracts.js'
 
 /**
  * 插件版本：直接读包内 package.json，避免再出现"代码已升级、health 还报旧版本"的漂移。
@@ -75,6 +78,33 @@ export interface WorkbenchRouteDeps extends ReminderRouteDeps {
    * 写进去会让旧宿主上整个插件 pending（该模式在本仓已复发 3 次）。
    */
   llmModalities?: () => LlmModalityProbe | undefined
+  /**
+   * 知识库自动召回管理器（v1.15.3）。
+   *
+   * 由入口（`index.ts`）创建并注入 —— **不是**这里 new 一个：
+   * 它同时被 Agent 工具与提示注入钩子使用，单会话开关/已注入集合必须只有一份状态。
+   * 未注入（测试里的朴素用法）时这几个端点不注册，其余路由照常。
+   */
+  knowledgeRecall?: KnowledgeRecallManager
+}
+
+/**
+ * 读一份完整的设置视图（GET 与 POST 的响应**共用这一个实现**）。
+ *
+ * 为什么必须抽出来：原先 GET/POST 各写一份字面量，加字段时极易只加一处 ——
+ * 表现为"保存后返回的设置少了一个字段"，而前端是拿响应回填 state 的，
+ * 于是那个开关看起来"保存后自己变回去了"（本轮加 `autoKnowledgeRecall` 时正好撞上这个风险）。
+ */
+export function readWorkbenchSettings(db: DatabaseSync): WorkbenchSettings {
+  return {
+    defaultWorkspace: readMeta(db, 'ai_default_workspace') ?? '',
+    autoCreateTypeFolders: (readMeta(db, 'auto_create_type_folders') ?? '1') === '1',
+    desktopNotify: (readMeta(db, 'desktop_notify') ?? '1') === '1',
+    dailyCapacityMinutes: readDailyCapacityMinutes(db),
+    quickWorkspaceRecent: readRecentWorkspaces(db),
+    /** 缺省**开**：功能不默认关闭，否则用户永远发现不了它（关掉是显式动作）。 */
+    autoKnowledgeRecall: (readMeta(db, 'knowledge_recall_auto') ?? '1') !== '0',
+  }
 }
 
 export function makeRoutes(db: DatabaseSync, deps: WorkbenchRouteDeps = {}): WebRoute[] {
@@ -84,6 +114,13 @@ export function makeRoutes(db: DatabaseSync, deps: WorkbenchRouteDeps = {}): Web
     ...makeQuickAttachmentRoutes(),
     // 模型输入能力对照表（客户端用它判断"选了不收图的模型还加了图"）。
     ...makeModelModalityRoutes(() => deps.llmModalities?.()),
+    /**
+     * 知识库自动召回的可观测端点（日志 / 状态 / 开关，v1.15.3）。
+     *
+     * 与其余路由一样 loopback-only；`knowledgeRecall` 由入口注入（与 Agent 工具、
+     * 提示注入钩子共享同一个管理器实例 → 单会话开关只有一份状态）。
+     */
+    ...(deps.knowledgeRecall === undefined ? [] : makeKnowledgeRecallRoutes(db, deps.knowledgeRecall)),
     ...makeReminderRoutes(db, {
       channel: deps.channel,
       policy: deps.policy,
@@ -119,24 +156,22 @@ export function makeRoutes(db: DatabaseSync, deps: WorkbenchRouteDeps = {}): Web
       handler: async (req, res) => {
         if (!isLoopbackRequest(req)) return writeJson(res, 403, { error: 'forbidden: loopback-only' })
         const method = req.method ?? 'GET'
-        if (method === 'GET') {
-          return writeJson(res, 200, {
-            ok: true,
-            settings: {
-              defaultWorkspace: readMeta(db, 'ai_default_workspace') ?? '',
-              autoCreateTypeFolders: (readMeta(db, 'auto_create_type_folders') ?? '1') === '1',
-              desktopNotify: (readMeta(db, 'desktop_notify') ?? '1') === '1',
-              dailyCapacityMinutes: readDailyCapacityMinutes(db),
-              quickWorkspaceRecent: readRecentWorkspaces(db),
-            },
-          })
-        }
+        if (method === 'GET') return writeJson(res, 200, { ok: true, settings: readWorkbenchSettings(db) })
         if (method === 'POST') {
           const body = await readJsonBody(req)
           if (body === undefined) return writeJson(res, 400, { error: 'invalid JSON body' })
           if (typeof body.defaultWorkspace === 'string') writeMeta(db, 'ai_default_workspace', body.defaultWorkspace)
           if (body.autoCreateTypeFolders === true || body.autoCreateTypeFolders === false) writeMeta(db, 'auto_create_type_folders', body.autoCreateTypeFolders ? '1' : '0')
           if (body.desktopNotify === true || body.desktopNotify === false) writeMeta(db, 'desktop_notify', body.desktopNotify ? '1' : '0')
+          /**
+           * 知识库自动召回开关（v1.15.3）：写的是**同一个 meta 键**
+           * （`knowledge_recall_auto`），与 `/api/workbench/knowledge-recall/auto` 共享 ——
+           * 两个入口写两个键就一定会出现"设置页显示开、实际按关跑"的矛盾。
+           */
+          if (body.autoKnowledgeRecall === true || body.autoKnowledgeRecall === false) {
+            writeMeta(db, 'knowledge_recall_auto', body.autoKnowledgeRecall ? '1' : '0')
+            deps.knowledgeRecall?.setAutoEnabled(body.autoKnowledgeRecall)
+          }
           if (typeof body.dailyCapacityMinutes === 'number' && Number.isFinite(body.dailyCapacityMinutes)) {
             const minutes = Math.min(1440, Math.max(30, Math.round(body.dailyCapacityMinutes)))
             writeMeta(db, 'daily_capacity_minutes', String(minutes))
@@ -151,13 +186,7 @@ export function makeRoutes(db: DatabaseSync, deps: WorkbenchRouteDeps = {}): Web
              */
             writeMeta(db, 'quick_workspace_recent', JSON.stringify(normalizeRecentWorkspaces(body.quickWorkspaceRecent)))
           }
-          return writeJson(res, 200, { ok: true, settings: {
-            defaultWorkspace: readMeta(db, 'ai_default_workspace') ?? '',
-            autoCreateTypeFolders: (readMeta(db, 'auto_create_type_folders') ?? '1') === '1',
-            desktopNotify: (readMeta(db, 'desktop_notify') ?? '1') === '1',
-            dailyCapacityMinutes: readDailyCapacityMinutes(db),
-            quickWorkspaceRecent: readRecentWorkspaces(db),
-          } })
+          return writeJson(res, 200, { ok: true, settings: readWorkbenchSettings(db) })
         }
         return writeJson(res, 405, { error: 'method not allowed' })
       },

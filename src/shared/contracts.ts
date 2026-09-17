@@ -242,6 +242,14 @@ export interface WorkbenchSettings {
    * 仍然应该看到同一批候选；localStorage 会随浏览器消失。
    */
   quickWorkspaceRecent: string[]
+  /**
+   * 知识库自动召回（v1.15.3）：会话里是否自动检索并注入相关知识。
+   *
+   * 为什么要有这个开关：自动召回的代价是**提示词长度**与**噪声**。
+   * 用户嫌吵时必须能一键关掉（关掉后仍可用 `workbench_search_knowledge` 主动查）。
+   * 会话级开关另有出口（`/api/workbench/knowledge-recall/session` + 工具 turn_off）。
+   */
+  autoKnowledgeRecall: boolean
 }
 
 // ---------------------------------------------------------------------------

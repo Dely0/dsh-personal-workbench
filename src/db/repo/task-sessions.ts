@@ -19,3 +19,19 @@ export function linkTaskSession(db: DatabaseSync, input: TaskSessionLinkInput, a
 export function listTaskSessions(db: DatabaseSync, taskId: string): Array<Record<string, unknown>> {
   return db.prepare('SELECT * FROM task_sessions WHERE task_id = ? ORDER BY created_at').all(taskId) as Array<Record<string, unknown>>
 }
+
+/**
+ * 反查：这个会话是挂在哪个任务上的（v1.15.3 知识库自动召回用）。
+ *
+ * 为什么需要它：自动召回要"**先查本任务/本任务树**，再扩到全局"，
+ * 而会话侧只知道自己的 id 与 cwd。权威映射就是这张表（客户端在开启执行/澄清会话时写入）。
+ * 一个会话理论上只挂一个任务，但 `role_code` 允许多行 → 取最近活跃的一条，
+ * 并把任务 id 一并返回，便于调用方在自己的任务链上继续。
+ */
+export function findTaskIdBySession(db: DatabaseSync, sessionId: string): string | undefined {
+  if (typeof sessionId !== 'string' || sessionId.trim() === '') return undefined
+  const row = db.prepare(
+    'SELECT task_id FROM task_sessions WHERE session_id = ? ORDER BY last_activity_at DESC, created_at DESC LIMIT 1',
+  ).get(sessionId) as { task_id: string } | undefined
+  return row?.task_id
+}

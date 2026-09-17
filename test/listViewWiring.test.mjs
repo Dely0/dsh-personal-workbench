@@ -235,7 +235,13 @@ test('字典：知识库/点子类型的**出厂 config 必须带颜色**（否�
 test('迁移 16：给已存在的库回填这两类字典的颜色，且**不覆盖已有颜色**', () => {
   // 归一化行尾：Windows 检出是 CRLF，正则里的 `\n` 会匹配不到
   const schema = readFileSync('src/db/schema.ts', 'utf8').replace(/\r\n/g, '\n')
-  assert.match(schema, /export const SCHEMA_VERSION = 16/, '版本号推到 16')
+  // 版本号必须**等于最大迁移号**（v1.15.3 起为 17：知识库召回日志表）。
+  // 这条断言的意义是"加迁移时别忘了同步 SCHEMA_VERSION"，所以不锁死具体数字 ——
+  // 锁死会让每次加迁移都来改一次这条与颜色无关的测试（本轮就撞到了）。
+  const declared = Number(/export const SCHEMA_VERSION = (\d+)/.exec(schema)?.[1] ?? 0)
+  const versions = [...schema.matchAll(/^\s{4}version: (\d+),/gm)].map((m) => Number(m[1]))
+  assert.ok(declared >= 16, `SCHEMA_VERSION 至少 16，实测 ${declared}`)
+  assert.equal(declared, Math.max(...versions), 'SCHEMA_VERSION 必须等于最大迁移号（否则迁移形同虚设）')
   const start = schema.indexOf('version: 16,')
   assert.ok(start > 0, '有 version 16 的迁移')
   const migration = schema.slice(start, schema.indexOf('\n]', start))

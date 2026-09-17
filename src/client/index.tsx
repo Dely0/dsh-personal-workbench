@@ -742,12 +742,15 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
     /** 本次已经建出来的那条（"就删掉这条新建的"用得上）。 */
     newTaskId: string
   } | null>(null)
-  const [settings, setSettings] = useState<WorkbenchSettings>({ defaultWorkspace: '', autoCreateTypeFolders: true, desktopNotify: true, dailyCapacityMinutes: 390, quickWorkspaceRecent: [] })
+  const [settings, setSettings] = useState<WorkbenchSettings>({ defaultWorkspace: '', autoCreateTypeFolders: true, desktopNotify: true, dailyCapacityMinutes: 390, quickWorkspaceRecent: [], autoKnowledgeRecall: true })
   /** 今日容量里「可投入时长」的行内编辑态（null = 只读展示） */
   const [capacityEdit, setCapacityEdit] = useState<string | null>(null)
   const [notifyPerm, setNotifyPerm] = useState<NotificationPermission | 'unsupported'>(() => typeof Notification === 'undefined' ? 'unsupported' : Notification.permission)
   const [showSettings, setShowSettings] = useState(false)
   const [settingsSaving, setSettingsSaving] = useState(false)
+  /** 知识库召回回执：人类可读的日志行 + 每个会话的开关覆盖（设置页「知识库召回」分区用）。 */
+  const [recallLog, setRecallLog] = useState<{ lines: string[]; loading: boolean; error: string | null }>({ lines: [], loading: false, error: null })
+  const [recallSessionOff, setRecallSessionOff] = useState<string[]>([])
   const { toasts, pushToast, dismissToast } = useToasts()
   // 微信提醒：策略 + 通道状态（通道可用性由 dsh-im 决定，未安装时静默降级）
   const [reminderPolicy, setReminderPolicy] = useState<ReminderPolicyView | null>(null)
@@ -865,6 +868,40 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   useEffect(() => { void refresh().catch((e: unknown) => setError(e instanceof Error ? e.message : String(e))) }, [refresh])
   useEffect(() => { void api<{ settings: WorkbenchSettings }>('/api/workbench/settings').then((r) => setSettings(r.settings)).catch(() => undefined) }, [])
 
+  /**
+   * 拉一次知识库召回回执（日志行 + 单会话关闭清单）。
+   *
+   * 两件事一次请求拿全（`/log` 与 `/status` 分两次会让界面出现"半新半旧"的中间态：
+   * 日志刷新了、会话开关还是旧的，用户会以为"恢复了却没生效"）。
+   */
+  const loadRecallLog = useCallback(async () => {
+    setRecallLog((prev) => ({ ...prev, loading: true, error: null }))
+    try {
+      const [log, status] = await Promise.all([
+        api<{ lines: string[] }>('/api/workbench/knowledge-recall/log?limit=30'),
+        api<{ sessionOff: string[] }>('/api/workbench/knowledge-recall/status'),
+      ])
+      setRecallLog({ lines: log.lines, loading: false, error: null })
+      setRecallSessionOff(status.sessionOff)
+    } catch (e: unknown) {
+      setRecallLog({ lines: [], loading: false, error: e instanceof Error ? e.message : String(e) })
+    }
+  }, [])
+
+  /** 解除某个会话的"显式关闭"（恢复跟随全局）。 */
+  const recallSessionRestore = useCallback(async (sessionId: string, mode: 'on' | 'clear') => {
+    try {
+      const res = await api<{ sessionOff: string[] }>('/api/workbench/knowledge-recall/session', {
+        method: 'POST',
+        body: JSON.stringify({ sessionId, mode }),
+      })
+      setRecallSessionOff(res.sessionOff)
+      pushToast('已恢复该会话的自动召回', 'success')
+    } catch (e: unknown) {
+      pushToast(`恢复失败：${e instanceof Error ? e.message : String(e)}`, 'error')
+    }
+  }, [pushToast])
+
   // 打开设置面板时加载微信提醒策略与通道状态（含自动发现的可选投递目标）
   useEffect(() => {
     if (!showSettings) return
@@ -877,6 +914,17 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
       setReminderOptions(channelResult.options)
     }).catch(() => undefined)
   }, [showSettings])
+
+  /**
+   * 知识库召回日志（v1.15.3）：打开设置面板时拉一次，用户按需刷新。
+   *
+   * 为什么不在启动时就拉：这是"排查/见证"用的信息，不是每次打开工作台都要看的东西；
+   * 而它背后是每个会话每回合一行记录，无脑轮询纯浪费。
+   */
+  useEffect(() => {
+    if (!showSettings) return
+    void loadRecallLog()
+  }, [showSettings, loadRecallLog])
 
   /**
    * 桌面通知去重集合：持久化到 localStorage。
@@ -2673,6 +2721,10 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
           onSaveDictionary={saveDictionaryEntry}
           onToggleDictionary={toggleDictionaryEntry}
           onDeleteDictionary={deleteDictionaryEntry}
+          recallLog={recallLog}
+          onRefreshRecallLog={() => void loadRecallLog()}
+          recallSessionOff={recallSessionOff}
+          onRecallSessionOffChange={(sessionId, mode) => void recallSessionRestore(sessionId, mode)}
           onClose={() => setShowSettings(false)}
         />
       )}

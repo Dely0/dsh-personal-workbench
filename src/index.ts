@@ -21,6 +21,8 @@ import { makeSkillRoutes } from './api/routes/skills.js'
 import { probeSkills } from './api/skills.js'
 import { openWorkbenchDb, SchemaTooNewError, type WorkbenchDbConfig } from './db/database.js'
 import { seedDictionaries } from './db/seed.js'
+import { installKnowledgeRecall } from './knowledge-recall.js'
+import { knowledgeRecallControlTool, searchKnowledgeTool } from './knowledge-tools.js'
 import { countFiredRemindersSince, countQueue, enqueueReminder, listDueRemindersInWindow, listQueue, markQueueAttempt, readMeta, removeQueueEntry, skipStaleReminders } from './db/repo.js'
 import { probeDshIm, WechatChannelAdapter } from './reminder/adapter.js'
 import { readReminderPolicy, writeReminderPolicy } from './reminder/config.js'
@@ -67,6 +69,7 @@ const WORKBENCH_GUIDANCE = [
   'V2 日报/周报：请在报告会话中调用 workbench_submit_report(period_code, period_start, title, summary_md) 提交报告草稿，用户确认后才保存。',
   'V2 提醒：任务到期提醒由工作台自动弹出页面横幅与桌面通知；不要用其他方式重复提醒。',
   '知识库：值得沉淀的经验教训/决策/笔记请调用 workbench_submit_knowledge 提交知识草稿（kind_code/tags）；如来自本地文档，应同时传入 file_link（file:// 或绝对路径）用于追溯；用户确认后入库；复盘时优先考虑。',
+  '知识库自动召回（v1.15.3）：会话里会自动按你的提问检索知识库，命中的条目以「【工作台知识库】…」出现在上下文里（零命中时不插占位）。四个时机请主动调用 workbench_search_knowledge 再查一次：开工前 / 报错时 / 写码前 / 验收复盘前。用到了哪几条请调用 workbench_knowledge_recall_control(action=report_usage, entry_ids=[...]) 回报；本会话不想被自动检索就 action=turn_off。',
   '点子/点子王：关联点子请调用 workbench_propose_idea_clusters；头脑风暴落地请调用 workbench_submit_idea_tasks。都只写草稿，用户确认后才生效。',
   '/workbench 是个人工作台“快速录入新任务”的专用命令：当用户消息以 /workbench 开头时，只把后续文字理解为新任务线索，按 workbench-intake 规范澄清，并且只能调用 workbench_submit_task 写入 pending 任务草稿；不要执行、拆解、生成计划/报告/知识/点子/复盘，也不要处理微信提醒。',
   '任务资料夹：每个任务的文件请放在提示词里声明的“任务资料夹”（形如 <任务ID>-<标题片段>）里，不要在工作区根目录散放文件。',
@@ -215,6 +218,12 @@ export interface Config extends WorkbenchDbConfig {
   announceToAgent?: boolean
   /** 提醒调度器扫描间隔（毫秒），缺省 30s；测试可调小 */
   reminderScanIntervalMs?: number
+  /** 知识库自动召回：全局缺省开关（不传则读 meta，缺省**开**）。 */
+  knowledgeRecallEnabled?: boolean
+  /** 知识库自动召回的相关度阈值（缺省 0.34，见 `RECALL_DEFAULTS`）。 */
+  knowledgeRecallMinScore?: number
+  /** 知识库自动召回的单回合条数上限（缺省 3）。 */
+  knowledgeRecallMaxEntries?: number
 }
 
 export function apply(ctx: Context, config: Config = {}): void {
@@ -292,7 +301,21 @@ function applyReady(ctx: Context, db: DatabaseSync, config: Config): void {
     log: (message) => { ctx.logger?.info?.(message) },
   })
 
+  /**
+   * 知识库自动召回（v1.15.3）。
+   *
+   * 创建顺序很重要：必须在 `makeRoutes` **之前**拿到实例（路由要注入它），
+   * 也必须与 Agent 工具、提示注入钩子共享**同一个**实例 ——
+   * 单会话开关、已注入集合只有一份状态，否则"关掉了还在注入"这类矛盾必现。
+   */
+  const knowledgeRecall = installKnowledgeRecall(ctx, db, {
+    enabled: config.knowledgeRecallEnabled,
+    minScore: config.knowledgeRecallMinScore,
+    maxEntries: config.knowledgeRecallMaxEntries,
+  })
+
   const routes = makeRoutes(db, {
+    knowledgeRecall,
     /**
      * 团队记忆服务：**软探测**（`dsh-team-memory` 目前只注册 AI 工具、没有 provide 服务，
      * 所以这里通常拿不到 → 走"本地 Markdown + 队列补传"的等价通道）。
@@ -343,7 +366,12 @@ function applyReady(ctx: Context, db: DatabaseSync, config: Config): void {
 
   ctx.effect(
     () => {
-      const disposers = [submitTaskTool(db), proposeSubtasksTool(db), proposeDailyPlanTool(db), submitReportTool(db), submitKnowledgeTool(db), proposeIdeaClustersTool(db), submitIdeaTasksTool(db), updateTaskTool(db), requestCompletionTool(db), submitReviewTool(db), saveTaskMemoryTool(db)].map((tool) => ctx.tools.register(tool))
+      const disposers = [
+        submitTaskTool(db), proposeSubtasksTool(db), proposeDailyPlanTool(db), submitReportTool(db), submitKnowledgeTool(db),
+        proposeIdeaClustersTool(db), submitIdeaTasksTool(db), updateTaskTool(db), requestCompletionTool(db), submitReviewTool(db), saveTaskMemoryTool(db),
+        // 知识库回流：模型主动查 + 自动召回的开关/引用回报（与钩子共用同一个管理器）。
+        searchKnowledgeTool(knowledgeRecall), knowledgeRecallControlTool(knowledgeRecall),
+      ].map((tool) => ctx.tools.register(tool))
       return () => { for (const dispose of disposers) dispose() }
     },
     'dsh-personal-workbench: tools',

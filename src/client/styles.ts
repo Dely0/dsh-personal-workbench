@@ -429,6 +429,25 @@ ${panelContainerCss({ view: VIEW_ATTR, official: OFFICIAL_ATTR, active: ACTIVE_A
 .wb-switch-row input { margin-top: 2px; flex: none; }
 .wb-switch-row .wb-switch-desc { display: block; font-size: 12px; color: var(--dsw-alias-label-secondary); margin-top: 2px; line-height: 1.5; }
 
+/* --------------------------------------------------------------------------
+   知识库召回：可观测回执（v1.15.3）
+   日志行是等宽的数字+中文混排，必须允许换行（不换行会把设置弹窗撑出横向滚动）。
+   -------------------------------------------------------------------------- */
+.wb-recall-log { margin-top: 14px; border-top: 1px solid var(--dsw-alias-border-l2, rgba(255,255,255,.12)); padding-top: 10px; }
+.wb-recall-log-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
+.wb-recall-log-head span { font-size: 12px; color: var(--dsw-alias-label-secondary); }
+.wb-recall-log-head .wb-btn { margin-left: auto; }
+.wb-recall-log-lines {
+  list-style: none; margin: 0; padding: 10px 12px; max-height: 260px; overflow: auto;
+  border-radius: 10px; background: var(--dsw-alias-bg-layer-3, rgba(255,255,255,.04));
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 11.5px; line-height: 1.7;
+}
+.wb-recall-log-lines li { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--dsw-alias-label-secondary); }
+.wb-recall-sessions { margin-top: 12px; font-size: 12px; }
+.wb-recall-sessions ul { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.wb-recall-sessions li { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.wb-recall-sessions code { font-size: 11.5px; opacity: .85; overflow-wrap: anywhere; }
+
 /* ==========================================================================
    Toast：浮在右上角，不参与布局
    ========================================================================== */
