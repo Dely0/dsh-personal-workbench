@@ -17,6 +17,7 @@
     "src/client/capacity.ts",
     "src/client/listPresentation.ts",
     "src/client/components/KnowledgeList.tsx",
+    "src/client/components/CapacityRulePanel.tsx",
     "src/client/components/IdeaCardGrid.tsx",
     "src/client/components/TabBar.tsx",
     "src/client/components/TagFilter.tsx",

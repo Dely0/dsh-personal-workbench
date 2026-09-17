@@ -22,6 +22,7 @@ import { MAX_ESTIMATE_MINUTES, DEFAULT_ESTIMATE_MINUTES } from '../lib/client/ca
 const indexSource = readFileSync('src/client/index.tsx', 'utf8').replace(/\r\n/g, '\n')
 const capacitySource = readFileSync('src/client/capacity.ts', 'utf8').replace(/\r\n/g, '\n')
 const settingsSource = readFileSync('src/client/components/SettingsModal.tsx', 'utf8').replace(/\r\n/g, '\n')
+const panelSource = readFileSync('src/client/components/CapacityRulePanel.tsx', 'utf8').replace(/\r\n/g, '\n')
 
 /** 去掉注释：避免"注释里提到某个写法"被当成代码里的实现/第二处实现。 */
 function stripComments(source) {
@@ -269,4 +270,75 @@ test('新建任务表单也补了同一组字段（同一字段两个入口，�
 test('设置页有两个新控件的入口（默认耗时 + 逾期口径）', () => {
   assert.match(settingsSource, /defaultEstimateMinutes/, '设置页要有默认耗时控件')
   assert.match(settingsSource, /dailyCapacityIncludeOverdue/, '设置页要有逾期口径开关')
+})
+
+/**
+ * ── 面板接线（P2）───────────────────────────────────────────────────────────
+ * `test/capacityPanel.test.mjs` 用真渲染断言"页面上显示了什么"；
+ * 这里锁**接线**：props 有没有真的把账本两半与计数传下去、面板有没有自己算第二遍。
+ */
+
+test('面板 props：账本两半与三个计数都要传下去（少一个就是"新 aria-label 没有数据可用"）', () => {
+  const start = indexSource.indexOf('<CapacityRulePanel')
+  assert.ok(start > 0, '面板已接线')
+  const call = indexSource.slice(start, indexSource.indexOf('/>', start))
+  for (const prop of ['capacity={capacity}', 'defaultEstimateMinutes={settings.defaultEstimateMinutes}', 'includeOverdue={settings.dailyCapacityIncludeOverdue}', 'onIncludeOverdueChange=']) {
+    assert.ok(call.includes(prop), `面板 props 缺 ${prop}：${call.trim()}`)
+  }
+  // 三个计数与账本两半都在 capacity 对象里（由纯函数产出），面板只读它
+  for (const field of ['included', 'overdueExcluded', 'dueTodayCount', 'noDueDoingCount', 'fallbackCount']) {
+    assert.match(capacitySource, new RegExp(`${field}[,:]`), `CapacityResult 必须显式给 ${field}`)
+  }
+})
+
+test('面板不自己算：组件里没有求和/过滤容量任务的地方', () => {
+  const code = stripComments(panelSource)
+  /**
+   * 断言范围只取**组件函数体**（`export function CapacityRulePanel` 到文件末尾）。
+   * 为什么：props 的**类型声明**里有 `defaultEstimateMinutes` 这类字段名，
+   * 那是"接口形状"不是"第二份实现"。把整份文件当组件体断言，就会为了让它变绿
+   * 而去改类型名 —— 过宽的断言会逼出错误的改动。
+   */
+  const body = code.slice(code.indexOf('export function CapacityRulePanel('))
+  assert.ok(body.length > 0, '组件函数体可定位')
+  assert.doesNotMatch(body, /estimatedMinutes/, '组件体不许碰这个字段（读它就是要自己算）')
+  assert.doesNotMatch(body, /\.reduce\(/, '组件体不许自己求和（唯一权威源是纯函数）')
+  assert.doesNotMatch(body, /Date\.parse\(/, '组件体不许自己判"今天到期"')
+})
+
+test('面板开关写回 settings（唯一权威源），不是面板自己的局部 state', () => {
+  assert.match(indexSource, /const saveIncludeOverdue = async \(next: boolean\)/, '有唯一写入口')
+  const saver = indexSource.slice(indexSource.indexOf('const saveIncludeOverdue'), indexSource.indexOf('/** 保存「每天可投入时长」'))
+  assert.match(saver, /\/api\/workbench\/settings/, '写服务端设置')
+  assert.match(saver, /dailyCapacityIncludeOverdue/, '写的是同一个键')
+  assert.match(saver, /catch/, '失败要回滚 + 报错，不许静默')
+  // 面板自己不许存第二份 includeOverdue（那会让"面板开了、容量按关的算"）
+  assert.doesNotMatch(panelSource, /useState/, '面板是纯展示组件（无内部状态）')
+})
+
+test('文案：规则七条与账本列在组件里逐字存在（改文案必须同步设计文档）', () => {
+  for (const text of [
+    '只看未归档、未完成、未取消的任务。',
+    '任务自己没设截止时间时，用它最近的有截止时间的祖先的。',
+    '有效截止时间落在今天（本地日）的，计入「已排」。',
+    '自己和祖先都没有截止时间、且状态是进行中/受阻的，计入「已排」。',
+    '它和「今天到期」互不重叠，不会算两遍。',
+    '「全天」只影响显示与重复锚点，不改变容量计算。',
+    '下面的账本逐条列出了每个数字的来源。',
+  ]) {
+    assert.ok(panelSource.includes(text), `规则文案缺：${text}`)
+  }
+  for (const label of ['今天到期', '无截止·推进中', '逾期计入', '全天', '继承父任务截止', '继承自已取消父任务']) {
+    assert.ok(panelSource.includes(label), `来源标记缺：${label}`)
+  }
+  assert.ok(panelSource.includes('把逾期任务计入今日容量'), '开关文案逐字')
+  assert.ok(panelSource.includes('默认耗时') && panelSource.includes('在设置里改'), '底部提示逐字')
+})
+
+test('样式：新类名都真的定义了（否则渲染出来是裸元素）', () => {
+  const css = readFileSync('src/client/styles.ts', 'utf8')
+  for (const cls of ['.wb-cap-rule', '.wb-cap-rule-toggle', '.wb-cap-rule-sum', '.wb-cap-rules',
+    '.wb-cap-audit', '.wb-cap-audit-total', '.wb-cap-overdue', '.wb-cap-switch', '.wb-cap-foot']) {
+    assert.ok(css.includes(cls + ' ') || css.includes(cls + '{') || css.includes(cls + ','), `styles.ts 缺 ${cls}`)
+  }
 })

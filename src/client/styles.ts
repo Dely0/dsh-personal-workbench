@@ -607,6 +607,61 @@ ${panelContainerCss({ view: VIEW_ATTR, official: OFFICIAL_ATTR, active: ACTIVE_A
 [data-dsh-personal-workbench-view] .wb-cap-legend i { width: 7px; height: 7px; border-radius: 2px; flex: none; }
 [data-dsh-personal-workbench-view] .wb-cap-legend b { color: var(--wb-ink-1); font-weight: 650; font-variant-numeric: tabular-nums; }
 
+/* ── 今日容量：规则与账本（v1.15.1）──────────────────────────────────────────
+   目标：用户看到的每个数字都能在账本里找到出处，且规则写在界面上而不是只写在代码里。
+   小屏可滚动（不挤坏上面的容量条 —— 布局类缺陷由 harness 的像素断言守）。 */
+[data-dsh-personal-workbench-view] .wb-cap-rule { margin-top: 10px; border-top: 1px dashed var(--wb-line); padding-top: 8px; }
+[data-dsh-personal-workbench-view] .wb-cap-rule-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+[data-dsh-personal-workbench-view] .wb-cap-rule-toggle {
+  background: none; border: 1px solid var(--wb-line); border-radius: var(--wb-r-1, 6px);
+  color: var(--wb-ink-2); font: inherit; font-size: 11.5px; padding: 2px 8px; cursor: pointer; flex: none;
+}
+[data-dsh-personal-workbench-view] .wb-cap-rule-toggle:hover { color: var(--wb-ink-1); border-color: var(--wb-ink-3); }
+[data-dsh-personal-workbench-view] .wb-cap-rule-sum { font-size: 11.5px; color: var(--wb-ink-3); font-variant-numeric: tabular-nums; }
+[data-dsh-personal-workbench-view] .wb-cap-rule-sum b { color: var(--wb-ink-1); font-weight: 650; }
+[data-dsh-personal-workbench-view] .wb-cap-rule-body { margin-top: 9px; display: flex; flex-direction: column; gap: 10px; }
+[data-dsh-personal-workbench-view] .wb-cap-rules {
+  margin: 0; padding-left: 20px; font-size: 12px; line-height: 1.75; color: var(--wb-ink-2);
+}
+[data-dsh-personal-workbench-view] .wb-cap-rules b { color: var(--wb-ink-1); font-weight: 650; }
+[data-dsh-personal-workbench-view] .wb-cap-audit-wrap, [data-dsh-personal-workbench-view] .wb-cap-overdue {
+  border: 1px solid var(--wb-line); border-radius: var(--wb-r-2); overflow: hidden;
+}
+[data-dsh-personal-workbench-view] .wb-cap-audit-title, [data-dsh-personal-workbench-view] .wb-cap-overdue-head {
+  font-size: 11.5px; font-weight: 650; color: var(--wb-ink-2);
+  padding: 7px 10px; background: color-mix(in srgb, var(--wb-ink-1) 4%, transparent);
+}
+[data-dsh-personal-workbench-view] .wb-cap-overdue-head b { color: var(--wb-warn, #d9a03f); font-weight: 650; }
+[data-dsh-personal-workbench-view] .wb-cap-audit-empty { font-size: 11.5px; color: var(--wb-ink-3); padding: 9px 10px; }
+[data-dsh-personal-workbench-view] .wb-cap-audit { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+[data-dsh-personal-workbench-view] .wb-cap-audit th {
+  text-align: left; font-weight: 600; color: var(--wb-ink-3); padding: 5px 10px;
+  border-bottom: 1px solid var(--wb-line);
+}
+[data-dsh-personal-workbench-view] .wb-cap-audit td { padding: 5px 10px; border-bottom: 1px solid color-mix(in srgb, var(--wb-line) 60%, transparent); vertical-align: top; }
+[data-dsh-personal-workbench-view] .wb-cap-audit tr:last-child td { border-bottom: none; }
+[data-dsh-personal-workbench-view] .wb-cap-audit td.t { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+[data-dsh-personal-workbench-view] .wb-cap-audit td.p, [data-dsh-personal-workbench-view] .wb-cap-audit td.m { font-variant-numeric: tabular-nums; white-space: nowrap; }
+[data-dsh-personal-workbench-view] .wb-cap-audit td.s { display: flex; flex-wrap: wrap; gap: 4px; }
+[data-dsh-personal-workbench-view] .wb-cap-audit .tag {
+  font-size: 10.5px; padding: 1px 6px; border-radius: 999px; white-space: nowrap;
+  border: 1px solid var(--wb-line); color: var(--wb-ink-3);
+}
+[data-dsh-personal-workbench-view] .wb-cap-audit-total {
+  font-size: 11.5px; font-weight: 650; color: var(--wb-ink-1);
+  padding: 7px 10px; border-top: 1px solid var(--wb-line);
+  background: color-mix(in srgb, var(--wb-ink-1) 4%, transparent);
+}
+[data-dsh-personal-workbench-view] .wb-cap-switch {
+  display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--wb-ink-2); cursor: pointer;
+}
+[data-dsh-personal-workbench-view] .wb-cap-switch input { flex: none; }
+[data-dsh-personal-workbench-view] .wb-cap-switch .hint {
+  width: 15px; height: 15px; border-radius: 999px; border: 1px solid var(--wb-line);
+  display: inline-flex; align-items: center; justify-content: center; font-size: 10px; color: var(--wb-ink-3); cursor: help;
+}
+[data-dsh-personal-workbench-view] .wb-cap-foot { font-size: 11px; color: var(--wb-ink-3); }
+
 /* 卡片 / 列表 / 计划：统一边框强度与阴影，行分割线改发丝 */
 [data-dsh-personal-workbench-view] .wb-card {
   border: 1px solid var(--wb-line); border-radius: var(--wb-r-2); background: var(--wb-surface);

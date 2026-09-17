@@ -18,6 +18,7 @@ import { readFileSync, writeFileSync } from 'node:fs'
 const ROOT = process.cwd()
 const CAPACITY = 'src/client/capacity.ts'
 const INDEX = 'src/client/index.tsx'
+const PANEL = 'src/client/components/CapacityRulePanel.tsx'
 
 const CAPACITY_TESTS = ['test/capacity.test.mjs']
 const WIRING_TESTS = ['test/capacityWiring.test.mjs']
@@ -121,6 +122,41 @@ const MUTATIONS = [
     from: '      setTasks((prev) => prev.map((task) => (\n        task.id === selected.task.id ? { ...task, estimatedMinutes, allDay: editDraft.allDay } : task\n      )))',
     to: '      // 变异：乐观更新被删掉',
     tests: WIRING_TESTS,
+  },
+  {
+    name: 'M15 面板把逾期开关的取值换成常量（与 settings 脱钩 —— 第二权威源的典型形态）',
+    file: PANEL,
+    from: '  const { capacity, dailyCapacityMinutes, defaultEstimateMinutes, includeOverdue, onIncludeOverdueChange, expanded, onExpandedChange } = props',
+    to: '  const { capacity, dailyCapacityMinutes, defaultEstimateMinutes, onIncludeOverdueChange, expanded, onExpandedChange } = props\n  const includeOverdue = false',
+    tests: ['test/capacityPanel.test.mjs'],
+  },
+  {
+    name: 'M16 面板自己求和「已排」（第二份实现，和纯函数结果迟早不一致）',
+    file: PANEL,
+    from: '          已排 <b>{capacity.planned}</b> min · 可投入 <b>{dailyCapacityMinutes}</b> min ·',
+    to: '          已排 <b>{capacity.included.reduce((sum, row) => sum + row.minutes, 0)}</b> min · 可投入 <b>{dailyCapacityMinutes}</b> min ·',
+    tests: WIRING_TESTS,
+  },
+  {
+    name: 'M17 逾期区读数把脏 due 串也算进去（读数虚高）',
+    file: PANEL,
+    from: '  return `今日任务时间占比：紧急 ${capacity.byPriority.p0} 分钟、高 ${capacity.byPriority.p1} 分钟、`\n    + `普通 ${capacity.byPriority.p2} 分钟、低 ${capacity.byPriority.p3} 分钟、空闲 ${capacity.free} 分钟；`\n    + `今天到期 ${capacity.dueTodayCount} 条、无截止推进中 ${capacity.noDueDoingCount} 条、`\n    + `逾期未计入 ${capacity.overdueExcluded.filter((row) => !row.dueUnparseable).length} 条 / ${capacity.overdueMinutes} 分钟。`',
+    to: '  return `今日任务时间占比：紧急 ${capacity.byPriority.p0} 分钟、高 ${capacity.byPriority.p1} 分钟、`\n    + `普通 ${capacity.byPriority.p2} 分钟、低 ${capacity.byPriority.p3} 分钟、空闲 ${capacity.free} 分钟；`\n    + `今天到期 ${capacity.dueTodayCount} 条、无截止推进中 ${capacity.noDueDoingCount} 条、`\n    + `逾期未计入 ${capacity.overdueExcluded.length} 条 / ${capacity.overdueMinutes} 分钟。`',
+    tests: ['test/capacityPanel.test.mjs'],
+  },
+  {
+    name: 'M18 面板把「全天任务按预计耗时算」写成按 480 算（口径被改但测试没锁）',
+    file: PANEL,
+    from: '全天任务同样按预计耗时算 —— 「全天」只影响显示与重复锚点，不改变容量计算。',
+    to: '全天任务按整天 480 分钟计入容量。',
+    tests: ['test/capacityPanel.test.mjs'],
+  },
+  {
+    name: 'M19 面板把逾期开关的勾选态写死成 false（开关变成假控件：点了不勾）',
+    file: PANEL,
+    from: '              checked={includeOverdue}',
+    to: '              checked={false}',
+    tests: ['test/capacityPanel.test.mjs'],
   },
 ]
 

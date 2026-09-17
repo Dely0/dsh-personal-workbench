@@ -56,6 +56,7 @@ import {
   DEFAULT_SORT_DIR, buildListPage, normalizePageSize, normalizeSortDir, normalizeSortKey, toContentItem,
 } from './listPresentation.js'
 import { PlanPanel } from './components/PlanPanel.js'
+import { CapacityRulePanel, capacityAriaLabel } from './components/CapacityRulePanel.js'
 import {
   clientFileLinkToPath, draftKindLabel, eventIcon, eventLabel, fmtTime, localDateString,
   roleLabel, sameDay, shortId, startOfDay, startOfWeek, toLocalInput,
@@ -757,6 +758,8 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   const [settings, setSettings] = useState<WorkbenchSettings>({ defaultWorkspace: '', autoCreateTypeFolders: true, desktopNotify: true, dailyCapacityMinutes: 390, quickWorkspaceRecent: [], autoKnowledgeRecall: true, defaultEstimateMinutes: DEFAULT_ESTIMATE_MINUTES, dailyCapacityIncludeOverdue: false })
   /** 今日容量里「可投入时长」的行内编辑态（null = 只读展示） */
   const [capacityEdit, setCapacityEdit] = useState<string | null>(null)
+  /** 「规则与账本」面板是否展开（纯展示态，不影响任何计算）。 */
+  const [capacityExpanded, setCapacityExpanded] = useState(false)
   const [notifyPerm, setNotifyPerm] = useState<NotificationPermission | 'unsupported'>(() => typeof Notification === 'undefined' ? 'unsupported' : Notification.permission)
   const [showSettings, setShowSettings] = useState(false)
   const [settingsSaving, setSettingsSaving] = useState(false)
@@ -2058,6 +2061,30 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
     [tasks, archivedTasks, settings.dailyCapacityMinutes, settings.defaultEstimateMinutes, settings.dailyCapacityIncludeOverdue, capacityTodayKey(now)],
   )
 
+  /**
+   * 逾期口径开关（「今日容量 → 规则」面板与设置页**写同一个 settings 键**）。
+   *
+   * 为什么两处共用一个回调：`dailyCapacityIncludeOverdue` 的唯一权威源是 settings
+   * （服务端 meta）。若面板自己存一份 state，就会出现"面板开关是开的、容量按关的算"
+   * 这种假控件 —— 本项目已经因为"两个权威源"翻过车。
+   * 保存失败回滚（把 settings 改回去），不静默失败。
+   */
+  const saveIncludeOverdue = async (next: boolean): Promise<void> => {
+    const previous = settings.dailyCapacityIncludeOverdue
+    if (next === previous) return
+    setSettings((prev) => ({ ...prev, dailyCapacityIncludeOverdue: next }))
+    try {
+      await api('/api/workbench/settings', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ dailyCapacityIncludeOverdue: next }),
+      })
+      setNotice(next ? '逾期任务会计入今日容量' : '逾期任务不再计入今日容量')
+    } catch (e) {
+      setSettings((prev) => ({ ...prev, dailyCapacityIncludeOverdue: previous }))
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
   /** 保存「每天可投入时长」（分钟）；<30 视为无效，恢复默认 390。 */
   const saveDailyCapacity = async (): Promise<void> => {    const raw = capacityEdit === null ? '' : capacityEdit.trim()
     setCapacityEdit(null)
@@ -2782,7 +2809,11 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                 <div className="wb-stat"><b>{bootstrap?.stats.total ?? 0}</b><span>总数</span></div>
               </div>
 
-              {/* 今日容量：把"今天投得进多少时间"显式化（estimatedMinutes 按优先级摊成一条时间轴） */}
+              {/*
+                今日容量（v1.15.1）：把"今天投得进多少时间"及其**算法**显式化。
+                这里只负责画：算全在 `computeTodayCapacity`（纯函数），
+                口径偏好只在 `settings`（见 CapacityRulePanel 的注释）。
+              */}
               <div className="wb-cap">
                 <div className="wb-cap-head">
                   <h3>今日容量</h3>
@@ -2811,7 +2842,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                     <span>余 <b>{capacity.free}</b> min</span>
                   </div>
                 </div>
-                <div className="wb-cap-bar" role="img" aria-label={`今日任务时间占比：紧急 ${capacity.byPriority.p0} 分钟、高 ${capacity.byPriority.p1} 分钟、普通 ${capacity.byPriority.p2} 分钟、低 ${capacity.byPriority.p3} 分钟、空闲 ${capacity.free} 分钟`}>
+                <div className="wb-cap-bar" role="img" aria-label={capacityAriaLabel(capacity)}>
                   {(['p0', 'p1', 'p2', 'p3'] as const).map((code) => capacity.byPriority[code] > 0
                     ? <i key={code} className={code} style={{ width: `${(capacity.byPriority[code] / capacity.total) * 100}%` }} title={`${code} · ${capacity.byPriority[code]} min`} />
                     : null)}
@@ -2824,6 +2855,16 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                   <span><i style={{ background: 'var(--wb-p3)' }} />低 <b>{capacity.byPriority.p3}</b></span>
                   <span><i style={{ background: 'color-mix(in srgb, var(--wb-ok) 36%, transparent)' }} />空闲 <b>{capacity.free}</b></span>
                 </div>
+                {/* 规则与账本：只吃 props，不自己算（唯一权威源是纯函数与 settings） */}
+                <CapacityRulePanel
+                  capacity={capacity}
+                  dailyCapacityMinutes={settings.dailyCapacityMinutes}
+                  defaultEstimateMinutes={settings.defaultEstimateMinutes}
+                  includeOverdue={settings.dailyCapacityIncludeOverdue}
+                  onIncludeOverdueChange={(next) => void saveIncludeOverdue(next)}
+                  expanded={capacityExpanded}
+                  onExpandedChange={setCapacityExpanded}
+                />
               </div>
               <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
                 <button className="wb-btn primary" disabled={busy || openTasks.length === 0} onClick={() => void startAISession('plan', null, localDateString())}><Icon name="sparkles" />{todayPlan !== null || (pendingDraft?.kindCode === 'daily_plan' && String(pendingDraft.payload.planDate ?? '') === todayAnchor) ? '继续编辑今日计划' : 'AI 智能排序'}</button>
