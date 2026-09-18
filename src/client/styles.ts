@@ -14,13 +14,20 @@ export const WORKBENCH_CSS = `[data-pane='conversation'], [class*='centerCol'] {
 html[${ACTIVE_ATTR}]:not([data-dsh-taskboard-active]):not([data-dsh-ssh-active]) [${VIEW_ATTR}] { display: block; }
 html[${ACTIVE_ATTR}]:not([data-dsh-taskboard-active]):not([data-dsh-ssh-active]) [data-pane='conversation'] > :not([${VIEW_ATTR}]),
 html[${ACTIVE_ATTR}]:not([data-dsh-taskboard-active]):not([data-dsh-ssh-active]) [class*='centerCol'] > :not([${VIEW_ATTR}]) { display: none !important; }
-[${ENTRY_ATTR}] { position:relative; display:flex; align-items:center; gap:8px; width:100%; height:32px; padding:0 12px; background:transparent; border:none; border-radius:8px; color:var(--dsw-alias-label-secondary); cursor:pointer; font-size:13px; white-space:nowrap; text-align:left; }
+/* 侧边栏入口：逐项对齐宿主自己渲染的面板行（ui-sidebar 的 panelRow/panelGlyph/panelTitle）。
+   DSH 侧栏的面板行规格：min-height:36px, padding:7px 8px, margin:0 2px, radius:12px,
+   line-height:22px, font:inherit, 文字色 label-primary, hover/active 用 interactive-bg-hover；
+   收起栏里是 36x36 居中、图标 18px。数值若与宿主不一致，就会出现"工作台"跟"插件"错行。 */
+[${ENTRY_ATTR}] { position:relative; box-sizing:border-box; display:flex; align-items:center; gap:8px; width:calc(100% - 4px); min-height:36px; margin:0 2px; padding:7px 8px; line-height:22px; background:0 0; border:none; border-radius:12px; color:var(--dsw-alias-label-primary); cursor:pointer; font:inherit; white-space:nowrap; text-align:left; }
+[${ENTRY_ATTR}] .wb-label { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 [${ENTRY_ATTR}] svg { width:16px; height:16px; flex:none; }
-[${ENTRY_ATTR}]:hover { background: var(--dsw-specific-sidebar-nav-item-hover); color: var(--dsw-alias-label-primary); }
-[${ENTRY_ATTR}][data-active] { background: var(--dsw-specific-sidebar-nav-item-active); color: var(--dsw-alias-label-primary); font-weight:600; }
+[${ENTRY_ATTR}]:hover { background:var(--dsw-alias-interactive-bg-hover); color:var(--dsw-alias-label-primary); }
+[${ENTRY_ATTR}][data-active] { background:var(--dsw-alias-interactive-bg-hover); color:var(--dsw-alias-label-primary); }
+[${ENTRY_ATTR}]:focus-visible { outline:2px solid var(--dsw-alias-label-primary); outline-offset:-2px; }
 html[${PENDING_ATTR}] [${ENTRY_ATTR}]::after { content:''; position:absolute; top:6px; right:10px; width:7px; height:7px; border-radius:50%; background:#e74c3c; }
-[data-dsh-frame][data-sidebar-collapsed] [${ENTRY_ATTR}] { justify-content:center; padding:0; width:100%; }
-[data-dsh-frame][data-sidebar-collapsed] [${ENTRY_ATTR}] .wb-label { display:none; }
+[data-sidebar-collapsed] [${ENTRY_ATTR}] { width:36px; height:36px; min-height:36px; justify-content:center; margin:0; padding:0; }
+[data-sidebar-collapsed] [${ENTRY_ATTR}] .wb-label { display:none; }
+[data-sidebar-collapsed] [${ENTRY_ATTR}] svg { width:18px; height:18px; }
 .wb-app { height:100%; display:flex; flex-direction:column; }
 .wb-h { flex:none; display:flex; align-items:center; gap:12px; padding:14px 18px; border-bottom:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.22)); background:var(--dsw-alias-bg-layer-1, rgba(255,255,255,.02)); }
 .wb-title { display:flex; align-items:center; gap:8px; font-size:16px; font-weight:700; letter-spacing:.02em; white-space:nowrap; }

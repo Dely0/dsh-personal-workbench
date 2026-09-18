@@ -2901,9 +2901,20 @@ export function apply(ctx: unknown): () => void {
   const entry = document.createElement('button')
   entry.type = 'button'
   entry.setAttribute(ENTRY_ATTR, '')
-  entry.innerHTML = '<svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="3" width="12" height="11" rx="2"/><path d="M2 6.5h12M5.5 2v3M10.5 2v3"/><path d="M5 9.5l1.5 1.5L9.5 8"/></svg><span class="wb-label">工作台</span>'
+  // aria-label 与宿主面板行一致：收起栏里文字被隐藏，靠它保住可访问名。
+  entry.setAttribute('aria-label', '工作台')
+  // 图标规格对齐宿主图标基元（0 0 16 16 网格、stroke 1.2），避免比「插件」更粗更重。
+  entry.innerHTML = '<svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="2" y="3" width="12" height="11" rx="2"/><path d="M2 6.5h12M5.5 2v3M10.5 2v3"/><path d="M5 9.5l1.5 1.5L9.5 8"/></svg><span class="wb-label">工作台</span>'
   entry.addEventListener('click', () => { setOpen(!open) })
-  const syncEntry = (): void => { if (open) entry.dataset.active = 'true'; else delete entry.dataset.active }
+  const syncEntry = (): void => {
+    if (open) {
+      entry.dataset.active = 'true'
+      entry.setAttribute('aria-current', 'page')
+    } else {
+      delete entry.dataset.active
+      entry.removeAttribute('aria-current')
+    }
+  }
   const entryObserver = new MutationObserver(syncEntry)
   entryObserver.observe(document.documentElement, { attributes: true, attributeFilter: [ACTIVE_ATTR] })
   syncEntry()
@@ -2918,9 +2929,22 @@ export function apply(ctx: unknown): () => void {
   let column: HTMLElement | undefined
   const placeEntry = (): void => {
     if (rootEl !== undefined && !rootEl.isConnected) { rootEl = undefined; placed = false }
-    if (placed) { if (document.body.contains(entry)) return; placed = false }
+    if (placed && rootEl !== undefined) {
+      // 已放置：只要还挂在当前容器里就不动。宿主重渲染会连容器一起换掉，那时再插回去。
+      const holder = rootEl.querySelector<HTMLElement>('[class*="panelList"]') ?? rootEl
+      if (entry.parentElement === holder && document.body.contains(entry)) return
+      placed = false
+    }
     rootEl ??= sidebarRoot()
     if (rootEl === undefined) return
+    // 优先放进宿主自己的面板行容器（「插件」就在里面）：同容器才能共享 gap:4px 等行距。
+    // 老版本 DSH 没有这个容器时，退回「新建会话」行之后的老位置。
+    const panelList = rootEl.querySelector<HTMLElement>('[class*="panelList"]')
+    if (panelList !== null) {
+      if (entry.parentElement !== panelList) panelList.insertBefore(entry, panelList.firstElementChild)
+      placed = true
+      return
+    }
     const button = newSessionButton(rootEl)
     if (button === undefined) return
     if (entry.parentElement !== rootEl) {
