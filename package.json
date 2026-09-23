@@ -70,7 +70,7 @@
     "build": "node -e \"require('node:fs').rmSync('lib',{recursive:true,force:true})\" && tsc -p tsconfig.build.json && tsdown",
     "typecheck": "tsc --noEmit",
     "check": "tsc --noEmit && node -e \"require('node:fs').rmSync('lib',{recursive:true,force:true})\" && tsc -p tsconfig.build.json && tsdown",
-    "test": "pnpm build && node --test test/db.test.mjs test/tools.test.mjs test/routes.test.mjs test/taskFilterSort.test.mjs test/workspacePath.test.mjs test/reminder.test.mjs test/skills.test.mjs test/draftNotify.test.mjs",
+    "test": "pnpm build && node --test test/db.test.mjs test/tools.test.mjs test/routes.test.mjs test/taskFilterSort.test.mjs test/workspacePath.test.mjs test/reminder.test.mjs test/skills.test.mjs test/draftNotify.test.mjs test/hostNav.test.mjs",
     "prepare": "pnpm build"
   },
   "dependencies": {

@@ -28,6 +28,7 @@ import { DraftBanner } from './components/DraftBanner.js'
 import { MarkdownText } from './components/MarkdownText.js'
 import { ToastHost, useToasts } from './components/Toast.js'
 import { api } from './api.js'
+import { currentSessionIdOf, openHostSession } from './hostNav.js'
 import { withSkillPromptBlock } from './skillPrompt.js'
 import type {
   DraftView,
@@ -42,7 +43,7 @@ import { Icon } from './components/Icon.js'
 import { Badge, MultiSelectDropdown, TaskTreeRows, countTaskTree } from './components/TaskList.js'
 import { PlanPanel } from './components/PlanPanel.js'
 import {
-  clientFileLinkToPath, draftKindLabel, eventIcon, eventLabel, fmtTime, localDateString,
+  draftKindLabel, eventIcon, eventLabel, fmtTime, localDateString,
   roleLabel, sameDay, shortId, startOfDay, startOfWeek, toLocalInput,
 } from './format.js'
 import type {
@@ -188,7 +189,7 @@ function QuickModelPicker({ runtime, value, onChange, disabled = false, onError,
   const [open, setOpen] = useState(false)
   const [loading, setLoading] = useState(false)
   const sessions = runtime.sessions.list.getSnapshot()
-  const directorySessionId = sessions.current ?? sessions.ids[0] ?? ''
+  const directorySessionId = currentSessionIdOf(sessions) ?? sessions.ids[0] ?? ''
   const directory = useMemo(() => {
     if (runtime.modelDirectories === undefined || directorySessionId === '') return undefined
     try { return runtime.modelDirectories.directoryFor(directorySessionId) } catch { return undefined }
@@ -760,7 +761,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
           }
           if (shouldReuse) {
             closePanel()
-            runtime.sessions.open(existing.session.sessionId)
+            openHostSession(runtime, existing.session.sessionId)
             return
           }
         }
@@ -770,7 +771,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
           const rep = await api<{ report: { sessionId?: string | null } | null }>(`/api/workbench/reports/${periodCode}/${anchor}`)
           if (typeof rep.report?.sessionId === 'string' && rep.report.sessionId !== '') {
             closePanel()
-            runtime.sessions.open(rep.report.sessionId)
+            openHostSession(runtime, rep.report.sessionId)
             return
           }
         }
@@ -923,7 +924,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
         await api(`/api/workbench/tasks/${task.id}/sessions`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sessionId: id, roleCode: mode }) }).catch(() => undefined)
       }
       closePanel()
-      runtime.sessions.open(id)
+      openHostSession(runtime, id)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally { setBusy(false) }
@@ -987,15 +988,8 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   }
 
   const openKnowledgeFile = async (fileLink: string): Promise<void> => {
-    try {
-      if (runtime.workspaces.openPath) {
-        await runtime.workspaces.openPath(clientFileLinkToPath(fileLink))
-        setNotice('已调用系统打开文件')
-        return
-      }
-    } catch {
-      // 原生 openPath 不可用时回退到后端打开接口
-    }
+    // DSH 0.1.7 起 `workspaces.openPath` 已从 IWorkspaces 移除（该能力搬到了
+    // dsh-client-ui-open-in-app），所以统一走后端打开接口。
     try {
       await api('/api/workbench/knowledge/open-file', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ fileLink }) })
       setNotice('已调用系统打开文件')
@@ -2296,7 +2290,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                                     const existing = selected.sessions.find((x) => x.role_code === 'review')
                                     if (existing !== undefined && typeof existing.session_id === 'string' && existing.session_id !== '') {
                                       closePanel()
-                                      runtime.sessions.open(existing.session_id)
+                                      openHostSession(runtime, existing.session_id)
                                     } else {
                                       void startAISession('review', selected.task, selected.task.title)
                                     }
@@ -2371,7 +2365,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                                   const sessionInfo = sessionListSnapshot.byId[sid]
                                   const name = sessionInfo?.displayTitle ?? shortId(sid)
                                   return (
-                                    <button key={`${sid}-${role}`} className="wb-session-row" onClick={() => { if (sid !== '') { closePanel(); runtime.sessions.open(sid) } }} title={roleLabel(role)}>
+                                    <button key={`${sid}-${role}`} className="wb-session-row" onClick={() => { if (sid !== '') { closePanel(); openHostSession(runtime, sid) } }} title={roleLabel(role)}>
                                       <span className="wb-session-role">{roleLabel(role)}</span>
                                       <span className="wb-session-name">{name}</span>
                                       <span className="wb-session-open">打开 ↗</span>
@@ -2760,6 +2754,7 @@ function optionalService<T>(ctx: unknown, name: string): T | undefined {
 async function createDefaultSession(): Promise<string> {
   const runtime = pluginCtx as WorkbenchRuntime
   const before = runtime.sessions.list.getSnapshot()
+  const beforeIds = new Set(before.ids)
   const root = sidebarRoot()
   const button = root === undefined ? undefined : newSessionButton(root)
   if (button === undefined) throw new Error('找不到 DSH 新建会话按钮，无法创建未分组澄清会话')
@@ -2768,12 +2763,11 @@ async function createDefaultSession(): Promise<string> {
   while (Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, 80))
     const snapshot = runtime.sessions.list.getSnapshot()
-    const current = snapshot.current
-    if (typeof current === 'string' && current !== '' && current !== before.current && runtime.sessions.binding(current) !== undefined) return current
-    const created = snapshot.ids.find((id) => !before.ids.includes(id) && runtime.sessions.binding(id) !== undefined)
+    // DSH 0.1.7 起 SessionListState 没有 current，改为用「点击前后 id 差集」定位新会话。
+    const created = snapshot.ids.find((id) => !beforeIds.has(id) && runtime.sessions.binding(id) !== undefined)
     if (created !== undefined) return created
   }
-  const fallback = runtime.sessions.list.getSnapshot().current
+  const fallback = currentSessionIdOf(runtime.sessions.list.getSnapshot())
   if (typeof fallback === 'string' && fallback !== '' && runtime.sessions.binding(fallback) !== undefined) return fallback
   throw new Error('DSH 已触发新建会话，但会话绑定尚未就绪，请稍后重试')
 }
@@ -2781,26 +2775,16 @@ async function createDefaultSession(): Promise<string> {
 /**
  * 把一个 workspace 变成可用的会话（返回新会话 id）。
  *
- * 优先官方 uiWorkspace.connectWorkspace；老版本 DSH（如 0.1.1-rc.1）没有这个服务，
- * 退到 workspaces.openPath；两者都不可用就抛出能指导用户的错误——**而不是**把
- * uiWorkspace 放进 inject 让整个插件在旧版本上 pending。
- *
- * `ctx` 来自 apply() 记录的宿主上下文；没有它时退回 runtime 能力（workspaces.openPath）。
+ * 官方入口是 `uiWorkspace.connectWorkspace`。DSH 0.1.7 起 `workspaces.openPath`
+ * 已被移除（IWorkspaces 里不再有该方法），所以没有 uiWorkspace 时不再有兜底路径，
+ * 直接抛出能指导用户的错误——**而不是**把 uiWorkspace 放进 inject 让整个插件
+ * 在旧版本上 pending。
  */
 async function connectWorkspace(workspaceId: string): Promise<string> {
   const ctx = pluginCtx as { get?: (key: string) => unknown } | undefined
   const uiWorkspace = optionalService<{ connectWorkspace?: (id: string) => Promise<string> }>(ctx, 'uiWorkspace')
   if (typeof uiWorkspace?.connectWorkspace === 'function') return await uiWorkspace.connectWorkspace(workspaceId)
-  const runtime = pluginCtx as WorkbenchRuntime
-  const openPath = runtime?.workspaces?.openPath
-  if (typeof openPath === 'function') {
-    await openPath.call(runtime.workspaces, workspaceId)
-    const snapshot = runtime.sessions.list.getSnapshot()
-    const last = snapshot.ids[snapshot.ids.length - 1]
-    if (typeof snapshot.current === 'string' && snapshot.current !== '') return snapshot.current
-    if (typeof last === 'string' && last !== '') return last
-  }
-  throw new Error('当前 DSH 版本没有可用的工作区切换接口（需要 uiWorkspace 或 workspaces.openPath），请先手动切到任务工作区再发起 AI 会话')
+  throw new Error('当前 DSH 版本没有可用的工作区切换接口（需要 uiWorkspace），请先手动切到任务工作区再发起 AI 会话')
 }
 
 /**

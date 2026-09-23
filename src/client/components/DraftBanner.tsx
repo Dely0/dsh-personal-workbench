@@ -9,11 +9,11 @@ import { useState, type ReactNode } from 'react'
 import { Modal } from './Modal.js'
 import { MarkdownText } from './MarkdownText.js'
 import { api } from '../api.js'
+import { openHostSession, type HostNavRuntime } from '../hostNav.js'
 import type { DraftView } from '../../shared/contracts.js'
 
-export interface DraftBannerRuntime {
-  sessions: { open: (sessionId: string) => void }
-}
+/** 打开草稿关联会话所需的宿主能力（DSH 0.1.7 起走 uiWorkspace，见 hostNav）。 */
+export type DraftBannerRuntime = HostNavRuntime
 
 export interface DraftBannerProps {
   draft: DraftView
@@ -46,7 +46,7 @@ export function DraftBanner({ draft, onDone, runtime, closePanel, kindName }: Dr
     try { await api(path, { method: 'POST' }); onDone() } finally { setBusy(false) }
   }
   const presentation = describeDraft(draft, kindName)
-  const openSession = (): void => { closePanel(); runtime.sessions.open(presentation.sessionId) }
+  const openSession = (): void => { closePanel(); openHostSession(runtime, presentation.sessionId) }
 
   return (
     <Modal

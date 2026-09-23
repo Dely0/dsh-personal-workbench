@@ -82,25 +82,31 @@ export interface DshSessionSummary {
   running?: boolean
   blank?: boolean
   updatedAt?: number
+  /**
+   * 本地保留计数（按来源）。DSH 0.1.7 起 `SessionListState` 删除了 `current`，
+   * 宿主统一用 `retainedBy.mainView > 0` 判定「当前会话」，见 hostNav.ts。
+   */
+  retainedBy?: Readonly<Record<string, number>>
 }
 export interface DshSessionListState {
   ids: string[]
   byId: Record<string, DshSessionSummary>
-  current?: string
 }
 export interface WorkbenchRuntime {
+  /** cordis 非严格服务读取（软探测未声明 inject 的服务只能走它）。 */
+  get?: (key: string) => unknown
   sessions: {
     list: { getSnapshot(): DshSessionListState }
     binding(id: string): { session: SessionDriver } | undefined
-    open(id: string): void
   }
   workspaces: {
     list: { getSnapshot(): { items: readonly { workspaceId: string; path?: string }[] } }
     create?(input: { path: string }): Promise<{ workspaceId?: string }>
-    openPath?(path: string): Promise<void>
   }
-  uiWorkspace: {
+  uiWorkspace?: {
     connectWorkspace(workspaceId: string): Promise<string>
+    /** DSH 0.1.7 起取代 `sessions.open(id)` 的官方导航入口。 */
+    openSession?(target: string): void
   }
   connection?: {
     generation: {
