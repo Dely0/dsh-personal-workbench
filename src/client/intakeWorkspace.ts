@@ -96,3 +96,42 @@ export function pickIntakeWorkspace(input: IntakeWorkspaceInput): IntakeWorkspac
       + '（不会随手取第一个工作区 —— 那会把文件建进无关的项目目录。）',
   }
 }
+
+/**
+ * 从 `workspaces.create()` 的返回值里取出 `workspaceId`。
+ *
+ * ## 为什么需要这个纯函数（2026-09-26 核对宿主契约时发现，**两版都存在**）
+ *
+ * 工作台原先写的是 `if (typeof created?.workspaceId === 'string') workspaceId = created.workspaceId`，
+ * 但宿主这个方法返回的是 **generated Remote 结果**，形状是
+ * `{ ok: true, value: { workspace: { workspaceId, path, … } } }` ——
+ * 工作区 id **嵌在 `value.workspace` 里**，顶层从来没有 `workspaceId`。
+ * （0.1.5 与 0.1.7-rc.2 的实现逐字一致：`async create(input) { const r = await this.remote.create(input); if (r.ok) this.upsert(r.value.workspace); return r }`。）
+ *
+ * 后果不是崩溃，而是**静默忽略用户显式选的工作区**：`create()` 明明成功建/取到了工作区，
+ * 我们没读出 id → 落回 `pickIntakeWorkspace()`（按当前会话 cwd/唯一候选猜）。
+ * 这正是规范里点名的"静默丢件"类别，所以读不出来时要能被上层看见（返回 `undefined`，
+ * 由调用方决定报错还是回落）。
+ *
+ * @param result - `workspaces.create()` 的返回值（形状未知，按结构判定）
+ * @returns 取到的 workspaceId；取不到返回 `undefined`（**不猜**）
+ */
+export function readCreatedWorkspaceId(result: unknown): string | undefined {
+  if (result === null || typeof result !== 'object') return undefined
+  const record = result as {
+    ok?: unknown
+    value?: { workspace?: { workspaceId?: unknown } }
+    workspaceId?: unknown
+  }
+  /** 显式失败（`{ok:false,error}`）时不读 value。 */
+  if (record.ok === false) return undefined
+  const nested = record.value?.workspace?.workspaceId
+  if (typeof nested === 'string' && nested !== '') return nested
+  /**
+   * 兼容"直接把 id 放在结果上"的形态（早期替身/未来包装）：**读得到就用**，
+   * 这样宿主若回到扁平形状也不会又静默丢一次。
+   */
+  if (typeof record.workspaceId === 'string' && record.workspaceId !== '') return record.workspaceId
+  return undefined
+}
+

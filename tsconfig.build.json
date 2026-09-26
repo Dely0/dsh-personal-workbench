@@ -29,6 +29,8 @@
     "src/client/skillPrompt.ts",
     "src/client/entryContract.ts",
     "src/client/panelState.ts",
+    "src/client/panelGeometry.ts",
+    "src/client/sessionRef.ts",
     "src/client/aiSessionReuse.ts",
     "src/client/capabilities.ts",
     "src/client/taskFolder.ts",

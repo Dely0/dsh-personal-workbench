@@ -17,6 +17,7 @@ import { Modal } from './Modal.js'
 import { MarkdownText } from './MarkdownText.js'
 import { KnowledgeDraftBody } from './KnowledgeDraftBody.js'
 import { api } from '../api.js'
+import { openSessionInMainView } from '../sessionRef.js'
 import { fmtTime } from '../format.js'
 import type { DraftConfirmProblemView, DraftView } from '../../shared/contracts.js'
 
@@ -402,7 +403,11 @@ export function DraftBanner({ draft, onDone, runtime, closePanel, kindName, onPr
     }
     let failure = ''
     try {
-      runtime.sessions.open(presentation.sessionId)
+      /**
+       * ⚠️ 不能写成 `runtime.sessions.open(...)`：DSH 0.1.7-rc.2 把 `sessions.open`
+       * 整个移除了（改由 `uiWorkspace.openSession` 承担）。唯一实现见 `sessionRef.ts`。
+       */
+      openSessionInMainView(runtime, presentation.sessionId)
     } catch (error) {
       failure = error instanceof Error ? error.message : String(error)
     }

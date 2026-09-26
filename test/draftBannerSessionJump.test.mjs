@@ -46,10 +46,16 @@ const body = functionBody(SOURCE, 'const openSession = (): void =>')
 const code = body.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')
 
 test('「回到…会话」的收横幅动作必须同步执行（不得被 setTimeout / await 推迟）', () => {
-  const openAt = code.indexOf('.open(')
+  /**
+   * 切换动作的锚点是 `openSessionInMainView(...)`（`sessionRef.ts` 的唯一实现）。
+   * v1.15.5 之前这里写的是 `runtime.sessions.open(...)` —— rc2 把它整个移除了
+   * （报 `?.open is not a function`），所以锚点跟着换，**这条政策本身不变**：
+   * 切会话 → 登记屏蔽 → 收投影，三步同步、顺序固定。
+   */
+  const openAt = code.indexOf('openSessionInMainView(')
   const dismissAt = code.indexOf('onDismissed?.()')
   const settledAt = code.indexOf('onSettled?.()')
-  assert.notEqual(openAt, -1, '必须先发起会话切换（sessions.open）')
+  assert.notEqual(openAt, -1, '必须先发起会话切换（openSessionInMainView）')
   assert.notEqual(dismissAt, -1, '必须登记屏蔽（onDismissed）')
   assert.notEqual(settledAt, -1, '必须同步收掉投影（onSettled → setPendingDraft(null)）')
 

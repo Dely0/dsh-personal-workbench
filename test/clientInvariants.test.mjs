@@ -82,8 +82,8 @@ test('I6：全仓不再有侧栏 DOM 注入的痕迹', () => {
 test('I4：写 `<html>` 的属性必须都是本插件自己的（绝不碰别家）', () => {
   /** 自用属性的前缀：本插件在 constants.ts 里定义的全部根属性都长这样。 */
   const OWN_PREFIX = 'data-dsh-personal-workbench-'
-  /** 白名单：自用的 CSS 变量（面板左边界）。 */
-  const OWN_STYLE_VARS = new Set(['--wb-sidebar-w'])
+  /** 白名单：自用的 CSS 变量（面板左边界 + 桌面壳标题栏让位）。 */
+  const OWN_STYLE_VARS = new Set(['--wb-sidebar-w', '--wb-top-inset'])
   /** 别人家的前缀：`data-dsh-<别的插件>` —— 出现即越界。 */
   const FOREIGN = /^data-dsh-(?!personal-workbench)/
 
@@ -108,7 +108,7 @@ test('I4：写 `<html>` 的属性必须都是本插件自己的（绝不碰别�
   assert.deepEqual(violations, [], `根元素写入越界：\n  - ${violations.join('\n  - ')}`)
 })
 
-test('I4 补充：constants.ts 里声明给根元素用的属性，必须都是自用前缀', () => {
+test('I4 补充：写 `<html>` 的属性必须都是自用前缀 —— 宿主标记必须另放一处', () => {
   const constants = sources.find(({ path }) => rel(path) === 'client/constants.ts')
   assert.ok(constants !== undefined, 'constants.ts 必须存在')
   const code = stripComments(constants.text)
@@ -119,6 +119,32 @@ test('I4 补充：constants.ts 里声明给根元素用的属性，必须都是�
   for (const { name, value } of declared) {
     assert.ok(value.startsWith('data-dsh-personal-workbench-'),
       `${name} = "${value}" 不是本插件自己的属性前缀 —— 写在宿主根元素上会与别的插件打架`)
+  }
+  /**
+   * 宿主自己的标记（`data-windows-titlebar` / `data-sidebar-collapsed`）**不得**混进来：
+   * 它们是"我们只读、宿主才写"的东西，混进这个文件就会逼着上面那条前缀政策放宽。
+   * 所以这里把"`data-dsh-` 之外的属性名"一律拦下 —— 出现即说明有人图省事。
+   */
+  const foreign = declared.filter(({ value }) => !value.startsWith('data-dsh-'))
+  assert.deepEqual(foreign, [],
+    'constants.ts 里出现了宿主拥有的属性名（会放宽"自用前缀"政策）：'
+    + `${foreign.map((f) => `${f.name}="${f.value}"`).join('、')}\n`
+    + '  → 请放进 client/hostShellMarkers.ts（那里专门放"只读的宿主标记"）')
+  /**
+   * 这条断言是**上面那条例外的守门人**：宿主标记模块必须存在，且真的只声明宿主标记。
+   * 否则"我把别的东西挪出去就能绕过政策"——政策就会慢慢烂掉。
+   */
+  const hostMarkers = sources.find(({ path }) => rel(path) === 'client/hostShellMarkers.ts')
+  assert.ok(hostMarkers !== undefined,
+    'client/hostShellMarkers.ts 必须存在（宿主标记的唯一去处，别处不许声明）')
+  const hostCode = stripComments(hostMarkers.text)
+  const hostAttrs = [...hostCode.matchAll(/export const (\w+)\s*=\s*'([^']+)'/g)]
+    .map(([, name, value]) => ({ name, value }))
+    .filter(({ name }) => name.endsWith('_ATTR'))
+  assert.ok(hostAttrs.length > 0, 'hostShellMarkers.ts 里应当有宿主属性常量')
+  for (const { name, value } of hostAttrs) {
+    assert.equal(value.startsWith('data-dsh-personal-workbench-'), false,
+      `${name} = "${value}" 是本插件自己的前缀 —— 自用属性应当放回 constants.ts`)
   }
 })
 

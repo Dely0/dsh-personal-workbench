@@ -143,10 +143,37 @@ export interface DshSessionListState {
    */
   phase?: string
 }
+/** 宿主 `sessions.binding(id)` 的返回值（稳定引用；绑定里的会话就是驱动本体）。 */
+export interface DshSessionBinding {
+  sessionId?: string
+  session: SessionDriver
+}
+/**
+ * 宿主 `sessions.retain(id, {source})` 的返回值（DSH 0.1.7-rc.2 起是**唯一**能拿到绑定的入口）。
+ *
+ * ⚠️ 契约要点（0.1.7-rc.2 实测 + 官方类型定义）：
+ * - `binding` 是 getter，**引用被 release 之后再读会抛**；所以要用的东西提前取出来，
+ *   不要把它存进引用、更不要在 release 之后碰它；
+ * - `ready` 会等宿主的 open 完成（等到那时 `binding` 才可用），失败会 reject；
+ * - `release()` 必须与 `retain()` 一一配对，否则会话的 scope 永不回收。
+ */
+export interface DshSessionReference {
+  sessionId?: string
+  readonly ready?: Promise<unknown>
+  readonly binding: DshSessionBinding
+  release(): void
+}
 export interface WorkbenchRuntime {
   sessions: {
     list: { getSnapshot(): DshSessionListState }
-    binding(id: string): { session: SessionDriver } | undefined
+    binding(id: string): DshSessionBinding | undefined
+    /**
+     * 0.1.7-rc.2 起 `binding()` **只对"已被 retain 的会话"**返回绑定
+     * （旧版是按"在列表里/是当前会话"推导）。用 `create()` 新建出来的会话
+     * 谁都没 retain → `binding()` 恒为 undefined → 旧写法直接报「会话绑定未就绪」。
+     * 旧宿主没有这个方法，`acquireSession` 会退到 `binding()`。
+     */
+    retain?(id: string, options: { source: string }): DshSessionReference
     open(id: string): void
   }
   workspaces: {
@@ -156,7 +183,22 @@ export interface WorkbenchRuntime {
      * 查不出"已归档"。旧宿主没有这个字段（`undefined`），判据退化为原行为。
      */
     list: { getSnapshot(): { items: readonly { workspaceId: string; path?: string }[]; archivedSessionIds?: readonly string[] } }
-    create?(input: { path: string }): Promise<{ workspaceId?: string }>
+    /**
+     * 建/取一个工作区。返回的是宿主 **generated Remote 结果**
+     * （`{ ok, value: { workspace } }`，工作区 id 嵌在 `value.workspace` 里）——
+     * 形状见 `intakeWorkspace.ts#readCreatedWorkspaceId`（那是唯一读取处，有单测）。
+     */
+    create?(input: { path: string }): Promise<{
+      ok?: boolean
+      value?: { workspace?: { workspaceId?: string } }
+      workspaceId?: string
+    }>
+    /**
+     * ⚠️ **0.1.5 与 0.1.7-rc.2 都没有这个方法**（2026-09-26 逐个包搜过）：
+     * `connectWorkspace()` 里那条兜底腿实际上是死路，能用的只有
+     * `uiWorkspace.connectWorkspace`。保留声明只为"万一将来宿主补上"，判据里已有
+     * `typeof openPath === 'function'` 守卫，所以不会误用。
+     */
     openPath?(path: string): Promise<void>
   }
   uiWorkspace: {

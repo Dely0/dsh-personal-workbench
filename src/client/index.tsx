@@ -25,6 +25,7 @@ import { isWslStylePath, joinPath, normalizeWindowsPathToWsl } from './workspace
 import { DEFAULT_ESTIMATE_MINUTES, MAX_ESTIMATE_MINUTES, capacityTodayKey, computeTodayCapacity } from './capacity.js'
 import { WORKBENCH_CSS } from './styles.js'
 import { ACTIVE_ATTR, OFFICIAL_ATTR, PANEL_NAME, PENDING_ATTR, VIEW_ATTR } from './constants.js'
+import { HOST_SIDEBAR_COLLAPSED_ATTR, HOST_SIDEBAR_WIDTH_VAR, HOST_TITLEBAR_HEIGHT_VAR, HOST_WINDOWS_TITLEBAR_ATTR } from './hostShellMarkers.js'
 import { panelDataOpen, shouldShowPanel } from './panelState.js'
 import { isAiSessionReusable } from './aiSessionReuse.js'
 import { checkHostCapabilities, refuseToStart, type SlotsProbe } from './capabilities.js'
@@ -75,7 +76,9 @@ import {
 import {
   classifyTaskWorkspacePath, isAutoTaskWorkspacePath, taskWorkspaceFolderName,
 } from './taskFolder.js'
-import { pickIntakeWorkspace } from './intakeWorkspace.js'
+import { pickIntakeWorkspace, readCreatedWorkspaceId } from './intakeWorkspace.js'
+import { acquireSession, openSessionInMainView, type SessionReference } from './sessionRef.js'
+import { decideSidebarWidth, decideTopInset, pickFrameCandidate } from './panelGeometry.js'
 import {
   decideQuickWorkspaceDefault, quickFollowFolderDefault, quickWorkspaceSourceLabel, shouldRememberQuickWorkspace,
   type QuickWorkspaceDefaultDecision, type QuickWorkspaceDefaultSource,
@@ -1220,6 +1223,24 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
     knowledge_doc: 'AI 总结本地文档',
   }
   /**
+   * 把主视图切到某个会话（**面板里唯一的入口**）。
+   *
+   * 为什么收成一个函数：这个语义原先在 4 处各写一遍 `safeService(...,'sessions')?.open(id)`
+   * —— 而 DSH 0.1.7-rc.2 把 `sessions.open` **整个移除了**（改由
+   * `uiWorkspace.openSession` 承担），于是 4 处一起报 `?.open is not a function`。
+   * 现在统一走 `openSessionInMainView()`（见 `sessionRef.ts`），这里只管界面两件事：
+   * 成功就收面板、失败就给出可读原因（绝不静默什么都不发生）。
+   */
+  const openSessionInPanel = (sessionId: string): void => {
+    try {
+      openSessionInMainView(runtime, sessionId)
+    } catch (error) {
+      setError(error instanceof Error ? error.message : String(error))
+      return
+    }
+    closePanel()
+  }
+  /**
    * 启动 AI 会话。
    *
    * `workspaceOverride`（v1.14.0）来自「快速录入 / 澄清」弹窗里用户**显式选择**的工作区：
@@ -1241,52 +1262,25 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
     const skillNames = promptInput.skills
     const planAnchor = mode === 'plan' ? (/^\d{4}-\d{2}-\d{2}$/.test(text) ? text : localDateString()) : ''
     setBusy(true); setError(null)
+    /**
+     * 新建路径要 acquire 会话引用（DSH 0.1.7-rc.2 的 `sessions.retain`），
+     * 引用由下面**唯一**的 finally 释放 —— 所以新建路径里不要再写裸 `return`
+     * （宿主按引用计数回收会话 scope，漏释放 = 那个会话与它的窗口永不回收）。
+     * 复用路径不 acquire，走早退守卫即可。
+     */
+    let sessionRef: SessionReference | undefined
     try {
       // 复用型会话：计划/报告/点子关联/点子头脑风暴，每个 scope+anchor 只有一个会话。
-      if (mode === 'plan' || mode === 'report' || mode === 'idea_association' || mode === 'idea_brainstorm') {
-        const [scopeCode, anchor] = mode === 'plan'
-          ? ['daily_plan', planAnchor]
-          : mode === 'idea_association' ? ['idea_association', text]
-          : mode === 'idea_brainstorm' ? ['idea_brainstorm', text]
-          : text.startsWith('week:') ? ['week_report', text.slice(5)] : ['day_report', text.slice(4)]
-        const existing = await api<{ session: { sessionId: string } | null }>(`/api/workbench/ai-sessions?scope_code=${scopeCode}&anchor=${anchor}`)
-        /**
-         * 登记行 ≠ "会话还在"：用户把那个对话归档以后，宿主只把 id 收进归档集、
-         * 连文件都不删，`sessions.open()` 照样"成功"——随后宿主清掉选中，用户看到
-         * 的是"点了没反应"，而这行登记永不更新、新会话永远不会被创建。
-         * 判据不成立时**落回下面的新建流程**（登记接口是 upsert，会覆盖陈旧那行）。
-         */
-        if (existing.session !== null && aiSessionUsable(runtime, existing.session.sessionId)) {
-          let shouldReuse = true
-          if (mode === 'plan') {
-            const hasPlan = planAnchor === localDateString()
-              ? todayPlan !== null
-              : pickedPlan !== null && pickedPlan.planDate === planAnchor
-            const hasPendingPlanDraft = pendingDraft !== null && pendingDraft.kindCode === 'daily_plan' && String(pendingDraft.payload.planDate ?? '') === planAnchor
-            shouldReuse = hasPlan || hasPendingPlanDraft
-          }
-          if (shouldReuse) {
-            // 先开会话再关面板（关面板会卸载本面板的 React 树，顺序反了就"点了没反应"）
-            safeService<WorkbenchRuntime['sessions']>(runtime, 'sessions')?.open(existing.session.sessionId)
-            closePanel()
-            return
-          }
-        }
-        if (mode === 'report') {
-          // 旧版本生成的报告可能还没有登记会话：直接复用报告里的 session_id。
-          const periodCode = text.startsWith('week:') ? 'week' : 'day'
-          const rep = await api<{ report: { sessionId?: string | null } | null }>(`/api/workbench/reports/${periodCode}/${anchor}`)
-          /**
-           * 报告行自己的 `sessionId` 是**第二条复用路径**：报告落库后再点同一天，登记那条路
-           * 已被判据拦住，这里若不判就会裸切一个已归档 / 已删除的会话（用户实测：点了没反应）。
-           * 判据不成立 → 落回下面的新建流程。
-           */
-          if (typeof rep.report?.sessionId === 'string' && rep.report.sessionId !== '' && aiSessionUsable(runtime, rep.report.sessionId)) {
-            safeService<WorkbenchRuntime['sessions']>(runtime, 'sessions')?.open(rep.report.sessionId)
-            closePanel()
-            return
-          }
-        }
+      /**
+       * 复用判定已抽成 `reuseAiSessionId`（见本组件下方那个函数）：
+       * 命中已有会话 → 立刻 return；返回 '' → 落到下面的新建流程。
+       * 复用路径**不 acquire 会话引用**（复用的是已存在的会话，不新建 scope）。
+       */
+      const reusableSessionId = await reuseAiSessionId(mode, text, planAnchor)
+      if (reusableSessionId !== '') {
+        // 先开会话再关面板（关面板会卸载本面板的 React 树，顺序反了就"点了没反应"）
+        openSessionInPanel(reusableSessionId)
+        return
       }
       const ws = safeService<WorkbenchRuntime['workspaces']>(runtime, 'workspaces')?.list?.getSnapshot?.() ?? { items: [] }
       /**
@@ -1399,7 +1393,20 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
         try {
           await api('/api/workbench/workspaces/ensure', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ path: normalizedTarget }) })
           const created = await safeService<WorkbenchRuntime['workspaces']>(runtime, 'workspaces')?.create?.({ path: normalizedTarget })
-          if (typeof created?.workspaceId === 'string' && created.workspaceId !== '') workspaceId = created.workspaceId
+          /**
+           * ⚠️ 读的是**嵌套**的 `value.workspace.workspaceId`（宿主返回 generated Remote 结果）。
+           * 旧写法读顶层 `created.workspaceId`（两版宿主都没有这个字段）→ 用户显式选的工作区
+           * 被静默忽略、落回"按 cwd 猜"。判据唯一实现见 `intakeWorkspace.ts#readCreatedWorkspaceId`。
+           */
+          const createdId = readCreatedWorkspaceId(created)
+          if (createdId !== undefined) workspaceId = createdId
+          else if (explicitWorkspace !== '') {
+            /**
+             * 用户**显式**选了工作区、宿主也返回了成功结果，却读不出 id —— 这时**必须报错**：
+             * 静默落回"猜一个"会让他以为目录选好了，文件却建到别处（v1.14.0 验收标准之一）。
+             */
+            throw new Error(`工作区「${normalizedTarget}」已创建但宿主没有返回可用的 id，无法把会话挂到该目录。请改用默认工作区，或把这条现象反馈给插件作者。`)
+          }
         } catch (workspaceError) {
           // 用户**显式**选的工作区建不出来时必须报错，不能静默回落其它工作区
           // ——否则用户以为自己选好了，会话却开在别的目录里（v1.14.0 验收标准之一）。
@@ -1425,10 +1432,17 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
       const id = await connectWorkspace(workspaceId)
       // 死上下文防护：`connectWorkspace` 里有 await，期间插件可能已被卸载/重载，
       // 此时读 sessions 会抛 "inactive context"（用户控制台实测的主要报错来源）。
-      if (!instanceAlive) return
       const sessions = safeService<WorkbenchRuntime['sessions']>(runtime, 'sessions')
-      const binding = sessions?.binding(id)
-      if (binding === undefined) throw new Error('会话绑定未就绪，请稍后重试')
+      /**
+       * ⚠️ 必须先 retain 再借绑定（DSH 0.1.7-rc.2 起）。
+       *
+       * rc2 把 `binding(id)` 的判据收成了"**只查已被 retain 的 scope**"，
+       * 而 `connectWorkspace()` 内部只是 `sessions.create()`：**谁都没 retain** →
+       * `binding(id)` 恒 undefined → 用户点「快速录入」看到"会话绑定未就绪"。
+       * 旧宿主没有 `retain`，`acquireSession` 会自动退到 `binding(id)`。
+       * 引用由函数尾唯一的 finally 释放（宿主按引用计数回收 scope）。
+       */
+      sessionRef = await acquireSession(sessions, id)
       /**
        * 澄清会话先把用户选的模型应用上去（**必须在 prompt 之前**）：
        * `select()` 走宿主持久投影，下一次请求就是它。
@@ -1468,7 +1482,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
       const imageParts: PromptContentPart[] = mode === 'clarify' && imageDrafts.length > 0
         ? await Promise.all(imageDrafts.map(quickImageToPromptPart))
         : []
-      await binding.session.rename(mode === 'idea_association' ? '点子关联' : mode === 'idea_brainstorm' ? '点子头脑风暴' : mode === 'knowledge_doc' ? `知识总结：${docContext?.name ?? '本地文档'}` : mode === 'report' ? `${text.startsWith('week:') ? '周报' : '日报'}：${text.split(':')[1] ?? ''}` : mode === 'plan' ? `AI 计划：${planAnchor.slice(5)}` : mode === 'clarify' ? `澄清：${clarifyText === '' ? '附件任务' : clarifyText.slice(0, 24)}` : mode === 'consult' ? `协助：${task?.title.slice(0, 24)}` : mode === 'breakdown' ? `拆解：${task?.title.slice(0, 24)}` : mode === 'review' ? `复盘：${task?.title.slice(0, 24)}` : `执行：${task?.title.slice(0, 24)}`).catch(() => undefined)
+      await sessionRef.session.rename(mode === 'idea_association' ? '点子关联' : mode === 'idea_brainstorm' ? '点子头脑风暴' : mode === 'knowledge_doc' ? `知识总结：${docContext?.name ?? '本地文档'}` : mode === 'report' ? `${text.startsWith('week:') ? '周报' : '日报'}：${text.split(':')[1] ?? ''}` : mode === 'plan' ? `AI 计划：${planAnchor.slice(5)}` : mode === 'clarify' ? `澄清：${clarifyText === '' ? '附件任务' : clarifyText.slice(0, 24)}` : mode === 'consult' ? `协助：${task?.title.slice(0, 24)}` : mode === 'breakdown' ? `拆解：${task?.title.slice(0, 24)}` : mode === 'review' ? `复盘：${task?.title.slice(0, 24)}` : `执行：${task?.title.slice(0, 24)}`).catch(() => undefined)
       let reportContextText = ''
       if (mode === 'report') {
         const [periodCode, periodStart] = text.split(':')
@@ -1562,7 +1576,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
        * 图片**前置**在文本之前（与宿主 `PromptContentPart` 的惯例一致），
        * 走的是宿主原生多模态管线；未声明 image 的模型已在上面拦下并给出可读原因。
        */
-      const result = await binding.session.prompt([...imageParts, { type: 'text', text: finalPrompt }], 'queue')
+      const result = await sessionRef.session.prompt([...imageParts, { type: 'text', text: finalPrompt }], 'queue')
       if (result.ok === false) throw new Error(result.error !== undefined ? String(result.error) : '发送失败')
       if (mode === 'clarify') clearQuickAttachments()
       if (mode === 'plan') {
@@ -1581,11 +1595,65 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
       // 这里已经 await 过多次：期间插件可能被卸载/重载，先确认还活着再动宿主服务。
       if (!instanceAlive) return
       // 先开会话再关面板：关面板会卸载本面板的 React 树，顺序反了就成了"点了没反应"。
-      safeService<WorkbenchRuntime['sessions']>(runtime, 'sessions')?.open(id)
-      closePanel()
+      openSessionInPanel(id)
     } catch (e) {
       if (instanceAlive) setError(e instanceof Error ? e.message : String(e))
-    } finally { if (instanceAlive) setBusy(false) }
+    } finally {
+      if (instanceAlive) setBusy(false)
+      /** 与 `acquireSession` 里的 retain **成对释放**；复用路径没 acquire 过，故用 `?.`。 */
+      sessionRef?.release()
+    }
+  }
+
+  /**
+   * 复用型会话：计划/报告/点子关联/点子头脑风暴 —— 每个 scope+anchor 只有一个会话。
+   *
+   * 命中返回可复用的 sessionId，**没命中返回 ''**（"该走新建流程"，而不是抛错）。
+   *
+   * ## 两条判据都在这里（原先是内联在 `startAISession` 里的一大段）
+   *
+   * 1. **登记行**（`ai_sessions` 表）：登记行 ≠ "会话还在" —— 用户把那个对话归档以后，
+   *    宿主只把 id 收进归档集、连文件都不删，`sessions.open()` 照样"成功"，
+   *    随后宿主清掉选中，用户看到的是"点了没反应"。所以登记行必须过
+   *    `aiSessionUsable`；判据不成立时**落回新建流程**（登记接口是 upsert，会覆盖陈旧那行）。
+   *    计划还额外要求"确有当日计划或待确认草稿"，否则同样当没命中。
+   * 2. **报告行自己的 sessionId**：报告落库后再点同一天，登记那条路已被判据拦住，
+   *    这里若不判就会裸切一个已归档 / 已删除的会话（用户实测：点了没反应）。
+   *
+   * 抽出来只有一个目的：让 `startAISession` 里的复用分支瘦成"命中就早退"，
+   * 于是新建路径（要 acquire 会话引用那条）**不必被包进任何 if 块**，
+   * 也就不会产生整段重排的噪声 diff。参数显式传入，不靠闭包猜作用域。
+   */
+  const reuseAiSessionId = async (
+    mode: 'clarify' | 'consult' | 'breakdown' | 'execute' | 'review' | 'plan' | 'report' | 'idea_association' | 'idea_brainstorm' | 'knowledge_doc',
+    text: string,
+    planAnchor: string,
+  ): Promise<string> => {
+    if (mode !== 'plan' && mode !== 'report' && mode !== 'idea_association' && mode !== 'idea_brainstorm') return ''
+    const [scopeCode, anchor] = mode === 'plan'
+      ? ['daily_plan', planAnchor]
+      : mode === 'idea_association' ? ['idea_association', text]
+        : mode === 'idea_brainstorm' ? ['idea_brainstorm', text]
+          : text.startsWith('week:') ? ['week_report', text.slice(5)] : ['day_report', text.slice(4)]
+    const existing = await api<{ session: { sessionId: string } | null }>(`/api/workbench/ai-sessions?scope_code=${scopeCode}&anchor=${anchor}`)
+    if (existing.session !== null && aiSessionUsable(runtime, existing.session.sessionId)) {
+      let shouldReuse = true
+      if (mode === 'plan') {
+        const hasPlan = planAnchor === localDateString()
+          ? todayPlan !== null
+          : pickedPlan !== null && pickedPlan.planDate === planAnchor
+        const hasPendingPlanDraft = pendingDraft !== null && pendingDraft.kindCode === 'daily_plan' && String(pendingDraft.payload.planDate ?? '') === planAnchor
+        shouldReuse = hasPlan || hasPendingPlanDraft
+      }
+      if (shouldReuse) return existing.session.sessionId
+    }
+    if (mode === 'report') {
+      // 旧版本生成的报告可能还没有登记会话：直接复用报告里的 session_id。
+      const periodCode = text.startsWith('week:') ? 'week' : 'day'
+      const rep = await api<{ report: { sessionId?: string | null } | null }>(`/api/workbench/reports/${periodCode}/${anchor}`)
+      if (typeof rep.report?.sessionId === 'string' && rep.report.sessionId !== '' && aiSessionUsable(runtime, rep.report.sessionId)) return rep.report.sessionId
+    }
+    return ''
   }
 
   const summarizeLocalDoc = async (pathOverride?: string): Promise<void> => {
@@ -3469,8 +3537,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                                 ? <button className="wb-btn" disabled={busy} onClick={() => {
                                     const existing = selected.sessions.find((x) => x.role_code === 'review')
                                     if (existing !== undefined && typeof existing.session_id === 'string' && existing.session_id !== '' && aiSessionUsable(runtime, existing.session_id)) {
-                                      safeService<WorkbenchRuntime['sessions']>(runtime, 'sessions')?.open(existing.session_id)
-                                      closePanel()
+                                      openSessionInPanel(existing.session_id)
                                     } else {
                                       void startAISession('review', selected.task, selected.task.title)
                                     }
@@ -3549,8 +3616,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                                       if (sid === '') return
                                       /** 会话页签的行来自历史关联：那条会话可能已被归档或删除，裸切只会静默失败。 */
                                       if (!aiSessionUsable(runtime, sid)) { setNotice('这条会话已被归档或已删除，无法打开'); return }
-                                      safeService<WorkbenchRuntime['sessions']>(runtime, 'sessions')?.open(sid)
-                                      closePanel()
+                                      openSessionInPanel(sid)
                                     }} title={roleLabel(role)}>
                                       <span className="wb-session-role">{roleLabel(role)}</span>
                                       <span className="wb-session-name">{name}</span>
@@ -5080,25 +5146,126 @@ export function apply(ctx: unknown): () => void {
    * 量出侧栏宽度写进 CSS 变量：面板从侧栏右侧开始铺，
    * **绝不遮住 DSH 左侧导航**（用户实测反馈：改造后面板盖住了整个左侧栏）。
    *
-   * 取值保守化（v1.14.21）：只接受 "明显是侧栏" 的宽度（>0 且 < 视口 40%）。
-   * 这个值直接决定面板左边界 —— 一旦量错（例如匹配到与视口同宽的元素），
-   * 面板宽度会变成 0，看起来就是"面板打不开"。宁可不更新，也不写入可疑值。
+   * ## v1.15.5 改了取值口径（DSH 0.1.7-rc.2「收起侧栏后铺不满」的真实原因）
    *
-   * v1.14.47：加**幂等保护**。本函数由 ResizeObserver 回调调用，而它自己会改
-   * `<html>` 上的内联样式 —— 无脑写 CSS 变量可能让布局再变一次、再次触发回调。
-   * 用户现象是"点「收起侧边栏」后 Edge 卡死"（侧栏宽度变化正是那条路径）。
-   * 现在同值不写，"测量 → 写值 → 再测量"这条链最多跑两圈就收敛。
+   * 旧口径（v1.14.21）："只接受 `>0 且 < 视口 40%` 的宽度，其余一律不更新"。
+   * 在 rc2 上，收起侧栏后**栏目宽度就是 0** —— 旧口径把这当成"量取失败"，
+   * 于是 `--wb-sidebar-w` 永远停在收起前的旧值（280px），面板左边一直空出一条。
+   *
+   * 现在的判据在纯函数 `decideSidebarWidth()` 里（`panelGeometry.ts`，有单测）：
+   * 找不到元素 → 不更新；宿主公布了宽度 → 采信它；几何 ≤0 → **采信 0**；
+   * 超过视口 40% → 判定为量错元素、不更新。
+   *
+   * v1.14.47 的**幂等保护**保留：本函数由观察器回调调用，而它自己会改 `<html>`
+   * 上的内联样式 —— 无脑写 CSS 变量可能让布局再变一次、再次触发回调
+   * （用户现象："点「收起侧边栏」后 Edge 卡死"）。同值不写，"测量 → 写值 → 再测量"
+   * 这条链最多跑两圈就收敛。
    */
+  /**
+   * 找"真正的宿主 frame"。
+   *
+   * 布局类名带构建期 hash，只能按子串 `[class*="frame"]` 找，而**别的元素也可能带这个
+   * 子串**（同一份 CSS module 的其它类、或第三方壳）。所以按 `pickFrameCandidate`
+   * 的判据挑：谁真的让出了顶部空间（`padding-top` 最大）谁就是 frame；
+   * 全为 0 时取第一个（网页版本来就该是 0，取谁都一样）。
+   */
+  const findFrameInset = (): { element: HTMLElement | null; paddingTop: number } => {
+    const candidates = Array.from(document.querySelectorAll<HTMLElement>('[class*="frame"]'))
+    if (candidates.length === 0) return { element: null, paddingTop: 0 }
+    const paddings = candidates.map((element) => Number.parseFloat(window.getComputedStyle(element).paddingTop))
+    const index = pickFrameCandidate(paddings)
+    if (index < 0) return { element: null, paddingTop: 0 }
+    return { element: candidates[index], paddingTop: paddings[index] }
+  }
+
   const syncSidebarWidth = (): void => {
+    /**
+     * 选择器口径：DSH 自己的布局类名带了构建期 hash（`ZTP-Xa_sidebarCol`），
+     * 所以只认 `[class*="sidebarCol"]` 这个**子串**。`[data-pane="sidebar"]`
+     * 优先（第三方壳也可能加），但它可能命中别的列，故不单独使用。
+     */
     const column = document.querySelector<HTMLElement>('[data-pane="sidebar"], [class*="sidebarCol"]')
     if (column === null) return
-    const width = Math.round(column.getBoundingClientRect().width)
-    if (width <= 0 || width > window.innerWidth * 0.4) return
-    const next = `${width}px`
+    const frame = findFrameInset().element
+    /**
+     * 宿主自己公布的侧栏宽度（rc2 在 `[data-windows-titlebar]` 时写在 frame 的内联样式上）。
+     * 它是"栏目宽度"的权威值：收起时就是 0，所以量宽失败时靠它判"收起"。
+     */
+    const declaredRaw = frame?.style.getPropertyValue(HOST_SIDEBAR_WIDTH_VAR).trim() ?? ''
+    const declared = declaredRaw === '' ? null : Number.parseFloat(declaredRaw)
+    const decision = decideSidebarWidth({
+      exists: true,
+      width: column.getBoundingClientRect().width,
+      declaredWidth: declared !== null && Number.isFinite(declared) ? declared : null,
+      viewportWidth: window.innerWidth,
+    })
+    if (decision.width === null) return
+    const next = `${decision.width}px`
     if (document.documentElement.style.getPropertyValue('--wb-sidebar-w').trim() === next) return
     document.documentElement.style.setProperty('--wb-sidebar-w', next)
   }
   const sidebarResizeObserver = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(() => syncSidebarWidth())
+  /**
+   * 收起/展开是**属性**变化（frame 上的 `data-sidebar-collapsed`），不是我们观察的那个
+   * 栏目元素被替换；两者时序也不保证（先变属性、再走 300ms 过渡）。所以再挂一个属性观察器：
+   * 属性一变就立刻按"宿主公布值"同步一次，不等几何（同值不写，不会自激）。
+   */
+  const sidebarCollapseObserver = typeof MutationObserver === 'undefined'
+    ? undefined
+    : new MutationObserver(() => syncSidebarWidth())
+
+  /**
+   * 桌面壳标题栏高度 → `--wb-top-inset`（面板上边界）。
+   *
+   * ## 为什么要这个变量（2026-09-26 用户反馈："顶部占用了桌面端的 Title，无法正常点击"）
+   *
+   * DSH 0.1.7-rc.2 桌面壳在 `<html>` 上加 `data-windows-titlebar`，并给 frame
+   * 加 `padding-top: var(--dsh-windows-titlebar-height)` + 一条 `-webkit-app-region: drag`
+   * 的标题栏（窗口按钮也在那条带子里）。工作台面板挂在 `shell.overlay` 下、自己
+   * `position:fixed; top:0`，**不跟着 frame 的 padding 走** → 面板内容正好盖在标题栏上。
+   *
+   * 判据在纯函数 `decideTopInset()` 里：没有该属性 → 0（网页版 / macOS / 老宿主零影响）；
+   * 有属性 → 取 frame 的计算 `padding-top`（最贴事实），再退到宿主的变量值，最后兜底 32px。
+   */
+  const readTitlebarInset = (): number => {
+    const html = document.documentElement
+    const attributePresent = html.hasAttribute(HOST_WINDOWS_TITLEBAR_ATTR)
+    const { element: frame, paddingTop } = findFrameInset()
+    const declaredRaw = attributePresent && frame !== null
+      ? window.getComputedStyle(frame).getPropertyValue(HOST_TITLEBAR_HEIGHT_VAR).trim()
+      : ''
+    const declared = declaredRaw === '' ? Number.NaN : Number.parseFloat(declaredRaw)
+    return decideTopInset({
+      attributePresent,
+      framePaddingTop: frame === null ? Number.NaN : paddingTop,
+      declaredHeight: Number.isFinite(declared) ? declared : null,
+    }).inset
+  }
+  const syncTopInset = (): void => {
+    const next = `${readTitlebarInset()}px`
+    if (document.documentElement.style.getPropertyValue('--wb-top-inset').trim() === next) return
+    document.documentElement.style.setProperty('--wb-top-inset', next)
+  }
+  /**
+   * 标题栏高度是"随窗口/壳状态而变"的运行时量取值，而 frame 可能比插件后渲染。
+   * 所以按"重试到量到为止"的口径：先试几次，量到 >0 就停；量不到就短轮询十几秒
+   * （窗口最大化/还原、壳模式切换都会让几何变化，浏览器事件与定时器一起兜住）。
+   */
+  const titlebarAttributeObserver = typeof MutationObserver === 'undefined'
+    ? undefined
+    : new MutationObserver(() => syncTopInset())
+  titlebarAttributeObserver?.observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: [HOST_WINDOWS_TITLEBAR_ATTR],
+  })
+  syncTopInset()
+  let titlebarRetries = 0
+  const titlebarTimer = setInterval(() => {
+    titlebarRetries += 1
+    if (readTitlebarInset() > 0 || titlebarRetries > 15) { clearInterval(titlebarTimer); return }
+    syncTopInset()
+  }, 1000)
+  window.addEventListener('resize', syncTopInset)
   /**
    * 找到侧栏并量宽；找不到返回 false，由下面的轮询继续重试。
    *
@@ -5122,6 +5289,14 @@ export function apply(ctx: unknown): () => void {
     sidebarResizeObserver?.disconnect()
     sidebarResizeObserver?.observe(column)
     syncSidebarWidth()
+    /**
+     * 顺带盯 frame 的收起标记：`data-sidebar-collapsed` 一变就再同步一次。
+     * frame 找到才算观察成功（找不到就交给下面的重试轮询）。
+     */
+    const frame = document.querySelector<HTMLElement>('[class*="frame"]')
+    if (frame === null) return false
+    sidebarCollapseObserver?.disconnect()
+    sidebarCollapseObserver?.observe(frame, { attributes: true, attributeFilter: [HOST_SIDEBAR_COLLAPSED_ATTR] })
     return true
   }
   let sidebarObserver: MutationObserver | undefined
@@ -5139,7 +5314,11 @@ export function apply(ctx: unknown): () => void {
     disposed = true
     instanceAlive = false
     sidebarResizeObserver?.disconnect()
+    sidebarCollapseObserver?.disconnect()
     sidebarObserver?.disconnect()
+    titlebarAttributeObserver?.disconnect()
+    clearInterval(titlebarTimer)
+    window.removeEventListener('resize', syncTopInset)
     for (const dispose of officialDisposers.splice(0)) {
       try { dispose() } catch { /* 卸载阶段不再纠缠 */ }
     }

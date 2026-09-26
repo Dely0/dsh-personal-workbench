@@ -23,7 +23,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { VIEW_ATTR } from '../lib/client/constants.js'
 import {
   OFFICIAL_MAIN_SLOT, OFFICIAL_OVERLAY_SLOT, OFFICIAL_PANEL_LIST_SLOT,
@@ -126,4 +126,57 @@ test('侧栏宽度必须"重试到量到为止"（apply 时宿主还没渲染侧
     '必须处理"apply 时侧栏还不存在"：首次找不到时要挂观察器重试')
   assert.ok(/sidebarObserver\?\.disconnect\(\)/.test(index),
     '清理函数必须断开侧栏观察器（否则残留实例会继续写 --wb-sidebar-w）')
+})
+
+/**
+ * 回归：**面板上边界要给桌面壳的标题栏让位**（DSH 0.1.7-rc.2，2026-09-26）。
+ *
+ * 用户原话："顶部占用了桌面端的 Title，无法正常点击"。rc2 桌面壳给 frame 加了
+ * `padding-top: var(--dsh-windows-titlebar-height)` + 一条 `-webkit-app-region: drag`
+ * 的标题栏（窗口按钮在带子里），而面板挂在 `shell.overlay` 下、自己 `position:fixed`，
+ * **不跟着那个 padding 走** → 直接压在标题栏上。
+ *
+ * 判据在纯函数 `decideTopInset()` 里（`test/panelGeometry.test.mjs` 逐档断言）；
+ * 这里只盯"生成物真的用了那个变量" —— v1.14.53 那次事故的教训就是
+ * **实现被顺手改掉而没有任何测试盯生成物**。
+ */
+test('面板上边界必须由 --wb-top-inset 驱动（否则会压住桌面端标题栏）', () => {
+  const styles = readFileSync(new URL('../src/client/styles.ts', import.meta.url), 'utf8')
+  assert.ok(styles.includes('top: var(--wb-top-inset, 0px)'),
+    '.wb-panel-host 的 top 必须是 var(--wb-top-inset, 0px)：0px 兜底在网页版上是正确行为，'
+    + '而桌面壳会由 syncTopInset 写进真实标题栏高度')
+  const index = readFileSync(new URL('../src/client/index.tsx', import.meta.url), 'utf8')
+  assert.ok(index.includes("setProperty('--wb-top-inset'"), '必须有人写这个变量（syncTopInset）')
+  assert.ok(index.includes('WINDOWS_TITLEBAR_ATTR'), '必须按 data-windows-titlebar 判定，不能无条件让位')
+  assert.ok(index.includes("window.removeEventListener('resize', syncTopInset)"),
+    '清理函数必须摘掉 resize 监听（否则残留实例继续写变量）')
+})
+
+/**
+ * 策略：**借会话绑定只有一处**（v1.15.5）。
+ *
+ * DSH 0.1.7-rc.2 起 `sessions.binding(id)` 只对"已被 retain 的会话"返回绑定，
+ * 所以"拿会话"必须是 `acquireSession()`（内部按宿主能力在 retain / binding 之间选，
+ * 并保证 release 配对）。业务代码里**再写一次** `sessions.binding(...)` 或
+ * `sessions.retain(...)` 就等于绕过引用计数 —— 这正是"同一个语义被独立计算多次"
+ * 那类 bug 的入口（见项目规范第 0 节）。
+ *
+ * 用**源码扫描**证明"不存在第二处实现"：这是唯一能证明"没有第二处"的办法。
+ */
+test('借会话绑定只允许出现在 sessionRef.ts（业务代码不许直接 binding/retain）', () => {
+  const dir = new URL('../src/client/', import.meta.url)
+  const files = readdirSync(dir).filter((name) => /\.tsx?$/.test(name) && name !== 'sessionRef.ts')
+  assert.ok(files.length > 5, `扫描面太小（${files.length} 个文件），策略形同虚设`)
+  const offenders = []
+  for (const name of files) {
+    const source = readFileSync(new URL(name, dir), 'utf8')
+    for (const [index, line] of source.split('\n').entries()) {
+      // 只认**代码**里的调用，不认注释里解释这套机制的 `binding(id)`（注释里常写）
+      if (!/(sessions?|runtime)\??\.(binding|retain|open)\s*\(/.test(line)) continue
+      if (/^\s*(\*|\/\/|\/\*)/.test(line)) continue
+      offenders.push(`${name}:${index + 1}  ${line.trim().slice(0, 90)}`)
+    }
+  }
+  assert.deepEqual(offenders, [],
+    '这些地方绕过了 sessionRef.ts 的唯一实现（acquireSession / openSessionInMainView）：\n  - ' + offenders.join('\n  - '))
 })
