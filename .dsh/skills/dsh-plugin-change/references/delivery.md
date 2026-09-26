@@ -104,13 +104,13 @@ node scripts/dev-install.mjs --apply   # 构建 + 打包（构建戳路径）+ �
 | Windows | `~/.dsh/profiles/web`；宿主常见端口 3080 |
 | WSL（Ubuntu） | **可能同时存在两套 dsh**：`~/.local/lib/node_modules/@deepseek-ai/dsh`（旧）与 `/usr/local/lib/node_modules/…`（npm 全局）。PATH 里 `~/.local/bin` 在前 → `dsh --version` 报的是**旧那套**。用 `which -a dsh` + 逐个读 `package.json` 的 version 确认 |
 | WSL 服务 | `systemctl status dsh-web.service`；`journalctl -u dsh-web.service`；**token 每次启动都换**：`journalctl -u dsh-web.service --no-pager -n 200 \| grep -o 'http://127.0.0.1:[0-9]*/?token=[A-Za-z0-9_-]*' \| tail -1` |
-| 代理 | git **不读** Windows 系统代理：直连 github 会 `Connection was reset`。需要时临时给 git 加 `HTTPS_PROXY=http://127.0.0.1:5782`（FaceTheWorld SSR），**不要改全局 git 配置** |
+| 代理 | git **不读** Windows 系统代理：直连 github 会 `Connection was reset`。需要时**临时给那一条命令**加 `HTTPS_PROXY=http://127.0.0.1:<本地代理端口>`（本机的 SSR/代理客户端监听端口），**不要改全局 git 配置**，也不要把它写进仓库（本机专有物） |
 | 两边的库 | **WSL 与 Windows 是两个库**（各自 `~/.dsh/workbench/workbench.db`）。跑验收前先确认打的是哪个 |
 
 ## 7. 发布
 
 - **版本号只在发布时改**（2026-09-15 起）。本地迭代靠构建戳路径区分，不再吃 patch 号 ——
-  历史上"每次本地装盘 +1"把 patch 吃到了 14.59。下一个发布版本：**1.15.0**。
+  历史上"每次本地装盘 +1"把 patch 吃到了 14.59。**下一个发布版本号在发布那一刻才决定**（别在文档里写死，它会过期）。
 - `pnpm typecheck` + `pnpm test` 全绿，且**用例数不少于上一版**（少了说明有用例被删/跳过）。
 - **先本机验证，再发布**：v1.13.0 因"发布早于验证"翻过车（npm 已是最新、本机没验，
   用户升级后前端直接 `Failed to load plugins`）。

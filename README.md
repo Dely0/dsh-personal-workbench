@@ -240,8 +240,23 @@ dsh plugin --profile web add link:/path/to/dsh-personal-workbench
 | **`layout.selectPanel`**（面板选中状态由宿主单值状态管理） | **0.1.5-rc.1+** | 同上 |
 | 会话标题栏入口（官方槽位 `conversation.session.header.actions`） | 0.1.5-rc.1+ | 无该按钮；侧栏面板行仍可用 |
 | 官方 `uiWorkspace.connectWorkspace`（AI 会话切工作区） | 0.1.5-rc.1+ | 回落 `workspaces.openPath` |
+| **新建 AI 会话后取会话绑定**（`sessions.retain()`） | 0.1.7-rc.2+ | 旧宿主自动回落 `sessions.binding()`（0.1.5-rc.1 起可用） |
 | 微信提醒 | 可选插件 `@xmanrui/dsh-im` | 静默降级为页内提醒 + 桌面通知 |
 | 技能选择器 | 宿主 `skills` 注册表 | 选择器自动隐藏 |
+
+> **会话绑定为什么有两档**（0.1.7-rc.2 改过语义，两类宿主都是正常的）：
+> `binding(id)` 在 `≤0.1.5` 是"在列表里/是当前会话就给你"，在 `0.1.7-rc.2` 变成
+> **"只给已被 retain 的 scope"** —— 而插件自己 `create()` 出来的会话谁都没 retain，
+> 于是取不到绑定、报「会话绑定未就绪」。现在统一走
+> `src/client/sessionRef.ts#acquireSession()`：宿主有 `retain` 就 retain（用完 release，
+> 与引用计数配对），没有就回落 `binding()`。这条语义**只有一处实现**
+> （`test/panelCss.test.mjs` 有源码扫描断言，业务代码里再写一次 `sessions.binding(...)` 会红）。
+
+> **桌面端（Windows 免边框窗口）的标题栏**：0.1.7-rc.2 桌面壳会在 `<html>` 上加
+> `data-windows-titlebar`，并给内容区让出一条标题栏（窗口按钮就在里面）。面板挂在
+> `shell.overlay` 下、自己 `position:fixed`，所以由 `--wb-top-inset` 主动让位
+> （判据 `src/client/panelGeometry.ts#decideTopInset`，纯函数 + 单测）；普通网页版 /
+> macOS / 老宿主没有这个属性 → 让位值为 0，行为与改动前一致。
 
 > 历史说明（仅供对照，**已不适用**）：v1.14.0–v1.14.52 曾支持 DSH `0.1.1-rc.1`，
 > 走的是"往侧栏 DOM 注入入口行 + 自建覆盖层"的降级腿。那条腿连同社区
@@ -333,6 +348,7 @@ v1.13.3 的再次根治；v1.13.1 的标题栏入口则是因为直接读 `ctx.s
 
 | 版本 | 要点 |
 |---|---|
+| **1.15.5** | **适配 DSH 0.1.7-rc.2（桌面端）**，五个真问题：**①「快速录入 / 创建澄清会话」报「会话绑定未就绪，请稍后重试」** —— rc2 把 `sessions.binding(id)` 的语义收成"只给**已被 retain** 的 scope"，而 `uiWorkspace.connectWorkspace()` 内部只是 `create()`、**谁都没 retain**，于是绑定恒 undefined。改为统一走 `src/client/sessionRef.ts#acquireSession()`：有 `retain` 就 `retain(id,{source})`（用完 release，与宿主引用计数配对），旧宿主自动回落 `binding()`。**② 澄清能发出去、界面却报 `?.open is not a function`** —— rc2 把 `sessions.open(id)` **整个移除**（改由 `uiWorkspace.openSession(target)` 承担：内部 `retain(id,{source:'mainView'})` + 选中，并释放上一条 mainView 引用）。这个语义原先在 `index.tsx` 里抄了 **4 遍**、`DraftBanner.tsx` 里还有 1 遍 → 升级后 **5 个入口同时报错**；现在收敛成 `openSessionInMainView()` 一处，并用**源码扫描测试**钉住"业务代码不许再直接 `sessions.binding/retain/open`"（`test/panelCss.test.mjs`）。**③ 面板顶部压住桌面端标题栏、窗口按钮点不动** —— rc2 桌面壳给内容区加了 `padding-top: var(--dsh-windows-titlebar-height)`，而面板挂在 `shell.overlay` 下自己 `position:fixed`，不跟那个 padding 走；现在由 `--wb-top-inset` 主动让位（判据 `panelGeometry.ts#decideTopInset`，纯函数 + 单测）。**④ 收起侧栏后工作台铺不满（左边界停在 280px）** —— 旧口径把"量到 0"当成"量取失败、不更新"，而 rc2 收起侧栏时栏目宽度**就是 0**；现在判据是 `decideSidebarWidth()`：宿主公布值优先、几何 ≤0 **采信 0**、超过视口 40% 才判为量错元素而不更新，并同时盯侧栏列尺寸与 frame 的 `data-sidebar-collapsed`。**⑤ 顺带修掉一处既存静默丢件**（两版都存在，核对宿主契约时发现）：`workspaces.create()` 返回 `{ok, value:{workspace}}`，工作区 id 嵌在 `value.workspace.workspaceId`，而旧代码读顶层 `created.workspaceId`（该字段从不存在）→ **用户显式选的 AI 会话工作区被静默忽略**、落回"按当前 cwd 猜"；现在由纯函数 `readCreatedWorkspaceId()` 读取（读不出来时**显式报错**，不再假装成功）。另核对到两处已失效的宿主面：`connection.generation.getSnapshot()`（rc2 的 connection 只剩 `start({source,sinks})`，工作台那段会安全退化到按路径猜 WSL）与 `workspaces.openPath`（0.1.5 与 rc2 **都没有**，兜底腿实为死路，暂留守卫）。用例 534 → 568。 |
 | **1.15.4** | **文档版**（与 v1.15.3 功能完全相同，**无代码改动**）：补上 v1.15.3 贡献者的致谢（中英双段）与 [`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md) 条目。⚠️ **这个版本是一个判断失误，不要当先例** —— 事后确定的规矩是「**只改文档/配置/测试等非编译内容时不单独发版**，跟随下一个有代码改动的版本一起发布」；当时误以为"npm 页面渲染包内 README、又不能覆盖已发布版本，所以只能补发版本号"，事实成立但**结论错了**（正确做法是发版前把文档核对干净）。规矩已写进 [`docs/release-checklist.md`](./docs/release-checklist.md) 第 5 节。 |
 | **1.15.3** | **合入社区反馈的三个缺陷修复**（来自 [@SnowNight777](https://github.com/SnowNight777) 的 #4 / #5 / #7 与 PR #6 / #8，提交作者署名保留）。**任务提醒**：原先只有"草稿确认时的父任务"与"手动接口"两条路径建提醒记录，于是**草稿拆出的子任务 / `POST` 建任务 / `PATCH` 改截止时间**建出来的任务**永远不会提醒** —— 现在三处统一按「显式 offset → 类型默认 → 优先级默认」补建，`PATCH` 只在没有生效中提醒时补，避免重复（提醒按 `offset_minutes` 存、按 `dueAt − offset` 现算，不是存绝对时间，所以不会留下过期时间戳）。**投递目标缓存**：`status().configured` 读的是只在 `resolveTarget()` 里填充的内存缓存，而 `GET /reminders/channel` 只调 `listOptions()` ⇒ 重启后设置页把已绑定目标误报「未配置」，且 `isTargetConfigured` 为假让**包括启动补发在内的所有任务提醒被静默跳过** —— 现在改为「缓存命中 → 数据库有显式绑定」两级（**末行不要用 `available()` 兜底**：那会让没绑过目标的用户从"安静地不做事"变成"安静地反复投递失败"，由 `test/reminderWiring.test.mjs` 钉住）。**复用型会话**（计划 / 日报周报 / 点子关联 / 点子头脑风暴）：登记或引用的会话被**归档或删除**后，点下去没有任何反应、且那行陈旧引用**永不更新**（该链路从此开不出会话）—— 根因是客户端拿着旧 `session_id` 直接切、不验可用性；新增纯判据 `aiSessionReuse.ts#isAiSessionReusable()`（归档集命中 / 列表 ready 却查不到 → 不可复用；列表 `pending` 或旧宿主缺快照 → **不下结论**，零回归），覆盖**五处**裸切（含**报告行自己的 `sessionId` 回退**这条独立路径），不成立时落回新建或给明确提示。用例 521 → 534。 |
 | **1.15.2** | 本版对应父任务**「工作台插件 v1.15.2 版本优化」及其 5 个子任务 + 1 条同期独立任务**（完整对照见 [`docs/releases/v1.15.2.md`](docs/releases/v1.15.2.md) §0）。**① 快速录入的模型选择框被遮挡**（P1）：根因不是 z-index 而是**裁剪** —— 浮层挂在弹窗滚动容器（`overflow:auto`）里、只会朝上开，真浏览器实测常见窗口**可见比例仅 48%**、`1000×400` 时菜单顶边 -94px 画到视口外；改为 portal 到 body + `fixed` + 纯函数 `placePopover()` 摆放（翻转/收敛/保证在视口内）+ 滚动·缩放·异步长高重算 + `Esc` 只关浮层 + `↑↓` 键盘。**② 快速录入的默认工作区被上一次执行的任务污染**（P1）：根因不是"执行时写坏了存储"，而是 `openQuickEntry()` 从**当前选中任务**派生默认值，而点「AI 执行」前 `selected` 必然就是那个任务、且面板收起**不卸载 React 树**；改为纯函数 `decideQuickWorkspaceDefault`（上次手动选择 → 系统默认 → 空，**输入里没有任何任务/选中项**）+ 只有用户动过输入框才写最近列表 + 「不再记住这个目录」出口。**③ 今日容量的算法被摆到台面上**（P2，本版最大一项）：原先「已排 0 min」是个黑盒（内联在 4987 行组件里、无测试、逾期完全不参与），现在抽出**纯函数唯一权威源** `capacity.ts`，界面给出**七条口径 + 逐条账本**（表尾合计 = 已排）、**逾期单独成区并可一键计入**（默认不计入）、**每条任务可自定义耗时**（改完不刷新即见效）、没填耗时按**可配置的默认耗时**计入并逐条标注、全天任务不改变容量计算。**④ 知识库分类改 Tab**（P2）：下拉 → Tab + 关键词搜索（标题/正文/标签）+ 标签筛选 + 排序 + 分页 + 自适应时间分组；一并修「选择文件只能选 C 盘」；知识库类型颜色来自**迁移 16** 回填（根因是种子 `config` 为空、圆点取不到色）。**任务列表**按"与知识库一致"这一半做了**类型改 Tab**（Ctrl/Cmd 多选），搜索框/虚拟滚动/置顶/最近使用**经澄清后取消**（见该说明 §4 末尾）。点子页改 2 列卡片瀑布。**⑤ 知识库被会话 AI 自动调用**（P1）：四个时机自动检索、命中条目**在会话里可见**、可全局/单会话关闭、有召回日志与"是否被引用"回报；打分口径被两轮实测逼出来，含**两档闸门**让未达阈门的条目也留一行提示。**另**：知识草稿覆盖不再静默（回执与界面列出被替换的标题，同期独立任务）、dev-install 不再删掉刚打好的包、私有信息清理。`SCHEMA_VERSION` **15 → 18**（迁移 16/17/18）。用例 240 → 521。 |
