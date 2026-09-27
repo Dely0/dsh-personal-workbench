@@ -78,6 +78,7 @@ import {
 } from './taskFolder.js'
 import { pickIntakeWorkspace, readCreatedWorkspaceId } from './intakeWorkspace.js'
 import { acquireSession, openSessionInMainView, type SessionReference } from './sessionRef.js'
+import { readCurrentSessionId } from './currentSession.js'
 import { decideSidebarWidth, decideTopInset, pickFrameCandidate } from './panelGeometry.js'
 import {
   decideQuickWorkspaceDefault, quickFollowFolderDefault, quickWorkspaceSourceLabel, shouldRememberQuickWorkspace,
@@ -339,7 +340,13 @@ function QuickModelPicker({ runtime, value, onChange, modalityTable, disabled, o
   /** 用方向键打开时，等选项挂上 DOM 之后要把焦点交给第一项 / 最后一项。 */
   const pendingFocusRef = useRef<'first' | 'last' | null>(null)
   const sessionsState = safeService<WorkbenchRuntime['sessions']>(runtime, 'sessions')?.list?.getSnapshot?.()
-  const directorySessionId = sessionsState?.current ?? sessionsState?.ids?.[0] ?? ''
+  /**
+   * 「当前会话」按唯一入口读（`currentSession.ts`）—— 0.1.7-rc.2 起列表快照里没有 `current`。
+   * 读不到时才退到 `ids[0]`：那只是"模型目录得有个会话可问"的兜底，
+   * 绝不能拿它去推断工作区（那是猜，会把文件建进别人的项目目录）。
+   */
+  const currentSessionId = currentSessionIdOf(runtime)
+  const directorySessionId = currentSessionId !== '' ? currentSessionId : (sessionsState?.ids?.[0] ?? '')
   /**
    * ⚠️ **不许用 `open ? resolveModelDirectory(...) : undefined` 做惰性解析**（v1.15.2 修的真 bug）。
    *
@@ -853,6 +860,24 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   const [skillCatalog, setSkillCatalog] = useState<SkillSummary[]>([])
   const [skillsAvailable, setSkillsAvailable] = useState(false)
   const [skillsLoading, setSkillsLoading] = useState(false)
+  /**
+   * 技能目录**这一次没能给出列表**时的可读原因（`''` = 没有故障，选择器按"不可用就隐藏"处理）。
+   *
+   * ## 为什么要把它和 `skillsAvailable` 分开（v1.15.6，2026-09-27 用户反馈）
+   *
+   * 用户现象：昨天还在的「加载 Skill」整块，今天打开提示词弹窗**什么都没有**，
+   * 过一会儿（或重开一次）又自己回来了。真因不在本插件，而在宿主的技能注册表：
+   * `SkillRegistry.list()` 对 provider 的失败是 `catch → cacheable=false → 记一条 warn`
+   * 然后**照常返回剩下的（可能是空的）列表** —— 也就是"技能发现超时/未就绪"这类故障
+   * 会被静默降级成"本机没有技能"。而插件把"空目录"和"宿主没装 skills 服务"当成同一件事，
+   * 一律**整块隐藏**，于是故障看起来像"功能被删了"，且没有任何恢复入口。
+   *
+   * 现在的分工：
+   * - 宿主**根本没装** skills 服务（`available:false` 且没有 error）→ 仍然隐藏（永久状态，干净界面）；
+   * - 服务在、但这次是空目录 / 请求失败 → **显示原因 + 「重试」**，用户能自己恢复，
+   *   也能一眼看出"是宿主技能来源没就绪"，而不是以为插件坏了。
+   */
+  const [skillProblem, setSkillProblem] = useState('')
   const [skillQuery, setSkillQuery] = useState('')
   const [selectedSkills, setSelectedSkills] = useState<string[]>([])
   const selectedRef = useRef<string | null>(null)
@@ -876,15 +901,33 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
     }
   }, [])
 
-  /** 技能目录：打开提示词弹窗时按需拉取一次；失败时降级为空目录（选择器隐藏）。 */
+  /**
+   * 技能目录：打开提示词弹窗时按需拉取一次。
+   *
+   * ⚠️ **失败不再静默降级成"隐藏"**（v1.15.6）：宿主那侧"技能来源发现失败"会被它自己
+   * 吞掉并返回空目录，所以这里必须把"空目录"当成**可恢复的故障**报出来（原因 + 重试），
+   * 否则用户看到的是"功能不见了"（2026-09-27 实测）。只有"宿主没有 skills 服务"才是
+   * 真的没有这个能力，那时选择器整块不渲染。
+   */
   const loadSkills = useCallback(async (): Promise<void> => {
     setSkillsLoading(true)
     try {
       const res = await api<SkillsResponse>('/api/workbench/skills')
       setSkillCatalog(res.skills)
-      setSkillsAvailable(res.available && res.skills.length > 0)
-    } catch {
+      if (res.available && res.skills.length > 0) {
+        setSkillsAvailable(true)
+        setSkillProblem('')
+      } else {
+        setSkillsAvailable(false)
+        setSkillProblem(res.available
+          ? '技能目录这次是空的 —— 宿主某个技能来源可能还在初始化，或刚刚发现失败。稍后点「重试」即可。'
+          : typeof res.error === 'string' && res.error !== ''
+            ? `技能目录读取失败：${res.error}`
+            : '')
+      }
+    } catch (error) {
       setSkillCatalog([]); setSkillsAvailable(false)
+      setSkillProblem(`技能目录请求失败：${error instanceof Error ? error.message : String(error)}。服务可能正在重启，点「重试」即可。`)
     } finally { setSkillsLoading(false) }
   }, [])
 
@@ -1394,9 +1437,15 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
           await api('/api/workbench/workspaces/ensure', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ path: normalizedTarget }) })
           const created = await safeService<WorkbenchRuntime['workspaces']>(runtime, 'workspaces')?.create?.({ path: normalizedTarget })
           /**
-           * ⚠️ 读的是**嵌套**的 `value.workspace.workspaceId`（宿主返回 generated Remote 结果）。
-           * 旧写法读顶层 `created.workspaceId`（两版宿主都没有这个字段）→ 用户显式选的工作区
-           * 被静默忽略、落回"按 cwd 猜"。判据唯一实现见 `intakeWorkspace.ts#readCreatedWorkspaceId`。
+           * ⚠️ 宿主返回的形态**两版都是"拆过包"的 `WorkspaceView`**（顶层就有 `workspaceId`）：
+           *
+           * - 服务面 `ctx.workspaces.create()`：内部 `const r = await model.create(...); if (r.ok) return r.value.workspace`，
+           *   所以成功时**直接给 workspace 对象**（失败是抛 `WorkspaceCreateError`，不是返回 `{ok:false}`）；
+           * - 未经服务面的 Remote 原始结果才是 `{ok, value:{workspace}}`。
+           *
+           * 判据的唯一实现在 `intakeWorkspace.ts#readCreatedWorkspaceId`（两种形态都认，有单测）。
+           * 2026-09-27 更正：v1.15.5 的注释曾把"服务面"写成"Remote 原始结果"，
+           * 结论（读不到就报错、绝不静默回落）不变，但**那句"旧代码读的字段从不存在"是错的**。
            */
           const createdId = readCreatedWorkspaceId(created)
           if (createdId !== undefined) workspaceId = createdId
@@ -1416,9 +1465,17 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
         }
       }
       if (workspaceId === undefined) {
+        /**
+         * 第 1 档判据要的是"**当前会话**的 cwd"。
+         *
+         * ⚠️ 这里原先直接读 `sessions.list.getSnapshot().current`，而 0.1.7-rc.2 已经删掉了
+         * 这个字段 → `currentCwd` 恒为空 → 第 1 档静默失效 → 工作区多于一个候选时
+         * 必然走到下面的"无法确定"，而提示里让用户"切到目标任务所在的工作区"根本救不回来。
+         * 现在统一走 `currentSessionIdOf()`（判据与新旧宿主两端都在 `currentSession.ts`）。
+         */
         const sessionsState = safeService<WorkbenchRuntime['sessions']>(runtime, 'sessions')?.list?.getSnapshot?.()
-        const currentSessionId = sessionsState?.current
-        const currentSession = currentSessionId !== undefined && currentSessionId !== ''
+        const currentSessionId = currentSessionIdOf(runtime)
+        const currentSession = currentSessionId !== ''
           ? sessionsState?.byId?.[currentSessionId]
           : undefined
         const verdict = pickIntakeWorkspace({
@@ -2678,10 +2735,29 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
       )}
       {promptModal !== null && (
         <div className="wb-modal-mask" onClick={cancelPrompt}>
-          <div className="wb-modal" style={skillsAvailable ? { width: 'min(620px, 94vw)' } : undefined} onClick={(e) => e.stopPropagation()}>
+          <div className="wb-modal" style={skillsAvailable || skillsLoading || skillProblem !== '' ? { width: 'min(620px, 94vw)' } : undefined} onClick={(e) => e.stopPropagation()}>
             <h4>补充 AI 提示词</h4>
             <p>{promptModal.title}：可留空，留空则继续使用原有默认提示词；填写后会在默认提示词末尾追加你的补充要求。</p>
             <textarea autoFocus value={promptModal.value} onChange={(e) => setPromptModal((prev) => prev === null ? prev : { ...prev, value: e.target.value })} placeholder="输入你想追加给 AI 的补充要求…" />
+            {/**
+              * 技能目录**拿不到时也要可见**（v1.15.6）。
+              *
+              * 旧写法是 `skillsAvailable && (…)` —— 只要那一次拿到空目录就整块消失，
+              * 用户看到的是"Skill 选择功能没了"，而且没有任何重试入口（2026-09-27 实测：
+              * 宿主某次技能来源发现失败会静默返回空目录，下一次又自己好了）。
+              * 现在分成三态：读取中 / 可选 / 拿不到（原因 + 重试）。
+              */}
+            {!skillsAvailable && (skillsLoading || skillProblem !== '') && (
+              <div className="wb-skill-problem" role="status">
+                <span>
+                  <Icon name="skill" size={13} /> 加载 Skill：
+                  {skillsLoading ? '正在读取技能目录…' : `暂不可用 —— ${skillProblem}`}
+                </span>
+                {!skillsLoading && (
+                  <button type="button" className="wb-btn" onClick={() => void loadSkills()}><Icon name="refresh" size={12} />重试</button>
+                )}
+              </div>
+            )}
             {skillsAvailable && (
               <div className="wb-skill-picker">
                 <div className="wb-skill-picker-head">
@@ -4187,11 +4263,47 @@ function optionalService<T>(ctx: unknown, name: string): T | undefined {
  * 任务详情会话页签、草稿横幅三处仍在裸切 —— 用户点了只看到"什么都没发生"。
  */
 function aiSessionUsable(runtime: WorkbenchRuntime, sessionId: string): boolean {
+  const list = safeService<WorkbenchRuntime['sessions']>(runtime, 'sessions')?.list?.getSnapshot?.()
+  /**
+   * 0.1.7-rc.2 的列表快照不再带 `current`，所以把"当前会话"的判定结果**补进**探针
+   * （判据唯一实现在 `currentSession.ts`）。补不进去就保持 `undefined` —— 旧行为。
+   */
+  const current = currentSessionIdOf(runtime)
   return isAiSessionReusable({
     sessionId,
     archivedSessionIds: safeService<WorkbenchRuntime['workspaces']>(runtime, 'workspaces')?.list?.getSnapshot?.()?.archivedSessionIds,
-    list: safeService<WorkbenchRuntime['sessions']>(runtime, 'sessions')?.list?.getSnapshot?.(),
+    list: list === undefined ? undefined : { ...list, ...(current === '' ? {} : { current }) },
   })
+}
+
+/**
+ * 读「用户当前正在看的那个会话」的 id —— **全插件唯一入口**（v1.15.6）。
+ *
+ * ## 为什么必须有它（2026-09-27，DSH 0.1.7-rc.2 桌面端真实退化）
+ *
+ * 插件原先在三处直接读 `sessions.list.getSnapshot().current`，而 0.1.7-rc.2 已经把
+ * 这个字段**整个删掉**了（列表快照只剩 `ids` / `byId` / `phase`），选择语义搬进了
+ * `uiWorkspace` 的 `mainView` 引用 —— 对外由 `uiSession.adapter.current` 投影。
+ * 于是那三处**静默拿到 undefined**：
+ *
+ * 1. 「快速录入」的模型目录按 `ids[0]`（列表第一个会话）解析，不是当前会话；
+ * 2. 「快速录入」推断工作区时 `currentCwd` 恒为空，第 1 档判据"当前会话 cwd 命中谁
+ *    就用谁"整档失效 → 工作区多于一个候选时**必然拒绝**（用户实测的红字）；
+ * 3. 复用型会话的可用性判据少了"它就是当前会话"这条旁证。
+ *
+ * 判据（含新旧两端）在 `currentSession.ts`，那里是纯函数、有单测；这里只负责取服务。
+ *
+ * @param runtime - 插件运行上下文（`ctx`）
+ * @returns 会话 id；判定不出来时是空串（调用方按"不知道"处理，绝不猜一个）
+ */
+function currentSessionIdOf(runtime: WorkbenchRuntime): string {
+  const list = safeService<WorkbenchRuntime['sessions']>(runtime, 'sessions')?.list?.getSnapshot?.()
+  /**
+   * `uiSession` 走 `ctx.get` 软探测（**不放进 inject**）：它只有 0.1.5+ 才有，
+   * 写进 inject 会让旧宿主上整个插件 pending —— 与 `slots` / `layout` / `uiWorkspace`
+   * 同一条政策（见 `viewTypes.ts` 里那段决策说明）。
+   */
+  return readCurrentSessionId({ uiSession: optionalService<unknown>(runtime, 'uiSession'), list })
 }
 
 function safeService<T>(runtime: unknown, name: string): T | undefined {

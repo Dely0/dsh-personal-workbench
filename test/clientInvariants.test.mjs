@@ -168,3 +168,46 @@ test('不存在"探测到老宿主就降级"的分支', () => {
     }
   }
 })
+
+/**
+ * 「当前会话」只能从 `client/currentSession.ts` 读（v1.15.6）。
+ *
+ * ## 防的是哪个真退化（2026-09-27 用户实测）
+ *
+ * DSH 0.1.7-rc.2 的 `sessions.list.getSnapshot()` **不再发布 `current`**（选择语义搬到了
+ * `uiWorkspace` 的 mainView 引用，由 `uiSession.adapter.current` 投影）。而插件里有三处
+ * 还在读 `sessionsState?.current` —— 每一处都是**静默拿到 undefined**，用户看到的是
+ * "AI 执行/协助对某些任务直接报无法确定工作区"。三处同时坏，就是因为"同一个语义被
+ * 独立读了三遍"。
+ *
+ * 判据：会话列表快照的 `current` 字段**只允许**在 `currentSession.ts` 里作为回落来源出现；
+ * 业务代码一律走 `currentSessionIdOf()`（唯一入口）。
+ */
+test('「当前会话」只允许从 currentSession.ts 读（业务代码不许直接读列表快照的 current）', () => {
+  const violations = []
+  for (const { path, text } of sources) {
+    if (rel(path) === 'client/currentSession.ts') continue
+    const code = stripComments(text)
+    code.split('\n').forEach((line, index) => {
+      // `sessionsState` 是本仓给"会话列表快照"起的名字；同一行里出现 `current` 就是旧读法
+      if (/\bsessionsState\b/.test(line) && /\bcurrent\b/.test(line)) {
+        violations.push(`${rel(path)}:${index + 1} ${line.trim()}`)
+      }
+    })
+  }
+  assert.deepEqual(violations, [],
+    '会话列表快照的 current 只在 currentSession.ts 里作为回落来源出现；\n'
+    + '  业务代码请走 currentSessionIdOf()（0.1.7-rc.2 已删除该字段，读了恒为 undefined）：\n  - '
+    + violations.join('\n  - '))
+})
+
+test('接线：三个读「当前会话」的地方都走 currentSessionIdOf（同一个语义只读一遍）', () => {
+  const index = sources.find(({ path }) => rel(path) === 'client/index.tsx')
+  assert.ok(index !== undefined, 'index.tsx 必须存在')
+  const code = stripComments(index.text)
+  const calls = code.match(/currentSessionIdOf\(/g) ?? []
+  assert.ok(calls.length >= 3,
+    `currentSessionIdOf 至少要被三处调用（模型目录 / 工作区推断 / 会话可用性），实际 ${calls.length} 次`
+    + ' —— 少一处就说明又有人自己读了列表快照的 current')
+})
+

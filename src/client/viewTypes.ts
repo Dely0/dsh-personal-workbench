@@ -184,9 +184,10 @@ export interface WorkbenchRuntime {
      */
     list: { getSnapshot(): { items: readonly { workspaceId: string; path?: string }[]; archivedSessionIds?: readonly string[] } }
     /**
-     * 建/取一个工作区。返回的是宿主 **generated Remote 结果**
-     * （`{ ok, value: { workspace } }`，工作区 id 嵌在 `value.workspace` 里）——
-     * 形状见 `intakeWorkspace.ts#readCreatedWorkspaceId`（那是唯一读取处，有单测）。
+     * 建/取一个工作区。宿主服务面（`ctx.workspaces.create()`）返回的是**拆过包的**
+     * `WorkspaceView`（顶层就有 `workspaceId`），失败时**抛** `WorkspaceCreateError`；
+     * `{ ok, value: { workspace } }` 是未经服务面的 Remote 原始形状。
+     * 两种形态的读取见 `intakeWorkspace.ts#readCreatedWorkspaceId`（唯一读取处，有单测）。
      */
     create?(input: { path: string }): Promise<{
       ok?: boolean

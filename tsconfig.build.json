@@ -31,6 +31,7 @@
     "src/client/panelState.ts",
     "src/client/panelGeometry.ts",
     "src/client/sessionRef.ts",
+    "src/client/currentSession.ts",
     "src/client/aiSessionReuse.ts",
     "src/client/capabilities.ts",
     "src/client/taskFolder.ts",

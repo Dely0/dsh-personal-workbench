@@ -146,6 +146,10 @@ ${panelContainerCss({ view: VIEW_ATTR, official: OFFICIAL_ATTR, active: ACTIVE_A
 .wb-skill-desc { font-size:11px; color:var(--dsw-alias-label-secondary); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .wb-skill-provider { flex:none; font-size:10.5px; color:var(--dsw-alias-label-secondary); opacity:.75; }
 .wb-skill-hint { padding:8px 4px; font-size:12px; color:var(--dsw-alias-label-secondary); }
+/* 技能目录拿不到时的**可见故障态**（v1.15.6）：旧实现是整块隐藏，用户看到的是"功能没了"。 */
+.wb-skill-problem { margin-top:12px; display:flex; align-items:center; gap:10px; justify-content:space-between; padding:8px 10px; border-radius:8px; font-size:12px; line-height:1.6; color:var(--dsw-alias-label-secondary); background: color-mix(in srgb, #f5b83d 12%, transparent); border-left:3px solid #f5b83d; }
+.wb-skill-problem svg { width:13px; height:13px; vertical-align:-2px; margin-right:4px; }
+.wb-skill-problem .wb-btn { flex:none; display:inline-flex; align-items:center; gap:4px; }
 .wb-skill-foot { margin-top:7px; font-size:11px; color:var(--dsw-alias-label-secondary); opacity:.85; }
 .wb-list { border:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.24)); border-radius:12px; overflow:hidden; background:var(--dsw-alias-bg-layer-1, rgba(255,255,255,.03)); }
 .wb-row { display:flex; align-items:center; gap:8px; padding:11px 12px; border-bottom:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.12)); cursor:pointer; transition:background .12s ease; }

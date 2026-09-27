@@ -84,9 +84,9 @@ test('intakeWorkspace: 路径比较容错（大小写、斜杠方向、Windows�
   assert.equal(verdict.workspaceId, 'ws-project', 'WSL 形态的 cwd 也要能命中 Windows 形态的工作区路径')
 })
 
-// ── workspaceId 读取（2026-09-26：核对宿主契约时发现的既存静默丢件）─────
+// ── workspaceId 读取（2026-09-26 引入；2026-09-27 更正：服务面本来就是扁平形态）───
 
-test('readCreatedWorkspaceId: 读**嵌套**的 value.workspace.workspaceId（宿主真实形状）', () => {
+test('readCreatedWorkspaceId: Remote 原始形态（{ok,value:{workspace}}）也要认', () => {
   const result = { ok: true, value: { workspace: { workspaceId: 'ws-9', path: 'D:\\Code\\p' } } }
   assert.equal(readCreatedWorkspaceId(result), 'ws-9')
 })
@@ -104,9 +104,9 @@ test('readCreatedWorkspaceId: 读不出来就返回 undefined —— 不猜、�
   assert.equal(readCreatedWorkspaceId({ ok: true, value: { workspace: { workspaceId: '' } } }), undefined)
 })
 
-test('readCreatedWorkspaceId: 兼容"扁平"形态（宿主若回到 {workspaceId} 也别再静默丢一次）', () => {
+test('readCreatedWorkspaceId: 服务面真实形态（顶层 workspaceId）—— 这才是我方调用拿到的那个', () => {
   assert.equal(readCreatedWorkspaceId({ workspaceId: 'ws-flat' }), 'ws-flat')
   assert.equal(readCreatedWorkspaceId({ ok: true, workspaceId: 'ws-flat' }), 'ws-flat')
-  // 嵌套优先于扁平（两者同时出现时以宿主真实形状为准）
+  // 两种形态同时出现时以 Remote 的嵌套值为准（它更具体）
   assert.equal(readCreatedWorkspaceId({ workspaceId: 'ws-flat', value: { workspace: { workspaceId: 'ws-nested' } } }), 'ws-nested')
 })

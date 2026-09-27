@@ -100,18 +100,19 @@ export function pickIntakeWorkspace(input: IntakeWorkspaceInput): IntakeWorkspac
 /**
  * 从 `workspaces.create()` 的返回值里取出 `workspaceId`。
  *
- * ## 为什么需要这个纯函数（2026-09-26 核对宿主契约时发现，**两版都存在**）
+ * ## 两种形态都要认（2026-09-27 更正 v1.15.5 的判断）
  *
- * 工作台原先写的是 `if (typeof created?.workspaceId === 'string') workspaceId = created.workspaceId`，
- * 但宿主这个方法返回的是 **generated Remote 结果**，形状是
- * `{ ok: true, value: { workspace: { workspaceId, path, … } } }` ——
- * 工作区 id **嵌在 `value.workspace` 里**，顶层从来没有 `workspaceId`。
- * （0.1.5 与 0.1.7-rc.2 的实现逐字一致：`async create(input) { const r = await this.remote.create(input); if (r.ok) this.upsert(r.value.workspace); return r }`。）
+ * | 返回者 | 形态 |
+ * |---|---|
+ * | 服务面 `ctx.workspaces.create()`（**我们调的就是它**） | 直接把结果**拆包**成 `WorkspaceView`：顶层就有 `workspaceId`；失败是**抛** `WorkspaceCreateError`，不会返回 `{ok:false}` |
+ * | 未经服务面的 Remote 原始结果 | `{ ok: true, value: { workspace: { workspaceId, … } } }` |
  *
- * 后果不是崩溃，而是**静默忽略用户显式选的工作区**：`create()` 明明成功建/取到了工作区，
- * 我们没读出 id → 落回 `pickIntakeWorkspace()`（按当前会话 cwd/唯一候选猜）。
- * 这正是规范里点名的"静默丢件"类别，所以读不出来时要能被上层看见（返回 `undefined`，
- * 由调用方决定报错还是回落）。
+ * v1.15.5 的注释把两者记混了（当时按 Remote 的形态写，说"旧代码读的顶层字段从不存在"），
+ * 于是本函数被当成"修了一个静默丢件"。**事实是旧写法本来就能工作** ——
+ * 现在保留两种形态的读取，是为了让它对"宿主把服务面改回不拆包"这件事也不脆。
+ *
+ * 语义上仍然守"不猜"这条底线：读不出来就返回 `undefined`，
+ * 由调用方决定报错还是回落（**绝不静默换一个工作区**）。
  *
  * @param result - `workspaces.create()` 的返回值（形状未知，按结构判定）
  * @returns 取到的 workspaceId；取不到返回 `undefined`（**不猜**）
@@ -123,13 +124,14 @@ export function readCreatedWorkspaceId(result: unknown): string | undefined {
     value?: { workspace?: { workspaceId?: unknown } }
     workspaceId?: unknown
   }
-  /** 显式失败（`{ok:false,error}`）时不读 value。 */
+  /** 显式失败（`{ok:false,error}`）时不读 value —— 服务面是抛错，这里只防"有人把 Remote 结果直接递进来"。 */
   if (record.ok === false) return undefined
+  /** Remote 原始形态（`{ok:true,value:{workspace}}`）：兼容读取，不是当前服务面的形状。 */
   const nested = record.value?.workspace?.workspaceId
   if (typeof nested === 'string' && nested !== '') return nested
   /**
-   * 兼容"直接把 id 放在结果上"的形态（早期替身/未来包装）：**读得到就用**，
-   * 这样宿主若回到扁平形状也不会又静默丢一次。
+   * **服务面的真实形态**：`WorkspaceView` 顶层就带 `workspaceId`（`ctx.workspaces.create()`
+   * 已经拆过包）。这也是 v1.15.5 之前那版代码读的位置 —— 它本来就是对的。
    */
   if (typeof record.workspaceId === 'string' && record.workspaceId !== '') return record.workspaceId
   return undefined
