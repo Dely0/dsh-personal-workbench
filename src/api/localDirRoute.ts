@@ -25,7 +25,7 @@ export interface LocalRoot { path: string; name: string; totalBytes?: number; fr
  *
  * 原先 `listLocalDirectory` 在盘符根就把 `parent` 记为 `null`（`dirname('C:\\') === 'C:\\'`），
  * 于是弹窗里「上级」按钮在 `C:\` 变灰、**再也出不去 C 盘**；而弹窗默认起点是 `homedir()`（在 C 盘）。
- * 用户的实际感受是"选择文件只能选 C 盘的文件"——`E:\Code\...`（本仓）根本选不到。
+ * 用户的实际感受是"选择文件只能选 C 盘的文件"——**其它盘的项目目录（例如 `D:\code\my-project`）根本选不到**。
  *
  * Windows 上直接枚举存在的盘符（不调 wmic/PS：要起子进程、慢且可能被策略挡）。
  * 非 Windows（含 WSL）根就是 `/`。
