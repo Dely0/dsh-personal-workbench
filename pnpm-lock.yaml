@@ -12,16 +12,16 @@ importers:
         specifier: ^4.0.1
         version: 4.0.1
       '@deepseek-ai/dsh-commands':
-        specifier: ^0.1.5-rc.1
+        specifier: ^0.1.5-rc.1 || ^0.2.0-rc.1
         version: 0.1.5-rc.2(fc5573f35b88ae73790d4f4face49948)
       '@deepseek-ai/dsh-host-webserver':
-        specifier: ^0.1.0-rc.6
+        specifier: ^0.1.0-rc.6 || ^0.2.0-rc.1
         version: 0.1.0-rc.6(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1))
       '@deepseek-ai/dsh-system-prompt':
-        specifier: ^0.1.0-rc.6
+        specifier: ^0.1.0-rc.6 || ^0.2.0-rc.1
         version: 0.1.0-rc.6(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1))(@deepseek-ai/dsh-llm@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-attachment@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-brand@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1)))(@deepseek-ai/dsh-invariants@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1)))(@deepseek-ai/dsh-brand@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1)))(@deepseek-ai/dsh-invariants@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1))(@deepseek-ai/dsh-timeout@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1))))(@deepseek-ai/dsh-scope@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1)))
       '@deepseek-ai/dsh-tools':
-        specifier: ^0.1.0-rc.6
+        specifier: ^0.1.0-rc.6 || ^0.2.0-rc.1
         version: 0.1.0-rc.6(f8724372086ccc1457fc84e7becee2e0)
       react:
         specifier: ^18.3.1
@@ -621,7 +621,7 @@ snapshots:
   '@deepseek-ai/cordis-plugin-timer@1.1.4(@deepseek-ai/cordis@4.0.1)':
     dependencies:
       '@deepseek-ai/cordis': 4.0.1
-      '@deepseek-ai/cosmokit': 1.8.3
+      '@deepseek-ai/cosmokit': 1.8.2
 
   '@deepseek-ai/cordis@4.0.1':
     dependencies:

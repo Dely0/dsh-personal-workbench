@@ -14,15 +14,37 @@
  * 2. **`/workbench` 命令真的注册进去了**，且 handler 的行为符合约定
  *    （空输入报错；有输入 steer 一条带 task_id 与资料夹的用户消息）。
  *
- * 3. **peer 版本对齐 `0.1.5-rc.1`**（= `MIN_HOST_VERSION`），不是 fork 写的 `^0.0.1-rc.1`。
+ * 3. **peer 区间覆盖"能力门槛"与当前最新核心，且下界不被抬高**：
+ *    `dsh-commands` 的区间就是 `MIN_HOST_VERSION` 所在的那条 —— 必须同时含
+ *    `0.1.5-rc.1`（= `MIN_HOST_VERSION`）与 `0.2.0-rc.1`，且**不含** `0.1.0-rc.5`。
+ *
+ *    ⚠️ 这里刻意**不写 `assert.equal(peers[...], '^' + MIN_HOST_VERSION)`**（曾经就是这么写的，
+ *    0.2.0-rc.1 一到就变成假红）：**"最低能力门槛"与"声明兼容范围"是两件事** ——
+ *    门槛（`layout.selectPanel` 从 0.1.5-rc.1 起才有）没变，但声明范围必须同时认下界与新核心。
+ *    真实事故：DSH 0.2.0-rc.1 新增插件兼容性预检，只认 `peerDependencies` 里的 semver 区间，
+ *    判定不过就把插件整行 `disabled = true`（**静默禁用**，不报错、服务照常、页面照常），
+ *    于是工作台在桌面端"整体消失"。而把区间直接换成 `^0.2.0-rc.1` 会反过来禁用所有 0.1.x 用户 ——
+ *    所以正确写法是**并列区间**，下界不动。
+ *
+ *    下一条断言同时钉住"写法不能退化成 `*` / `>=0`"：那等于对所有核心都声明兼容。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import * as plugin from '../lib/index.js'
-import { MIN_HOST_VERSION, inject as clientInject } from '../lib/client/capabilities.js'
+import { inject as clientInject } from '../lib/client/capabilities.js'
 
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
+
+/**
+ * peer 区间的**基准**：必须同时覆盖这个能力门槛与下面那个当前核心。
+ * 刻意不从 `capabilities.ts` import `MIN_HOST_VERSION` —— 本条测试要守的正是
+ * "这个字面量不许被顺手抬高"（`capabilities.test.mjs` 另外钉住 `capabilities.ts` 自身）。
+ */
+const HOST_HEAD = '0.1.5-rc.1'
+
+/** 当前必须被覆盖的最新核心（DSH 每升一个大版本，把它往前推一格）。 */
+const NEWEST_HOST = '0.2.0-rc.1'
 
 test('pluginEntry: 宿主 inject 包含 commands（前置），且绝不包含 llm（可选增强）', () => {
   assert.ok(plugin.inject.includes('commands'), '/workbench 命令需要 commands 服务，缺了就不该启动')
@@ -39,14 +61,147 @@ test('pluginEntry: 客户端 inject 不含 modelDirectories（软探测，不 pe
   assert.equal(clientInject.includes('remote'), false, 'fork 加的 remote/remote.session 是它自己的接线，本仓不需要')
 })
 
-test('pluginEntry: package.json 的 peer 版本与 MIN_HOST_VERSION 对齐', () => {
-  const peers = pkg.peerDependencies
-  assert.equal(peers['@deepseek-ai/dsh-commands'], `^${MIN_HOST_VERSION}`,
-    'fork 写的是 ^0.0.1-rc.1；必须对齐本仓的最低宿主版本')
-  assert.equal(peers['@deepseek-ai/dsh-commands'].startsWith('^0.0.'), false)
-  for (const name of ['@deepseek-ai/cordis', '@deepseek-ai/dsh-host-webserver', '@deepseek-ai/dsh-system-prompt', '@deepseek-ai/dsh-tools']) {
-    assert.ok(typeof peers[name] === 'string' && peers[name] !== '', `peer 缺少 ${name}`)
+/**
+ * 极简 caret 区间判定（只认测试真正要用的形状：`^x.y.z[-pre]`，多段用 ` || ` 并列）。
+ *
+ * 为什么不引 `semver`：它是**被测包的运行依赖面**，而本仓 `dependencies` 只有 `react`。
+ * 为一条单测给一个公开发布的插件加依赖不划算，所以这里只实现判据需要的那一小块。
+ * 注意 prerelease 语义：`^0.1.5-rc.1` **包含** `0.1.5-rc.1` 本身（同 base、同 pre），
+ * 但不包含更低的 `0.1.5-alpha.1` —— 这条正好用来验证"下界没被抬高"。
+ */
+const CLAUSE = /^\^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/
+
+function parseVersion(text) {
+  const m = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/.exec(text)
+  if (m === null) return null
+  return { major: Number(m[1]), minor: Number(m[2]), patch: Number(m[3]), pre: m[4] ?? null }
+}
+
+function compareIds(a, b) {
+  const an = /^\d+$/.test(a)
+  const bn = /^\d+$/.test(b)
+  if (an && bn) return Number(a) - Number(b)
+  if (an !== bn) return an ? -1 : 1
+  return a < b ? -1 : a > b ? 1 : 0
+}
+
+/** 版本比较；`a` 低于 `b` 返回负数。只保证单测用到的有序性。 */
+function compareVersions(a, b) {
+  if (a.major !== b.major) return a.major - b.major
+  if (a.minor !== b.minor) return a.minor - b.minor
+  if (a.patch !== b.patch) return a.patch - b.patch
+  if (a.pre === null && b.pre === null) return 0
+  if (a.pre === null) return 1 // 正式版高于同号 prerelease
+  if (b.pre === null) return -1
+  const ai = a.pre.split('.')
+  const bi = b.pre.split('.')
+  for (let i = 0; i < Math.max(ai.length, bi.length); i++) {
+    if (ai[i] === undefined) return -1
+    if (bi[i] === undefined) return 1
+    const c = compareIds(ai[i], bi[i])
+    if (c !== 0) return c
   }
+  return 0
+}
+
+/** `^x.y.z` 的上界：`x > 0` 时是 `(x+1).0.0`，`x === 0` 时是 `0.(y+1).0`。 */
+function caretUpperBound(clause) {
+  const major = Number(clause[1])
+  const minor = Number(clause[2])
+  return major > 0
+    ? { major: major + 1, minor: 0, patch: 0, pre: null }
+    : { major: 0, minor: minor + 1, patch: 0, pre: null }
+}
+
+/** `version` 是否落在 `range` 内。未知形状直接抛错，好过静默放行。 */
+function satisfies(version, range) {
+  const parsed = parseVersion(version)
+  if (parsed === null) throw new Error(`不是可解析的版本：${version}`)
+  let matchedSomeClause = false
+  for (const raw of range.split(' || ')) {
+    const clause = CLAUSE.exec(raw.trim())
+    if (clause === null) throw new Error(`不支持的区间形状（本测试只认 ^x.y.z 并列）：${raw}`)
+    matchedSomeClause = true
+    const base = { major: Number(clause[1]), minor: Number(clause[2]), patch: Number(clause[3]), pre: clause[4] ?? null }
+    if (compareVersions(parsed, base) < 0) continue
+    if (compareVersions(parsed, caretUpperBound(clause)) >= 0) continue
+    // 下界带 prerelease 时（`includePrerelease` 语义，逐例用真 semver 校准过）：
+    // prerelease 版本只在"与比较符同一个 major.minor"时被放行 —— 所以
+    // `0.1.6-rc.1` / `0.1.7-rc.2` 算命中，`0.1.5-alpha.1` 被挡（低于下界），
+    // `0.2.0-rc.1` 也被挡（minor 不同）。这正是本次事故的机理。
+    if (base.pre !== null && parsed.pre !== null) {
+      const sameMinor = parsed.major === base.major && parsed.minor === base.minor
+      if (!sameMinor) continue
+    }
+    return true
+  }
+  if (!matchedSomeClause) throw new Error(`空区间：${range}`)
+  return false
+}
+
+test('pluginEntry: 上面那个区间判定器本身是可信的（否则断言会静默放行）', () => {
+  // 用 semver 的公开语义固定住判定器：如果哪天有人"顺手简化" satisfies，这里先红。
+  // 每一条的期望值都用真 `semver.satisfies(v, r, { includePrerelease: true })` 逐例校准过。
+  const CASES = [
+    // [版本, 区间, 期望]
+    ['0.1.5-rc.1', '^0.1.5-rc.1', true],   // 下界自身
+    ['0.1.6-rc.1', '^0.1.5-rc.1', true],   // 同 major.minor 的更高补丁 prerelease：semver 放行
+    ['0.1.7-rc.2', '^0.1.5-rc.1', true],   // 旧核心线内的更高补丁
+    ['0.1.5-alpha.1', '^0.1.5-rc.1', false], // 低于下界的 prerelease 不许放行
+    ['0.1.0-rc.5', '^0.1.5-rc.1', false],
+    ['0.2.0-rc.1', '^0.1.5-rc.1', false],  // 单区间覆盖不到新核心 —— 这正是本次事故
+    ['0.1.0-rc.5', '^0.1.0-rc.6', false],  // 另一条下界（host-webserver 那条）也守
+    ['0.1.5-alpha.1', '^0.1.0-rc.6', true],
+    ['0.2.0-rc.1', '^0.1.0-rc.6', false],
+    ['0.1.5-rc.1', '^0.1.5-rc.1 || ^0.2.0-rc.1', true],  // 并列区间：两个端点都认
+    ['0.1.7-rc.2', '^0.1.5-rc.1 || ^0.2.0-rc.1', true],
+    ['0.2.0-rc.1', '^0.1.5-rc.1 || ^0.2.0-rc.1', true],
+    ['0.2.0-rc.2', '^0.1.5-rc.1 || ^0.2.0-rc.1', true],  // 新核心线的后续 prerelease
+    ['0.2.1', '^0.2.0-rc.1', true],        // caret 覆盖同线后续正式版
+    ['0.2.9', '^0.1.5-rc.1 || ^0.2.0-rc.1', true],
+    ['0.3.0-rc.1', '^0.1.5-rc.1 || ^0.2.0-rc.1', false], // 下次核心升大版本时会再红一次（刻意）
+    ['0.3.0', '^0.1.5-rc.1 || ^0.2.0-rc.1', false],
+  ]
+  for (const [version, range, expected] of CASES) {
+    assert.equal(satisfies(version, range), expected, `satisfies(${version}, ${range}) 应为 ${expected}`)
+  }
+  assert.throws(() => satisfies('0.1.5', '~0.1.5'), /不支持的区间形状/, '不认识的区间必须抛错，不能静默放行')
+})
+
+test('pluginEntry: dsh-* peer 区间同时覆盖能力门槛与最新核心，且不退化', () => {
+  /** 4 个 `@deepseek-ai/dsh-*` 依赖的区间形状必须是"并列的 caret"，不能是一把梭。 */
+  const DSH_PEERS = ['@deepseek-ai/dsh-commands', '@deepseek-ai/dsh-host-webserver', '@deepseek-ai/dsh-system-prompt', '@deepseek-ai/dsh-tools']
+
+  const commands = pkg.peerDependencies['@deepseek-ai/dsh-commands']
+  assert.equal(
+    typeof commands === 'string' && commands.trim() !== '',
+    true,
+    'peer 缺少 @deepseek-ai/dsh-commands：工作台的 /workbench 命令依赖它',
+  )
+
+  // 1) 覆盖下界（能力门槛）与当前最新核心 —— 少任何一个都会被 DSH 兼容性预检整行 disabled
+  assert.equal(satisfies(HOST_HEAD, commands), true, `peer 区间必须含能力门槛 ${HOST_HEAD}（抬高下界会禁用老用户）：${commands}`)
+  assert.equal(satisfies(NEWEST_HOST, commands), true, `peer 区间必须含当前最新核心 ${NEWEST_HOST}（否则工作台在桌面端被静默禁用）：${commands}`)
+
+  // 2) 下界没被"顺手放宽"：门槛之前的版本不许被声明为兼容
+  assert.equal(satisfies('0.1.5-alpha.1', commands), false, `低于能力门槛的版本不该被声明兼容：${commands}`)
+  assert.equal(satisfies('0.1.0-rc.5', commands), false, `低于能力门槛的版本不该被声明兼容：${commands}`)
+
+  // 3) 不能退化成"对所有核心都兼容"（那等于放弃兼容性声明）
+  assert.equal(/\*/.test(commands), false, `peer 区间不许出现 *：${commands}`)
+  assert.equal(/>=\s*0/.test(commands), false, `peer 区间不许退化成 >=0：${commands}`)
+
+  // 4) 另外三个 dsh-* peer 同样要同时覆盖两个版本
+  for (const name of DSH_PEERS) {
+    const range = pkg.peerDependencies[name]
+    assert.equal(typeof range === 'string' && range.trim() !== '', true, `peer 缺少 ${name}`)
+    for (const version of [HOST_HEAD, NEWEST_HOST]) {
+      assert.equal(satisfies(version, range), true, `${name} 的区间漏了 ${version}：${range}`)
+    }
+  }
+
+  // 5) 跟随口径：`cordis` 是独立包（版本线不跟 core），只要求写着一个区间
+  assert.match(pkg.peerDependencies['@deepseek-ai/cordis'], /^\^\d+\.\d+\.\d+/, 'cordis 要写一个明确的 caret 区间')
 })
 
 test('pluginEntry: 版本号只由发布节奏决定，本地迭代不消耗它', () => {
