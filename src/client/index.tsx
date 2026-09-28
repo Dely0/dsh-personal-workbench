@@ -88,8 +88,16 @@ import {
   forgetRecentWorkspace, mergeRecentWorkspaces, sameRecentWorkspaces,
 } from '../shared/quickWorkspaceRecent.js'
 import {
-  effectiveSelection, evaluateImageSupport, gateModelPicker, indexModalities, type ModelModalityRecord,
+  CLEAR_SELECTION_LABEL, clearQuickModelSelection, effectiveModelLabel, effectiveSelection,
+  evaluateImageSupport, gateModelPicker, indexModalities, modelDirectoryUnavailableReason,
+  modelMenuMode, resolveModelDirectoryOutcome, selectionToApply,
+  type ModelDirectoryOutcome, type ModelModalityRecord, type SelectionApplication,
 } from './modelCapability.js'
+import {
+  classifyNotificationPermission, notificationStateText, readNotificationCtor,
+  requestNotificationPermission, sendSystemNotification,
+  type NotificationState,
+} from './notificationCapability.js'
 import {
   placePopover, samePlacement, stepIndex, type PopoverPlacement,
 } from './popoverPlacement.js'
@@ -245,20 +253,36 @@ function writeQuickModelSelection(selection: QuickModelSelection | null): void {
 }
 
 /**
- * 取某个会话的模型目录。
+ * 取某个会话的模型目录 —— **判定全部委托给纯函数** `resolveModelDirectoryOutcome`。
  *
  * ⚠️ `modelDirectories` 走 **`ctx.get` 软探测**（见 `viewTypes.ts` 里那段决策说明），
  * 绝不写进 `inject`：它是另一个客户端插件提供的可选增强，缺了只是少一个下拉框，
  * 写进 `inject` 会让那种机器上**整个工作台面板 pending**。
  *
- * 拿不到/抛错一律返回 undefined，由调用点决定"是提示还是放行"。
+ * ⚠️ **不许退回 `try { … } catch { return undefined }`**（2026-09-28 死锁事故）：
+ * 那样会把"服务不在场"与"这个会话取不到目录（宿主 `directoryFor` 抛 no binding）"
+ * 压成同一个 `undefined`，于是界面上把后者说成"当前 DSH 未提供模型选择接口" ——
+ * 而本机该 provider 明明是装着的，报错文案把排查方向整个带偏。
+ * 本函数只做"读服务"这一件事，分类与措辞都在纯模块里，并由测试钉住。
  */
-function resolveModelDirectory(runtime: WorkbenchRuntime, sessionId: string): ModelDirectoryRuntime | undefined {
-  if (sessionId === '') return undefined
-  const service = optionalService<{ directoryFor?: (id: string) => ModelDirectoryRuntime }>(pluginCtx, 'modelDirectories')
-    ?? (() => { try { return runtime.modelDirectories } catch { return undefined } })()
-  if (service === undefined || service === null || typeof service.directoryFor !== 'function') return undefined
-  try { return service.directoryFor(sessionId) } catch { return undefined }
+function resolveModelDirectoryOutcomeFor(runtime: WorkbenchRuntime, sessionId: string): ModelDirectoryOutcome {
+  return resolveModelDirectoryOutcome(
+    () => optionalService<{ directoryFor?: (id: string) => ModelDirectoryRuntime }>(pluginCtx, 'modelDirectories')
+      ?? (() => { try { return runtime.modelDirectories } catch { return undefined } })(),
+    sessionId,
+  )
+}
+
+/**
+ * 目录拿不到时的可读原因 **+ 控制台留痕**（"失败必须可观测"，本项目规范第 4 条）。
+ *
+ * 为什么两处（界面 + 控制台）都要：用户截图看不到 console，而排查时
+ * `[workbench] …` 这一行能直接定位到是服务缺失还是会话没 retain。
+ */
+function reportModelDirectoryUnavailable(outcome: ModelDirectoryOutcome): string {
+  const reason = modelDirectoryUnavailableReason(outcome)
+  if (outcome.ok === false) console.warn(`[workbench] 模型目录不可用（${outcome.code}）：${outcome.detail}`)
+  return reason
 }
 
 /** 拉一次"模型 → 输入能力"对照表；失败返回空表（不拦，交给宿主原生兜底）。 */
@@ -348,6 +372,39 @@ function QuickModelPicker({ runtime, value, onChange, modalityTable, disabled, o
   const currentSessionId = currentSessionIdOf(runtime)
   const directorySessionId = currentSessionId !== '' ? currentSessionId : (sessionsState?.ids?.[0] ?? '')
   /**
+   * 这次解析的结果（拿到目录 / 为什么没拿到）—— 门禁、菜单、提示**共用这一份**。
+   *
+   * ⚠️ **必须只有一处判定**：如果门禁自己再判一遍，就会出现"说的是 A、拦的是 B"
+   * （本项目最大的 bug 类别：同一个语义被独立计算多次）。
+   *
+   * ⚠️ 关于 `useMemo([runtime, directorySessionId])`：这条依赖里**没有**服务的就绪状态，
+   * 所以如果宿主的 `modelDirectories` 注册晚于本组件首次渲染，这里会一直缓存住那次失败
+   * （2026-09-28 提出的第 ② 条假设：**时机问题**）。
+   * 无法确认时机，就不敢只靠依赖变化 —— 所以这里补一条**显式重试入口**
+   * （`recomputeDirectory`，挂在用户点击上）：会话/服务就绪后点一下即可重新解析，
+   * 失败也不再是永久性的。原来的"不可用就永久不可用"因此消失。
+   */
+  const [directoryOutcome, setDirectoryOutcome] = useState<ModelDirectoryOutcome>(
+    () => resolveModelDirectoryOutcomeFor(runtime, directorySessionId),
+  )
+  const recomputeDirectory = useCallback((): ModelDirectoryOutcome => {
+    const next = resolveModelDirectoryOutcomeFor(runtime, directorySessionId)
+    setDirectoryOutcome(next)
+    return next
+  }, [runtime, directorySessionId])
+  useEffect(() => {
+    // 会话换人（或面板重挂）时重新解析一次 —— 依赖变化就是"该重算了"的信号。
+    setDirectoryOutcome(resolveModelDirectoryOutcomeFor(runtime, directorySessionId))
+  }, [runtime, directorySessionId])
+  const directory = directoryOutcome.ok ? directoryOutcome.directory : undefined
+  /**
+   * 目录拿不到时的可读**成因**（唯一来源：`modelDirectoryUnavailableReason`）。
+   * 门禁、菜单、提交路径都读它，禁止任何一处自己再拼一句（2026-09-28 审查 F1）。
+   */
+  const unavailableReason = directoryOutcome.ok
+    ? ''
+    : reportModelDirectoryUnavailable(directoryOutcome)
+  /**
    * ⚠️ **不许用 `open ? resolveModelDirectory(...) : undefined` 做惰性解析**（v1.15.2 修的真 bug）。
    *
    * `openPicker()` 用 `directory === undefined` 判定"宿主没提供这个服务"，
@@ -359,10 +416,20 @@ function QuickModelPicker({ runtime, value, onChange, modalityTable, disabled, o
    * 这里也**不需要**惰性：`directoryFor()` 只是宿主内部 Map 的一次查询，
    * 且本组件只存在于「快速录入」弹窗里（弹窗关闭时根本不渲染）。
    */
-  const directory = useMemo(
-    () => resolveModelDirectory(runtime, directorySessionId),
-    [runtime, directorySessionId],
-  )
+  /**
+   * 菜单要列什么：整份目录，还是"只留一个清空出口"。
+   *
+   * 有残留选择时**菜单必须开得起来**（`clear-only`）——
+   * 事故里用户就是被"菜单打不开"锁死的：唯一的写入口只在菜单里。
+   *
+   * ⚠️ 这也是"清空出口可达性"的**唯一判据**：门禁不再自己看 `hasSelection`，
+   * 而是接收这里算好的 `recoverable`（2026-09-28 审查 F2：同一语义不许两处实现）。
+   */
+  const menuDecision = modelMenuMode({
+    directory,
+    hasSelection: value !== null,
+    unavailableReason,
+  })
   const subscribe = useCallback(
     (listener: () => void) => (directory === undefined ? () => undefined : directory.store.subscribe(listener)),
     [directory],
@@ -373,7 +440,7 @@ function QuickModelPicker({ runtime, value, onChange, modalityTable, disabled, o
   )
   const state = useSyncExternalStore(subscribe, getSnapshot, () => EMPTY_MODEL_DIRECTORY_STATE)
   const selectedLabel = useMemo(() => {
-    if (value === null) return '跟随 DSH 默认模型'
+    if (value === null) return CLEAR_SELECTION_LABEL
     for (const group of state.groups) {
       if (group.id !== value.provider) continue
       const model = group.models.find((item) => item.id === value.model)
@@ -397,7 +464,32 @@ function QuickModelPicker({ runtime, value, onChange, modalityTable, disabled, o
   }, [])
 
   const openPicker = (): void => {
-    const gate = gateModelPicker({ hasDirectory: directory !== undefined, sessionId: directorySessionId })
+    /**
+     * 每次点击**重新解析一次**目录：宿主服务/会话可能是在本组件挂载之后才就绪的，
+     * 而 `directoryOutcome` 的依赖里没有"服务已注册"这件事（见上面的注释）。
+     * 重新解析是幂等的（`directoryFor()` 只是宿主内部 Map 的一次查询），
+     * 于是"点一下就能恢复"取代了原来的"一次失败即永久不可用"。
+     */
+    const outcome = recomputeDirectory()
+    /**
+     * 门禁的成因与出口可达性都**从上面算好的那一份**读，绝不在这里再判一次：
+     * 旧写法（`gateModelPicker({ hasDirectory })`）只能拿一句写死的"未提供接口"，
+     * 于是"服务在场、只是这个会话取不到目录"被说成"接口没提供"（审查 F1）。
+     *
+     * ⚠️ 用**本次刚解析的** `outcome` 而不是渲染期那份 state：点击的那一刻状态可能还没落地。
+     * 纯运算、无副作用（重算出的字符串与 `unavailableReason` 同源同值），幂等。
+     */
+    const reason = outcome.ok ? '' : modelDirectoryUnavailableReason(outcome)
+    const gate = gateModelPicker({
+      hasDirectory: outcome.ok,
+      sessionId: directorySessionId,
+      unavailableReason: reason,
+      recoverable: modelMenuMode({
+        directory: outcome.ok ? outcome.directory : undefined,
+        hasSelection: value !== null,
+        unavailableReason: reason,
+      }).mode === 'clear-only',
+    })
     if (!gate.ok) {
       const message = `${gate.reason}；本次会话将跟随 DSH 默认模型。`
       // 控制台也留一条（用户截图看不到 console，但排查时这一步能直接定位）
@@ -408,10 +500,25 @@ function QuickModelPicker({ runtime, value, onChange, modalityTable, disabled, o
       pendingFocusRef.current = null
       return
     }
-    if (directory === undefined) return
+    /**
+     * ⚠️ **拿不到目录但有残留选择**时：不是关掉控件，而是开一份"只给清空出口"的菜单。
+     *
+     * 事故形态：唯一的写入口在菜单里，而菜单被门禁挡死 ⇒ 用户被永久锁在
+     * 那条改不掉的 localStorage 选择上（只能手改浏览器存储）。
+     * 出口必须**不依赖任何模型目录**：清空只是 `onChange(null)` + `removeItem`。
+     *
+     * 注意这里**不往 state 里塞原因** —— 菜单里显示的原因是渲染期由
+     * `modelMenuMode()` 算出来的 `menuDecision.reason`，那才是有读者的那一份。
+     * （2026-09-28 审查 F2：曾经多存了一个只写不读的 state，现在删掉了。）
+     */
+    if (outcome.ok === false) {
+      pendingFocusRef.current = null
+      setOpen(true)
+      return
+    }
     setOpen(true)
     setLoading(true)
-    void directory.load()
+    void outcome.directory.load()
       .then(() => { onLoaded() })
       .catch((error: unknown) => onError(error instanceof Error ? error.message : String(error)))
       .finally(() => setLoading(false))
@@ -602,13 +709,27 @@ function QuickModelPicker({ runtime, value, onChange, modalityTable, disabled, o
             }}
             onKeyDown={onMenuKeyDown}
           >
-            <button type="button" role="option" aria-selected={value === null} className={`wb-model-option${value === null ? ' selected' : ''}`} onClick={() => { onChange(null); closePicker() }}>
-              <span className="wb-model-option-main">跟随 DSH 默认模型</span>
+            <button
+              type="button"
+              role="option"
+              aria-selected={value === null}
+              className={`wb-model-option${value === null ? ' selected' : ''}`}
+              onClick={() => { onChange(clearQuickModelSelection(value)); closePicker() }}
+            >
+              <span className="wb-model-option-main">{CLEAR_SELECTION_LABEL}</span>
               {value === null && <Icon name="check" size={14} />}
             </button>
-            {(loading || state.status === 'loading') && <div className="wb-model-menu-empty">正在读取模型列表…</div>}
-            {state.error !== null && <div className="wb-model-menu-error">{state.error}</div>}
-            {state.groups.map((group) => (
+            {/*
+              降级态（拿不到目录但有残留选择）：只给上面这一个出口 + 一条可读原因。
+              不渲染模型行 —— 没有目录就没有可信的模型列表，绝不摆一份假的给人点。
+              原因行就摆在出口**下面**，用户点进来第一眼就能看到为什么。
+            */}
+            {menuDecision.mode === 'clear-only' && (
+              <div className="wb-model-menu-error">{menuDecision.reason}</div>
+            )}
+            {menuDecision.mode === 'full' && (loading || state.status === 'loading') && <div className="wb-model-menu-empty">正在读取模型列表…</div>}
+            {menuDecision.mode === 'full' && state.error !== null && <div className="wb-model-menu-error">{state.error}</div>}
+            {menuDecision.mode === 'full' && state.groups.map((group) => (
               <div key={group.id}>
                 <div className="wb-model-group-title">{group.name}</div>
                 {group.models.map((model) => {
@@ -632,10 +753,10 @@ function QuickModelPicker({ runtime, value, onChange, modalityTable, disabled, o
                 })}
               </div>
             ))}
-            {state.groups.length === 0 && !loading && state.status !== 'loading' && state.error === null && (
+            {menuDecision.mode === 'full' && state.groups.length === 0 && !loading && state.status !== 'loading' && state.error === null && (
               <div className="wb-model-menu-empty">暂无可用模型</div>
             )}
-            {state.failures.length > 0 && (
+            {menuDecision.mode === 'full' && state.failures.length > 0 && (
               <div className="wb-model-menu-empty">{state.failures.length} 个模型来源读取失败（其余仍可选）</div>
             )}
           </div>
@@ -797,7 +918,17 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   const [capacityEdit, setCapacityEdit] = useState<string | null>(null)
   /** 「规则与账本」面板是否展开（纯展示态，不影响任何计算）。 */
   const [capacityExpanded, setCapacityExpanded] = useState(false)
-  const [notifyPerm, setNotifyPerm] = useState<NotificationPermission | 'unsupported'>(() => typeof Notification === 'undefined' ? 'unsupported' : Notification.permission)
+  /**
+   * 系统通知的可用性三态（v1.15.7）。
+   *
+   * 旧实现在**初始化时**判了 `typeof Notification === 'undefined'`，但**请求授权**那条
+   * 路径没判：rc.2 客户端上点「授权浏览器通知」会直接抛 `TypeError`，用户看到的是
+   * "点了没反应"。这里把构造函数与判定都收在一处（`notificationCapability.ts`）。
+   */
+  const notificationCtor = readNotificationCtor(globalThis)
+  const [notifyPerm, setNotifyPerm] = useState<NotificationState>(
+    () => classifyNotificationPermission(notificationCtor),
+  )
   const [showSettings, setShowSettings] = useState(false)
   const [settingsSaving, setSettingsSaving] = useState(false)
   /** 知识库召回回执：人类可读的日志行 + 每个会话的开关覆盖（设置页「知识库召回」分区用）。 */
@@ -1112,12 +1243,19 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
             if (notifiedRef.current.has(reminder.reminderId)) continue
             notifiedRef.current.add(reminder.reminderId)
             notifiedAny = true
-            try {
-              new Notification(`任务提醒：${reminder.title}`, {
-                body: `截止时间：${fmtTime(reminder.dueAt)}`,
-                tag: `dsh-personal-workbench:${reminder.reminderId}`,
-              })
-            } catch { /* 部分浏览器限制通知构造，忽略降级为页内横幅 */ }
+            /**
+             * ⚠️ 失败**必须可观测**（v1.15.7）：旧写法的空 catch 把失败吞得干干净净，
+             * 让"通知发不出去"在界面上和控制台上都不存在 —— 用户只能看到"到点了没提醒"。
+             * 这里改用统一的 `sendSystemNotification()`：失败返回原因并落一条控制台日志。
+             * 不去打扰用户（到期提醒是后台流程，弹一条错误会让"提醒失败"变成"弹窗骚扰"）。
+             */
+            const sent = sendSystemNotification({
+              NotificationCtor: readNotificationCtor(globalThis),
+              title: `任务提醒：${reminder.title}`,
+              body: `截止时间：${fmtTime(reminder.dueAt)}`,
+              tag: `dsh-personal-workbench:${reminder.reminderId}`,
+            })
+            if (!sent.ok) console.warn(`[workbench] 到期提醒未能发出系统通知：${sent.reason}`)
           }
           if (notifiedAny) persistNotified()
         }
@@ -1503,19 +1641,39 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
       /**
        * 澄清会话先把用户选的模型应用上去（**必须在 prompt 之前**）：
        * `select()` 走宿主持久投影，下一次请求就是它。
-       * 应用失败**不静默吞掉** —— 用户以为换了模型、实际没换是最难发现的一类偏差。
+       *
+       * ## 口径（2026-09-28 死锁事故后修订，用户已确认 A + B）
+       *
+       * - **拿到目录** → 照旧应用用户选的模型。应用失败仍然**不静默吞掉**：
+       *   `directory.select()` 抛出的可读原因原样上抛（既有设计意图保留）。
+       * - **拿不到目录** → **不中断**整条快速录入：忽略那条残留选择、按
+       *   「跟随 DSH 默认模型」跑完，并给一条明确说"本次未切换模型"的提示。
+       *
+       * ⚠️ 旧实现在这里**直接 `throw`**，于是一个可选增强（另一个客户端插件提供的
+       * 下拉框）把整条快速录入拖死 —— 用户看到的是"选过模型之后快速录入整个不可用"。
+       * 判定收敛到纯函数 `selectionToApply()`，本处只负责"照判定做事 + 留痕"。
        */
-      if (mode === 'clarify' && quickModelSelection !== null) {
-        const directory = resolveModelDirectory(runtime, id)
-        if (directory === undefined) {
-          throw new Error('当前 DSH 未提供模型选择接口（modelDirectories），无法为快速录入切换模型。请升级 DSH 或改回“跟随 DSH 默认模型”。')
-        }
-        await directory.load()
-        await directory.select({
-          provider: quickModelSelection.provider,
-          model: quickModelSelection.model,
-          ...(quickModelSelection.reasoningEffort === undefined ? {} : { reasoningEffort: quickModelSelection.reasoningEffort }),
+      let selectionApplication: SelectionApplication = { kind: 'follow-default', notice: '' }
+      if (mode === 'clarify') {
+        const outcome = resolveModelDirectoryOutcomeFor(runtime, id)
+        /**
+         * ⚠️ 提交时的 `clearExitReachable` **按"出口本身是否依赖目录"来判**，不是按当时菜单的开合：
+         * 清空出口从来不依赖模型目录（`clearQuickModelSelection` 只是返回 `null`），
+         * 所以只要用户手里还有一条残留选择，提示里就可以让他去点那个出口。
+         * 没有残留选择时不必提（那时也没有东西可清）。
+         */
+        selectionApplication = selectionToApply(quickModelSelection, outcome, {
+          clearExitReachable: quickModelSelection !== null,
         })
+        if (selectionApplication.kind === 'apply') {
+          if (outcome.ok) {
+            await outcome.directory.load()
+            await outcome.directory.select(selectionApplication.selection)
+          }
+        } else if (selectionApplication.notice !== '') {
+          console.warn(`[workbench] 快速录入降级为默认模型：${selectionApplication.notice}`)
+          setError(selectionApplication.notice)
+        }
       }
       /**
        * 附件里的图片：先判断"选中的模型收不收图"。
@@ -1524,15 +1682,21 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
        * 一行 `[image omitted because this model accepts text only; …]` ——
        * 用户看到的是"我传了截图，AI 却说没看到"。所以这里在**发送前**给可读提示
        * （`evaluateImageSupport` 的判据与宿主逐条对齐，判不出来时不拦）。
+       *
+       * ⚠️ 判定用的模型必须与**本次真的会生效的那个**一致：降级时本地还留着上次选的
+       * 模型名，照旧拿它去判会得到"这个模型不收图"的假告警（或漏掉真告警）。
        */
       const imageDrafts = attachments.filter(isQuickImageDraft)
       if (mode === 'clarify' && imageDrafts.length > 0) {
-        const directory = resolveModelDirectory(runtime, id)
+        const outcome = resolveModelDirectoryOutcomeFor(runtime, id)
         /**
          * 每次带图发送都**现拉一次**对照表：它只有几十行、来自宿主内存里的配置，
          * 而缓存住会让"用户在设置里换了模型目录"之后判断长期失准。
          */
-        const chosen = effectiveSelection(quickModelSelection, directory?.store.getSnapshot().current)
+        const current = outcome.ok ? outcome.directory.store.getSnapshot().current : null
+        const chosen = selectionApplication.kind === 'apply'
+          ? selectionApplication.selection
+          : effectiveSelection(null, current)
         const verdict = evaluateImageSupport(await loadModelModalityTable(), chosen?.provider ?? '', chosen?.model ?? '')
         if (verdict.kind === 'rejected') throw new Error(verdict.reason)
       }
@@ -1609,9 +1773,11 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
           reservedTaskId,
           taskFolderPath,
           taskFolderRelative: taskFolderRelative === '' ? '' : `./${taskFolderRelative}/`,
-          modelLabel: quickModelSelection === null
-            ? '跟随 DSH 默认模型'
-            : quickModelSelection.effortLabel === undefined ? quickModelSelection.label : `${quickModelSelection.label} · ${quickModelSelection.effortLabel}`,
+          /**
+           * 本次会话模型那一行必须与**真的生效的那个**一致：
+           * 降级时不能把上次选的模型名写进提示词（那会让 AI 与用户都以为换了模型）。
+           */
+          modelLabel: effectiveModelLabel(selectionApplication, quickModelSelection),
         })
         : mode === 'consult'
           ? `你是“个人工作台”的任务协助助手。请针对下面这个任务提供咨询、拆解或复盘建议（咨询模式不执行）。\n\n任务 id：${task?.id}\n任务标题：${task?.title}\n任务描述：${task?.description || '（无）'}\n类型：${task?.typeCode} 优先级：${task?.priorityCode} 状态：${task?.statusCode}\n截止：${task?.effectiveDueAt ?? task?.dueAt ?? '无'}\n${memoryContext !== '' ? `\n任务共享记忆（同一任务/子树）：\n${memoryContext}` : ''}\n\n请先理解任务，再给出建议；如果信息不足，可以一次问一个问题。\n\n重要：如果用户要求把结论/补充信息保存回任务，请调用 workbench_update_task(task_id="${task?.id ?? ''}", description="...") 更新原任务；绝对不要调用 workbench_submit_task 新建任务。`
@@ -2945,14 +3111,39 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
           onSaveSettings={saveSettings}
           saving={settingsSaving}
           notifyPermission={notifyPerm}
+          /**
+           * 请求授权（v1.15.7）：**先判支不支持**再请求。
+           *
+           * 旧写法直接 `Notification.requestPermission()`，rc.2 上不支持的客户端会抛
+           * `TypeError`，而 `.then()` 后面没有 `.catch()` ⇒ 用户点完什么也看不到。
+           * 现在失败一定变成一条可读提示（控制台也留痕），不再有"点了没反应的按钮"。
+           */
           onRequestNotifyPermission={() => {
-            void Notification.requestPermission().then((perm) => {
-              setNotifyPerm(perm)
-              if (perm === 'granted') pushToast('桌面通知已开启', 'success')
+            void requestNotificationPermission(readNotificationCtor(globalThis)).then((result) => {
+              setNotifyPerm(result.permission)
+              if (result.ok) pushToast('桌面通知已开启', 'success')
+              else pushToast(`通知授权未成功：${result.reason}`, 'error')
             })
           }}
+          /**
+           * 发送测试通知（v1.15.7）：失败**必须可观测**。
+           *
+           * 旧写法 `try { new Notification(…) } catch { ignore }` 把失败吞得干干净净，
+           * 用户看到的就是"显示已开启但毫无反应"（本次 P0 的原始描述）。
+           * 现在：成功给一条成功提示，失败把**宿主原话**带出来。
+           * ⚠️ 成功的措辞只说"已交给浏览器"——系统级是否真的显示，网页侧读不到。
+           */
           onSendTestNotification={() => {
-            try { new Notification('dsh-personal-workbench 通知测试', { body: '如果你看到这条系统通知，说明桌面提醒已正常工作。' }) } catch { /* ignore */ }
+            const sent = sendSystemNotification({
+              NotificationCtor: readNotificationCtor(globalThis),
+              title: 'dsh-personal-workbench 通知测试',
+              body: '如果你看到这条系统通知，说明桌面提醒已正常工作。',
+            })
+            if (sent.ok) {
+              pushToast('测试通知已交给浏览器；若没看到，请检查系统的通知/专注助手设置', 'success')
+            } else {
+              pushToast(`测试通知发送失败：${sent.reason}`, 'error')
+            }
           }}
           reminderPolicy={reminderPolicy}
           onReminderPolicyChange={setReminderPolicy}

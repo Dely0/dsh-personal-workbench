@@ -9,6 +9,7 @@ import type {
   ReminderBotOption, ReminderChannelStatus, ReminderOptionsView, ReminderPolicyView, WorkbenchSettings,
 } from '../../shared/contracts.js'
 import { Modal } from './Modal.js'
+import { notificationStateText, type NotificationState } from '../notificationCapability.js'
 
 export interface DictionaryLike {
   kind: string
@@ -62,7 +63,16 @@ export interface SettingsModalProps {
   onSaveSettings: () => Promise<void>
   saving: boolean
 
-  notifyPermission: NotificationPermission | 'unsupported'
+  /**
+   * 系统通知的可用性**三态**（v1.15.7）。
+   *
+   * 旧类型是 `NotificationPermission | 'unsupported'`，把"已被拒绝"与"还没授权"
+   * 混成同一个 `default`，于是面板只能给出"授权按钮"这一种操作 ——
+   * 而 `denied` 时再点授权是**不会有任何反应**的（浏览器不再弹框），
+   * 用户看到的就是"点了没反应"。四态各有各的文案与操作，判定在
+   * `src/client/notificationCapability.ts`（唯一实现，可被 node --test 直接测）。
+   */
+  notifyPermission: NotificationState
   onRequestNotifyPermission: () => void
   onSendTestNotification: () => void
 
@@ -240,12 +250,18 @@ export function SettingsModal(props: SettingsModalProps): ReactNode {
                 </span>
               </label>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 8 }}>
-                {notifyPermission === 'unsupported' && <span className="wb-hint">当前浏览器不支持系统通知，将使用页内提示</span>}
-                {notifyPermission === 'granted' && <span style={{ fontSize: 12, color: '#2E9B7B' }}>浏览器通知已授权</span>}
-                {notifyPermission !== 'granted' && notifyPermission !== 'unsupported' && (
+                {/*
+                  三态文案与操作**由一处判定给出**（`notificationStateText`）：面板只负责渲染，
+                  不在组件里再判一遍状态（本项目最大的 bug 类别：同一个语义被独立计算多次）。
+                  `granted` 仍给「发送测试通知」，但文案要说清"已授权 ≠ 一定弹得出来"
+                  （系统级总开关/专注助手/按应用单关，网页读不到也管不了）。
+                */}
+                <span className="wb-hint">{notificationStateText(notifyPermission)}</span>
+                {notifyPermission === 'default' && (
                   <button className="wb-btn" onClick={onRequestNotifyPermission}>授权浏览器通知</button>
                 )}
                 {notifyPermission === 'granted' && <button className="wb-btn" onClick={onSendTestNotification}>发送测试通知</button>}
+                {notifyPermission === 'granted' && <span style={{ fontSize: 12, color: '#2E9B7B' }}>浏览器通知已授权</span>}
               </div>
             </section>
           )}

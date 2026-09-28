@@ -189,17 +189,27 @@ test('modelCapability: effectiveSelection 先用户所选，再会话当前投�
 // ② 扫源码，禁止"把可用性判定挂在它自己要控制的状态上"这个形态复活。
 // ---------------------------------------------------------------------------
 
-test('modelCapability: gateModelPicker 只吃两个事实，且两种原因分开说', () => {
-  assert.deepEqual(gateModelPicker({ hasDirectory: true, sessionId: 'sess-1' }), { ok: true })
-  // 有会话、但真的拿不到目录 → 才可以说"宿主没提供这个接口"
-  const noService = gateModelPicker({ hasDirectory: false, sessionId: 'sess-1' })
-  assert.equal(noService.ok, false)
-  assert.match(noService.reason, /未提供模型选择接口/)
+test('modelCapability: gateModelPicker 只吃"目录/会话/成因/有无出口"四个显式事实，成因原样透传', () => {
+  assert.deepEqual(
+    gateModelPicker({ hasDirectory: true, sessionId: 'sess-1', unavailableReason: '不该被用到', recoverable: false }),
+    { ok: true },
+  )
+  /**
+   * ⚠️ v1.15.7（2026-09-28 审查 F1）起门禁**不再自己拼"服务没提供"**：
+   * 成因由 `modelDirectoryUnavailableReason(outcome)` **唯一**产出、原样传进来。
+   * 所以这里断言的是"原样透传"，而不是某一句写死的话 —— 旧写法把
+   * "会话取不到目录（宿主的 directoryFor 抛 no binding）"也说成"未提供模型选择接口"，
+   * 而本机该 provider 明明是装着的。
+   */
+  const reason = '模型选择接口在场，但这次取不到该会话的模型目录：no binding'
+  const noDirectory = gateModelPicker({ hasDirectory: false, sessionId: 'sess-1', unavailableReason: reason, recoverable: true })
+  assert.equal(noDirectory.ok, false)
+  assert.match(noDirectory.reason, /no binding/, '成因必须原样透传')
   // 会话都还没就绪时**不许**说成"宿主没提供"（那会把排查方向带偏 —— 本次的教训）
-  const noSession = gateModelPicker({ hasDirectory: false, sessionId: '' })
+  const noSession = gateModelPicker({ hasDirectory: false, sessionId: '', unavailableReason: reason, recoverable: true })
   assert.equal(noSession.ok, false)
   assert.match(noSession.reason, /还没有可用的会话/)
-  assert.equal(/未提供模型选择接口/.test(noSession.reason), false)
+  assert.equal(/no binding/.test(noSession.reason), false)
 })
 
 test('回归 v1.15.2：可用性判定不得依赖它自己要控制的状态（扫源码）', () => {
@@ -216,9 +226,19 @@ test('回归 v1.15.2：可用性判定不得依赖它自己要控制的状态（
     false,
     '解析模型目录不许再挂在 open 上 —— 那会让"是否可用"取决于"是否已经打开"，必然假失败',
   )
-  // 目录必须**无条件**解析出来，再交给 gateModelPicker 判定
-  assert.match(source, /const directory = useMemo\(\s*\(\) => resolveModelDirectory\(runtime, directorySessionId\)/)
-  assert.match(source, /gateModelPicker\(\{ hasDirectory: directory !== undefined, sessionId: directorySessionId \}\)/)
+  /**
+   * 目录必须**无条件**解析出来（不许挂在 `open` 上），再交给 `gateModelPicker` 判定。
+   *
+   * v1.15.7 起解析结果从裸 `directory` 换成带成因的 `directoryOutcome`
+   * （见 `test/modelPickerDegrade.test.mjs`），这条断言的**意图不变**：
+   * 解析发生在渲染期、与 `open` 无关，且门禁的输入就是它的结果。
+   */
+  assert.match(source, /const directory = directoryOutcome\.ok \? directoryOutcome\.directory : undefined/)
+  assert.match(
+    source,
+    /const outcome = recomputeDirectory\(\)[\s\S]*?gateModelPicker\(\{\s*hasDirectory: outcome\.ok,/,
+    '门禁的输入必须是刚解析出来的结果，且读的是 ok 而不是"是否已经打开"',
+  )
   // 判定分支里不许再出现 `open`（判定与开关是两件事）
   const openPickerBody = /const openPicker = \(\): void => \{([\s\S]*?)\n  \}/.exec(source)
   assert.ok(openPickerBody !== null, '没找到 openPicker 实现（改名了就要同步这条断言）')

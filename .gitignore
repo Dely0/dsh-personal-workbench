@@ -43,4 +43,6 @@ src/**/*.bak-*
 # 结论与修法已写进 docs/design/2026-09-17-knowledge-recall.md；可重跑的探针在
 # scripts/repro/knowledge-recall/（那才是入库的那一份）。这里只留本机原始凭据。
 .review-evidence/
+# 交接文档（执行者写给审查者的简报）同样只是本机凭据，不入库。
+.review-handoff.md
 

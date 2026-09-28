@@ -38,6 +38,7 @@
     "src/client/intakeWorkspace.ts",
     "src/client/quickAttachments.ts",
     "src/client/modelCapability.ts",
+    "src/client/notificationCapability.ts",
     "src/client/popoverPlacement.ts",
     "src/client/quickWorkspaceDefault.ts",
     "src/review-memory.ts",
