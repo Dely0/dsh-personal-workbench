@@ -57,6 +57,28 @@ export const DEFAULT_TIMEOUTS = {
   commandMs: 900000,
 }
 
+/**
+ * **允许的"必需套件跳过"名单**（2026-10-02 加）。名单外的任何跳过仍然判失败 —— 不许静默跳过。
+ *
+ * 为什么需要它：`persona` 套件里有一条「真实模型调用 `workbench_load_persona`」按规格**就该跳过**
+ *（它需要一条真实模型链路；绑定/加载语义已在 H 层用真实 HTTP 证明过）。
+ * 而链的规则是"必需套件有任何跳过 ⇒ 失败"，于是**链永远红** —— 时间一长，
+ * 真正的红就被淹没在"又是这条"里（T6 那次就是这么记的：102 条通过、0 失败、1 条按规格跳过，退出码 1）。
+ *
+ * 纪律与 `scripts/release-preflight.mjs` 的欠账名单一致：
+ * - 名单外的跳过 → **失败**；
+ * - 名单里登记了、这次**没有**跳过 → 只是**提示**（说明真跑了模型链路，名单可以清理），不判失败
+ *   —— 与 preflight 的"还清必须销账即失败"刻意不同：这条跳过的发生与否**取决于环境**（有没有跑真实模型），
+ *   不是我们能控制的欠账。
+ */
+export const ALLOWED_REQUIRED_SKIPS = [
+  {
+    suite: 'persona',
+    check: '真实模型调用 workbench_load_persona 并返回所选角色正文（模型链路）',
+    reason: '需要真实模型链路；绑定/加载语义已在 H 层用真实 HTTP 证明（按规格记未验证，不记 pass）',
+  },
+]
+
 export function parseArgs(argv) {
   const options = { timeouts: { ...DEFAULT_TIMEOUTS } }
   const take = (index) => argv[index + 1]
@@ -452,7 +474,23 @@ export async function runDevVerify(options, deps = {}) {
               else if (result.summary === undefined) terminal = stop(EXIT.FAILED, 'suites', `套件 ${suite.id} 没有产出汇总（空计数/读不到 summary 都不算通过）`)
               else if (total <= 0) terminal = stop(EXIT.FAILED, 'suites', `套件 ${suite.id} 的用例数是 0 —— 空测试不算通过`)
               else if (failed > 0 || result.status !== 0) terminal = stop(EXIT.FAILED, 'suites', `套件 ${suite.id} 失败：passed ${passed} / failed ${failed} / skipped ${skipped}`)
-              else if (suite.required === true && skipped > 0) terminal = stop(EXIT.FAILED, 'suites', `必需套件 ${suite.id} 有 ${skipped} 项被跳过 —— skipped 意味着不通过`)
+              else if (suite.required === true && skipped > 0) {
+                /**
+                 * 必需套件有跳过：**只放过显式登记过的那些**（见 `ALLOWED_REQUIRED_SKIPS`）。
+                 * 名单外的跳过一律失败 —— 不许静默跳过；把跳过的**条目 id** 也打出来，免得只看到计数。
+                 */
+                const skippedIds = Array.isArray(summary.skippedChecks) ? summary.skippedChecks : []
+                const allowed = ALLOWED_REQUIRED_SKIPS.filter((entry) => entry.suite === suite.id)
+                const isAllowed = (id) => allowed.some((entry) => entry.check === id)
+                const unregistered = skippedIds.filter((id) => !isAllowed(id))
+                if (unregistered.length > 0 || skippedIds.length === 0) {
+                  terminal = stop(EXIT.FAILED, 'suites', `必需套件 ${suite.id} 有 ${skipped} 项被跳过且未登记：`
+                    + `${unregistered.length > 0 ? unregistered.join('｜') : '(套件没报出跳过条目 id，无法核对名单)'}`)
+                } else {
+                  record('suites', 'pass', `套件 ${suite.id}：passed ${passed} / failed ${failed} / skipped ${skipped}`
+                    + `（✔ 跳过项已登记：${skippedIds.join('｜')}）`)
+                }
+              }
               else record('suites', 'pass', `套件 ${suite.id}：passed ${passed} / failed ${failed} / skipped ${skipped}`)
             }
           }

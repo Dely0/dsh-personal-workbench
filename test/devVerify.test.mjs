@@ -21,7 +21,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { EXIT, runDevVerify } from '../scripts/dev-verify.mjs'
+import { ALLOWED_REQUIRED_SKIPS, EXIT, runDevVerify } from '../scripts/dev-verify.mjs'
 import { createEvidenceRun, EVIDENCE_ROOT, makeRunId, readAllText, redact } from '../scripts/verify/evidence.mjs'
 import { STAGE_PLAN } from '../scripts/verify/safety.mjs'
 import { BUILD_INFO_RELATIVE, collectInputFiles, computeBuildId, writeBuildInfo } from '../scripts/build-info.mjs'
@@ -412,6 +412,42 @@ test('AX-V09：套件超时 → 退出码 3，且不进入后续阶段', async (
   const result = await runDevVerify(baseOptions(), deps)
   assert.equal(result.exitCode, EXIT.TIMEOUT)
   assert.equal(findStage(result, 'suites')?.status, 'timeout')
+})
+
+/**
+ * 必需套件的跳过：**登记过的放过、没登记的仍然失败**（2026-10-02 加）。
+ *
+ * 为什么这条要有：`persona` 那条"真实模型调用"按规格就该跳过，而旧规则"必需套件有任何跳过 ⇒ 失败"
+ * 让链**永远红** —— 真正的红会被淹没在"又是这条"里。改成显式名单后必须两条都锁住：
+ * ① 名单内的跳过 → 通过；② 名单外的跳过 → 仍然失败（**不许静默跳过**）。
+ */
+test('AX-V10：必需套件跳过 —— 名单内放过、名单外仍然失败（不许静默跳过）', async () => {
+  const allowed = ALLOWED_REQUIRED_SKIPS[0]
+  const manifest = {
+    suites: [{ id: allowed.suite, kind: 'new', required: true, status: 'active', repoPath: `scripts/verify/suites/${allowed.suite}.mjs` }],
+  }
+  const summaryFor = (skippedChecks) => ({
+    status: 0, timedOut: false, ms: 5,
+    summary: { passed: 5, failed: 0, skipped: skippedChecks.length, total: 5 + skippedChecks.length, skippedChecks },
+  })
+
+  // ① 名单内的跳过 ⇒ 通过，且日志里要写明"跳过项已登记"
+  const allowedEnv = makeEnv({ manifest, runSuiteProcess: () => summaryFor([allowed.check]) })
+  const allowedResult = await runDevVerify(baseOptions(), allowedEnv.deps)
+  assert.equal(allowedResult.exitCode, EXIT.OK, '登记过的跳过不该拦发布')
+  assert.match(findStage(allowedResult, 'suites')?.detail ?? '', /跳过项已登记/, '要显式说明这次跳过是登记过的')
+
+  // ② 名单外的跳过 ⇒ 失败，且把**跳过的条目 id** 打出来（只给计数没法核对）
+  const otherEnv = makeEnv({ manifest, runSuiteProcess: () => summaryFor(['某条没登记过的检查']) })
+  const otherResult = await runDevVerify(baseOptions(), otherEnv.deps)
+  assert.equal(otherResult.exitCode, EXIT.FAILED, '名单外的跳过必须失败')
+  assert.match(findStage(otherResult, 'suites')?.detail ?? '', /某条没登记过的检查/, '失败原因要带上跳过的条目 id')
+
+  // ③ 套件连"跳过了哪条"都没报出来 ⇒ 也失败（没 id 就没法核对名单）
+  const noIdEnv = makeEnv({ manifest, runSuiteProcess: () => ({ status: 0, timedOut: false, ms: 5, summary: { passed: 5, failed: 0, skipped: 1, total: 6 } }) })
+  const noIdResult = await runDevVerify(baseOptions(), noIdEnv.deps)
+  assert.equal(noIdResult.exitCode, EXIT.FAILED, '报不出跳过项 id 时不许放行')
+  assert.match(findStage(noIdResult, 'suites')?.detail ?? '', /无法核对名单/)
 })
 
 test('AX-V09：链内部抛异常 → 退出码 1（finally 绝不覆盖成 0），且清理与证据仍然发生', async () => {

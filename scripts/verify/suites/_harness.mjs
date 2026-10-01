@@ -242,7 +242,20 @@ export function createSuite(options) {
       const passed = suite.passed.length
       const failed = suite.failed.length
       const skipped = suite.skipped.length
-      return { passed, failed, skipped, total: checks.length }
+      /**
+       * `skippedChecks` / `failedChecks` 带上**条目 id**：链要判"这条跳过是不是登记过的"
+       *（2026-10-02 加）。只给计数的话，链只能"必需套件有任何跳过就判失败" ——
+       * 而 persona 那条"真实模型调用"按规格就该跳过，于是链**永远红**，
+       * 真正的红反而被淹没在"又一次这条"里。
+       */
+      return {
+        passed,
+        failed,
+        skipped,
+        total: checks.length,
+        skippedChecks: suite.skipped.map((entry) => entry.id),
+        failedChecks: suite.failed.map((entry) => entry.id),
+      }
     },
 
     /**
