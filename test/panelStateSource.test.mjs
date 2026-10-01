@@ -40,16 +40,28 @@ test('index.tsx 里不得再出现"自己算该不该显示"的表达式', () =>
     'isDisplayed() 不得再内联判定（含本地回落的那个三元）')
 
   /**
-   * "宿主选中了我们吗"这个比较**只允许有一处**：`hostSelectedFromMirror()`
+   * "宿主选中了我们吗"这个比较**至多允许一处**：`hostSelectedFromMirror()`
    * （它给槽位句柄用的三态值：true / false / undefined=未知）。
    *
    * 任何**新的**内联比较都意味着判定又开始散落 —— 这正是 bug 2/6/9 的成因，
-   * 所以这里用"允许清单 + 计数"把它按住：出现第 2 处就失败。
+   * 所以这里用"允许清单 + 位置"把它按住：出现第 2 处就失败。
+   *
+   * ⚠️ 2026-10-01 由"恰好 1 处"放宽为"至多 1 处"（遗留清单 P3-3）：
+   * 唯一那处比较的消费者是 `slotApi.isHostSelected`，一旦它被去掉，计数就变成 0 ——
+   * 那是**假失败**，而真正要防的是"判定散落"（≥2 处）。放宽不等于放弃约束：
+   * 下面继续钉住"若存在，必须在 `hostSelectedFromMirror` 的函数体内"。
    */
-  const comparisons = code.match(/activePanelId\s*===\s*PANEL_NAME|hostPanelId\s*===\s*PANEL_NAME/g) ?? []
-  assert.equal(comparisons.length, 1,
-    `index.tsx 里应有且仅有 1 处"宿主选中我们"的比较（hostSelectedFromMirror），实际 ${comparisons.length} 处`)
-  assert.ok(code.includes('const hostSelectedFromMirror = ()'), '这唯一一处的名字必须是 hostSelectedFromMirror')
+  const COMPARISON = /activePanelId\s*===\s*PANEL_NAME|hostPanelId\s*===\s*PANEL_NAME/
+  const comparisons = code.match(new RegExp(COMPARISON.source, 'g')) ?? []
+  assert.ok(comparisons.length <= 1,
+    `index.tsx 里"宿主选中我们"的比较至多 1 处（hostSelectedFromMirror），实际 ${comparisons.length} 处`)
+  assert.ok(code.includes('const hostSelectedFromMirror = ()'), '唯一允许的比较必须写在 hostSelectedFromMirror 里')
+  if (comparisons.length === 1) {
+    const start = code.indexOf('const hostSelectedFromMirror = (')
+    const nextDecl = code.indexOf('\n  const ', start)
+    const body = code.slice(start, nextDecl === -1 ? code.length : nextDecl)
+    assert.match(body, COMPARISON, '唯一那处比较必须在 hostSelectedFromMirror 函数体内，不许散落到别处')
+  }
 
   // 取值可以，判定不行：index.tsx 必须真的调这两个出口
   assert.ok(code.includes('shouldShowPanel('), 'index.tsx 必须调用 shouldShowPanel')

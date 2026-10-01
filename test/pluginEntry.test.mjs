@@ -16,7 +16,7 @@
  *
  * 3. **peer 区间覆盖"能力门槛"与当前最新核心，且下界不被抬高**：
  *    `dsh-commands` 的区间就是 `MIN_HOST_VERSION` 所在的那条 —— 必须同时含
- *    `0.1.5-rc.1`（= `MIN_HOST_VERSION`）与 `0.2.0-rc.1`，且**不含** `0.1.0-rc.5`。
+ *    `0.1.5-rc.1`（= `MIN_HOST_VERSION`）与 `0.2.0-rc.2`，且**不含** `0.1.0-rc.5`。
  *
  *    ⚠️ 这里刻意**不写 `assert.equal(peers[...], '^' + MIN_HOST_VERSION)`**（曾经就是这么写的，
  *    0.2.0-rc.1 一到就变成假红）：**"最低能力门槛"与"声明兼容范围"是两件事** ——
@@ -44,7 +44,7 @@ const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url),
 const HOST_HEAD = '0.1.5-rc.1'
 
 /** 当前必须被覆盖的最新核心（DSH 每升一个大版本，把它往前推一格）。 */
-const NEWEST_HOST = '0.2.0-rc.1'
+const NEWEST_HOST = '0.2.0-rc.2'
 
 test('pluginEntry: 宿主 inject 包含 commands（前置），且绝不包含 llm（可选增强）', () => {
   assert.ok(plugin.inject.includes('commands'), '/workbench 命令需要 commands 服务，缺了就不该启动')

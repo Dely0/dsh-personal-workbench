@@ -180,3 +180,57 @@ test('借会话绑定只允许出现在 sessionRef.ts（业务代码不许直接
   assert.deepEqual(offenders, [],
     '这些地方绕过了 sessionRef.ts 的唯一实现（acquireSession / openSessionInMainView）：\n  - ' + offenders.join('\n  - '))
 })
+
+/**
+ * 批次2 #2（2026-10-01）真实事故的**层级判据**：
+ *
+ * 工作区的「浏览…」弹窗（LocalDocModal）被**从另一个弹窗里**打开（快速录入 / 新建任务），
+ * 而两处层级都错：① 它内联在面板里，而对话框 portal 到 document.body（DOM 层级上排不上）；
+ * ② `.wb-modal-mask` 的 z-index 是 200，低于对话框的 `.wb-overlay`(300)。
+ * 于是它整块被盖住：真实鼠标点在「选择此文件夹」的坐标上，命中的是对话框里的元素
+ * —— 表现为"点了没反应、值也不落进去"（套件 workspace-picker 的 elementFromPoint 诊断抓到的）。
+ *
+ * 两条判据缺一条就会复发：
+ * 1. 遮罩的 z-index 必须**高于** `.wb-overlay`，且**低于**对话框内浮层（`.wb-model-scrim` 329）；
+ * 2. LocalDocModal 必须 portal 到 document.body（与 Modal 同一机制）。
+ */
+test('层级：文档/目录弹窗必须盖得住打开它的对话框，且 portal 到 body', () => {
+  const styles = readFileSync(new URL('../src/client/styles.ts', import.meta.url), 'utf8')
+  const zIndexOf = (selector) => {
+    const match = new RegExp(`\\${selector}\\s*\\{[^}]*z-index:\\s*(-?\\d+)`, 's').exec(styles)
+    return match === null ? null : Number(match[1])
+  }
+  const mask = zIndexOf('.wb-modal-mask')
+  const overlay = zIndexOf('.wb-overlay')
+  const scrim = zIndexOf('.wb-model-scrim')
+  assert.ok(mask !== null, 'styles.ts 里找不到 .wb-modal-mask 的 z-index')
+  assert.ok(overlay !== null, 'styles.ts 里找不到 .wb-overlay 的 z-index')
+  assert.ok(scrim !== null, 'styles.ts 里找不到 .wb-model-scrim 的 z-index')
+  assert.ok(mask > overlay,
+    `文档弹窗遮罩(z-index:${mask})必须高于对话框遮罩(.wb-overlay:${overlay})`
+    + ' —— 否则从对话框里打开的「浏览…」会被整块盖住（真实事故：点了没反应）')
+  assert.ok(mask < scrim,
+    `文档弹窗遮罩(z-index:${mask})必须低于对话框内浮层(.wb-model-scrim:${scrim})`
+    + ' —— 浮层是弹窗内部的菜单，必须还能盖住它')
+
+  const modal = readFileSync(new URL('../src/client/components/LocalDocModal.tsx', import.meta.url), 'utf8')
+  assert.match(modal, /createPortal\(/, 'LocalDocModal 必须 portal（内联在面板里会被祖先的 overflow/transform 裁剪，且层级排不上）')
+  assert.match(modal, /document\.body,?\s*\)/s, 'portal 的目标必须是 document.body（与 components/Modal.tsx 一致）')
+})
+
+/**
+ * 日期面板三页签的间距（用户 2026-10-01 实测反馈：
+ * "计划/已完成/报告 这三个 Tab 切换控件和下面控件的间隔几乎没有，有点丑"）。
+ *
+ * 间距必须写在**页签的 margin-bottom** 上：三个页签下面跟的东西不一样
+ *（计划 → 排序行 + 计划面板；已完成 → 列表；报告 → 卡片），
+ * 写在内容一侧就会走出三种间距。这里是静态判据，真实几何由 `suites/day-panel.mjs` 量。
+ */
+test('间距：日期面板三页签与下方内容必须留出间隔（写在页签上，而不是内容上）', () => {
+  const styles = readFileSync(new URL('../src/client/styles.ts', import.meta.url), 'utf8')
+  assert.match(styles, /\.wb-segmented\[data-day-tabs\]\s*\{\s*margin-bottom:\s*(8|9|1\d)px/,
+    '缺少 [data-day-tabs] 的 margin-bottom —— 页签会与下方内容挤在一起（用户已反馈过）')
+  const dayPanel = readFileSync(new URL('../src/client/components/DayPanel.tsx', import.meta.url), 'utf8')
+  assert.match(dayPanel, /data-day-tabs/, '页签容器必须带 data-day-tabs（样式与判据都靠它定位）')
+  assert.match(dayPanel, /data-day-tree=\{tab\}/, '内容区必须带 data-day-tree（间距判据要能量到它）')
+})

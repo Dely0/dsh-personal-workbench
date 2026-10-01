@@ -190,12 +190,22 @@ test('接线 v1.15.2：把工作区记进「最近手动选择」必须先过 to
   /**
    * 复审 N3：F1 的**用户可见出口**必须真的接在界面上 ——
    * 只守 `forgetQuickWorkspace` 的函数体的话，把渲染条件改成 false 也能全绿。
+   *
+   * ⚠️ 2026-10-01 更新（批次2 #2）：按钮搬进了三个入口共用的 `WorkspacePicker`，
+   * 渲染条件从"内联三元"变成"作为 `showForget` 传入"；空值时**不再整块隐藏，而是渲染成 disabled**
+   * （组件里 `disabled={disabled || String(value ?? '').trim() === ''}`）。
+   * 这是判据跟实现走、不是放宽：意图仍是"判定说上次手动选择且用户没动过时，必须给得出这个出口"，
+   * 而空值不可点由组件的 disabled 判据单独钉住。
    */
   assert.match(stripped,
-    /\{quickWorkspaceSource === 'last-manual' && quickWorkspace\.trim\(\) !== '' && !quickWorkspaceTouched && \(/,
-    '「不再记住」按钮的渲染条件少了就等于这个出口不存在（判定说"上次手动选择"时必须给得出按钮）')
-  assert.match(stripped, /onClick=\{\(\) => void forgetQuickWorkspace\(quickWorkspace\)\}/,
+    /showForget=\{quickWorkspaceSource === 'last-manual' && !quickWorkspaceTouched\}/,
+    '「不再记住」的显示条件必须仍由判定给出（判定说"上次手动选择"且用户没动过）')
+  assert.match(stripped, /onForget=\{\(\) => void forgetQuickWorkspace\(quickWorkspace\)\}/,
     '按钮必须真的调用 forgetQuickWorkspace')
+  const pickerSource = readSource('../src/client/components/WorkspacePicker.tsx').stripped
+  assert.match(pickerSource, /data-workspace-forget/, '组件里必须真有这个按钮')
+  assert.match(pickerSource, /disabled=\{disabled \|\| String\(value \?\? ''\)\.trim\(\) === ''\}/,
+    '没有可忘的东西时按钮要变灰（而不是渲染一个点了没反应的按钮）')
 })
 
 /**
@@ -205,16 +215,27 @@ test('接线 v1.15.2：把工作区记进「最近手动选择」必须先过 to
  * 只盯那两个函数的话，未来在别处加一句 `setQuickWorkspace(task.effectiveWorkspacePath)`
  * （换个入口、加个"跟随任务"按钮）照样能溜过去。
  */
-test('接线 v1.15.2：setQuickWorkspace 的实参只允许是判定结果或用户输入', () => {
+test('接线 v1.15.2：setQuickWorkspace 的实参只允许是判定结果或用户交互', () => {
   const { stripped } = readSource('../src/client/index.tsx')
   const args = [...stripped.matchAll(/setQuickWorkspace\(([^)]*)\)/g)].map((matched) => matched[1].trim())
   assert.ok(args.length >= 2, `预期至少两处写入（打开时预填 + 用户输入），实际 ${args.length} 处`)
+  /**
+   * ⚠️ 2026-10-01 更新（批次2 #2）：用户交互多了一条路径 ——
+   * 「浏览…」弹窗选中的目录（`picked`，来自 `applyWorkspaceDir`），以及在
+   * `WorkspacePicker` 回调里收到的 `path`（下拉选中或手打都走同一个回调）。
+   *
+   * **这不是放宽**：允许清单仍然是"判定结果 + 有用户在场的交互"，
+   * 下面同时**逐条禁止**实参里出现任务相关的东西 —— 那才是本事故的成因
+   * （"执行过任务 A 之后默认值变成 A 的工作区"）。
+   */
+  const ALLOWED = new Set(['decided.path', 'e.target.value', 'path', 'picked'])
   for (const argument of args) {
-    assert.ok(
-      argument === 'decided.path' || argument === 'e.target.value',
+    assert.ok(ALLOWED.has(argument),
       `setQuickWorkspace(${argument}) 不是允许的形态：预填值只能来自 decideQuickWorkspaceDefault 的结果`
-        + '或用户输入 —— 任何"从某个任务/最近执行过的东西派生"的写法都会重新引入本次事故',
-    )
+        + '或有用户在场的交互（手打 / 下拉选中 / 浏览弹窗选目录）')
+    assert.doesNotMatch(argument, /task|selected|effectiveWorkspacePath/i,
+      `setQuickWorkspace(${argument}) 读到了任务相关的东西`
+        + ' —— 这正是"执行过任务 A 之后默认值变成 A 的工作区"的成因')
   }
 })
 

@@ -243,7 +243,131 @@ S17-N必须新增progress/daily-effort/persona/verify-safety套件，覆盖本�
 
 证据放gitignored `test-results/workbench-verify/<runId>/`，summary.json+summary.md+截图+脱敏stdout/stderr。JSON至少记录runId、构建标识、目标profile/端口、DB独立检查结论、阶段耗时/exitCode、套件passed/failed/skipped（必需skipped意味着不通过）和证据相对路径；不放完整秘密配置/未脱敏运行日志。真实浏览器点击+重读DOM/接口/截图，不能只el.click或只截图。
 
-## 8. 开发完成定义
+## 8. 批次2 规格（2026-10-01 用户拍板）
+
+> §1–§7 是批次 1/1.5 的规格（**已实现并随 v1.16.0 发布**，实证见 `T6b-ui-fixes-handover.md`）。
+> 本节是批次 2 的规格，由用户 2026-10-01 的三条拍板驱动：
+> ① 范围＝**先零风险小项 → 补规格 → 再做 #2 与 S14**；② S14 树口径＝
+> **「当日到期 ∪ 当日计划项 ∪ 进行中」并逐条标来源**；③ **先把测试实例宿主对齐到 DSH 0.2.0-rc.2**。
+> 新增判据沿用 acceptance.md 的编号风格，本批次用 `AX-T`（日期面板）/`AX-W`（工作区）/`AX-H`（宿主声明）前缀。
+
+### 8.1 范围与顺序
+
+| 阶段 | 内容 | 状态 |
+|---|---|---|
+| A 零风险小项 | #1 版本声明常量、README 术语、P3-3 脆断言 | ✅ 已完成（2026-10-01） |
+| 0 环境 | 测试实例宿主对齐到 0.2.0-rc.2 | ✅ 已完成（2026-10-01，三层验收全过，见 8.6） |
+| B 规格 | 本节 + ADR0001 口径冻结 + acceptance 新判据 + plan 片段 | 本节 |
+| C 实施 | #2 工作区双模式 → S14 日期面板收敛 → WorkbenchApp 拆分 | 未开始 |
+| D 不修 | #3 模型选择失效（宿主侧缺陷）→ 复现记录 + 上报决策 | 见 8.5 |
+
+### 8.2 S14 日期面板收敛（ADR0001）
+
+**目标行为**（权威源＝ADR0001 的「口径冻结」一节）：
+- 任务树 = **当日到期 ∪ 当日计划项 ∪ 进行中**；行上标出**全部**命中来源；只收 open 任务；
+  `cancelled` 不进树、`done` 走「已完成」页签。
+- 「今日」= 该面板的 **today 实例** + 统计卡 + 容量条；「日历」= 周/月容器，选中某天进**同一个**面板，
+  页签仍是 计划 / 已完成 / 报告（原需求 #5「今日要不要一个已完成页签」由此自动获得）。
+- 今日页**不再列出全部未完成任务** —— 可见集合变窄，是刻意变更，要写进发布说明。
+
+**唯一实现**：三个来源的判定收进 `src/shared/dailyPlanPolicy.ts` 的**同一个纯函数**，
+候选池 `planCandidates()` 与面板树**都从它派生**；组件里禁止再 filter 一遍（判据 AX-T02）。
+
+**不改**：容量口径（ADR0002）、进度口径（ADR0003/0004）、计划项结束状态（ADR0007）、
+提醒与日历到期展示的既有语义、父任务自动完成/级联/repair。
+
+**组件边界**（先立边界再搬代码）：
+- 新增 `src/client/components/DayPanel.tsx`：承载三页签 + 计划面板 + 任务树 + 报告，props 显式；
+- 来源判定与行标签是**纯函数**（进 `src/shared/`，可被 `node --test` 直接测）；
+- `src/client/index.tsx` 只保留"选中的是哪一天 + 这一天显示什么"的装配，两个入口都指向它。
+- **出口判据**：`index.tsx` 行数必须比改动前**变小**（数值写进提交信息，**不写死进文档**）。
+
+**WorkbenchApp 拆分必须排在 S14 之后**（ADR0001 Consequences）。施工图
+`docs/design/2026-09-09-client-split-backlog.md` **已过时**（写 1958 行 + 行号地图、WSL 构建、
+已不存在的 `D:\DSHWorkspace\_probe\route-regress.mjs`；现状 5631 行、Windows 原生构建），
+实施前必须先按现状重写该文件，不许照抄行号地图。
+
+**未决**：逾期任务是否作为第 4 个来源（见 ADR0001 的 ⚠️ 条）——不在本片段内顺手做。
+
+### 8.3 #2 工作区双模式
+
+**目标行为**：新建任务页与快速录入页的「AI 会话工作区」都支持两种模式 ——
+① **已有工作区下拉**（真下拉，不是 datalist 提示）② **文件夹弹框浏览选择**。
+
+- 已有工作区的数据源＝`workspaces.list.getSnapshot().items`（`{ workspaceId, path }`）——
+  现有读取处是 `src/client/index.tsx#openWorkspacePaths`；下拉**不得**再算一份候选。
+- 浏览的数据源＝复用 `GET /api/workbench/knowledge/list-local-dir`
+  （`src/api/localDirRoute.ts`：loopback-only、目录+文件、盘符哨兵 `ROOTS_PARENT`、单目录 500 条上限）
+  与 `src/client/components/LocalDocModal.tsx`。
+- **复用要求**：`LocalDocModal` 目前只对**文件**给「选择」，目录只能「进入」——
+  必须加"选择此文件夹"模式（`mode: 'file' | 'dir'`），**不是**复制第二份弹窗。
+- 三个入口（快速录入 / 新建任务 / 编辑任务）共用同一份选择控件与判定；
+  `quickWorkspaceDefault` 的默认值口径与「不再记住」出口行为**不变**。
+- 值仍落到任务字段 `workspacePath`（空 = 走既有继承逻辑）；**不新增字段、不改接口契约**。
+
+**失败路径**（不许静默吞）：目录不存在/不可读/不是目录 → 弹框内可读中文错误；
+宿主 `workspaces` 服务缺失 → 下拉退化为空并说明原因，不抛异常。
+
+### 8.4 #1 版本声明（阶段 A 已完成，类型源待办）
+
+- **已完成**：`test/pluginEntry.test.mjs#NEWEST_HOST` 推到 `0.2.0-rc.2`（peer 区间
+  `^0.1.5-rc.1 || ^0.2.0-rc.1` 已语义覆盖 rc.2，下界不动）。
+- **待办（不是零风险，需独立验证）**：构建期类型源仍在 0.1.x 线
+  （`devDependencies` 里 `@deepseek-ai/dsh-llm ^0.1.0-rc.6`、`@deepseek-ai/cordis ^4.0.1`），
+  而运行宿主是 0.2.0-rc.2。对齐要付一次依赖升级 + 完整 typecheck/build/测试（判据 AX-H02）。
+- **事实记录**：桌面端 19387 的宿主核心是 **0.2.0-rc.2**（app.asar 内
+  `@deepseek-ai/dsh-desktop-runtime@0.2.0-rc.2`，整套 `@deepseek-ai/dsh-*` 同版本）；
+  全局 CLI 与测试实例仍是 **0.1.7-rc.2**（见 8.6）。
+  ⚠️ 不要把 `upgrade-verify-rc2-canary-20260927` 当成 0.2.0 的证据：那个 "rc2" 指的是 **0.1.7-rc.2**
+  （`cutover-0.1.7-rc.2-*.ps1` 里写死校验 `version -ne '0.1.7-rc.2'` 就抛错）。
+
+### 8.5 #3 模型选择失效：不是本仓库的修复项
+
+T6b 已判定为**宿主侧缺陷**（`dsh-client-ui-model-selection` 的 `static inject` 声明了
+`remote.session`，而 `dsh-api-session-controller` 的 `dsh.client.inject` 没有任何地方 provide 它；
+web profile 正常、桌面端应用内组合异常）。本批次只做三件事：
+① 工作台侧不再反复弹红字、「跟随 DSH 默认模型」任何情况可点且真清残留（T6b 已做）；
+② 在 `docs/issues/` 留一份带链路的复现记录供上报；③ 是否上报由用户决定。
+**不改 `profiles/node_modules` 里的任何东西。**
+
+### 8.6 测试实例宿主对齐（阶段 0）——✅ 已完成 2026-10-01
+
+测试实例（`web` profile / 3080）原本由全局 CLI `@deepseek-ai/dsh@0.1.7-rc.2` 启动，
+而用户实际宿主是 0.2.0-rc.2。**2026-10-01 已完成对齐**，实证：
+
+- 全局 CLI 核心：`0.1.7-rc.2 → 0.2.0-rc.2`；旧核心停放在
+  `%APPDATA%\npm\node_modules\@deepseek-ai\dsh.old-rc2align-20261001-2245`（回滚＝改回来 + 重启 3080）。
+- 3080 实例：`dsh --profile web --port 3080`，health 200，插件 1.15.8 dev 构建 / verify-web.db schema 19 / 197 条。
+- 三层验收：服务层 PASS / 接口层 PASS（带 token 首页 303 + health 200）/ **交互层 PASS（真实浏览器新建会话 → 真实发消息 → 模型回复命中）**，页面无 console error。
+- 期间**未**动 19387（pid 37472 未变）、**未**迁移正式库（仍 schema 19 / 94 条）。
+
+**为什么这次能过、第一次不能**：0.2.0-rc.2 的启动预检会 skip 声明只到 0.1.x 的插件
+（当时是 `@michengai/dsh-skills-manager@1.1.4`、`@changfenhuang/dsh-genui@0.11.2`、`dshmarket@1.66.2`）。
+用户把插件升到 `skills-manager@1.1.8` / `genui@0.11.3`，剩下的 `dshmarket@1.66.2` 由本次补到 **1.66.6**
+（走门禁 A：备份 + 零增量 diff，只有 `dshmarket` 那一行变化）后，dump 门禁即通过。
+
+**两个曾把失败误判成"宿主坏了"的假故障**（已在团队记忆沉淀）：
+① 验收脚本默认读 `%TEMP%\dsh-server-<port>.log` 拿到**上一次启动的旧 token** → 第 2 层 401，
+且失败后的清理会撞 libuv 断言崩成 `0xC0000409`；必须用 `--token-log <本次启动的 stdout 日志>`。
+② 0.2.0-rc.2 首启会弹「预览版说明」，挡住自动化交互（表现为第 3 层干净退出 4、但页面无 console error）；
+先点掉「继续」即恢复正常。
+
+**共享面（仍然成立）**：`~/.dsh/profiles/node_modules/@deepseek-ai/*` 是指向全局 CLI 包树的符号链接农场，
+切换后实测已自动指向 0.2.0-rc.2（`dsh` / `dsh-host-webserver` 均为 rc.2）；
+桌面端自身核心在 asar 内不受影响，但其插件解析核心包会跟着走到 rc.2。
+`cordis.patch.yml` 里 `patch: entry "dsh-pocket" not found` 是**切换前就存在**的噪音（web profile 未装 dsh-pocket），不阻断启动。
+
+
+### 8.7 状态所有权（批次2 增补）
+
+| 语义 | 唯一权威源 | 写入者 | 禁止联动 |
+|---|---|---|---|
+| 日期面板的任务树 | `src/shared/dailyPlanPolicy.ts` 的来源判定纯函数输出 | 无（派生） | 组件不得内联第二份过滤/来源公式 |
+| 某日「当日计划项」 | 该日 `daily_plans.items` | 计划草稿确认 / 用户编辑 | 不因子任务或进度变化重算 |
+| AI 会话工作区选择 | 任务字段 `workspacePath`（空＝继承） | 用户在三个入口选择 | 不新增字段、不写进计划/角色/进度 |
+| 宿主兼容声明 | `package.json#peerDependencies` | 人工（发布节奏） | 不得因本地迭代抬高下界或写成 `*` |
+
+## 9. 开发完成定义
 
 具体判据见acceptance.md；至少 typecheck/build/完整node测试/安全预检负向测试/新增浏览器套件与旧回归均通过。每个关键禁止策略都做定向变异：暂时拆掉防护应变红，再恢复变绿；在临时副本操作，不损坏用户未提交文件。
 

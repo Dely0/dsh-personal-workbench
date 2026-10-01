@@ -71,8 +71,20 @@ test('AX-C02 截断提示必须同时出现在提示词与发起窗口（不宣�
   assert.match(policySource, /另有 \$\{omitted\} 条未列出/)
   assert.match(promptSource, /\$\{notice\} —— 未列出的条目/)
   assert.match(promptSource, /不要声称已对全量做排序/)
-  assert.match(indexSource, /todayPromptInfo\.truncated/)
-  assert.match(indexSource, /pickedPromptInfo\.truncated/)
+  /**
+   * ⚠️ 2026-10-01 更新（批次2 D15）：发起窗口的提示从 `index.tsx` 的两处内联
+   *（todayPromptInfo / pickedPromptInfo）经**数据层** `dayPanelModel.ts` 送进
+   * 日期面板组件 `DayPanel.tsx`。判据跟着实现走、**不是放宽**：
+   * 要求的仍然是"截断时界面必须说出来"，所以三段链路都要在 ——
+   * index.tsx 把两个视图的提示都交给模型、模型按当前视图选一个、面板把它显示出来。
+   */
+  assert.match(indexSource, /todayPromptInfo,\n\s+pickedPromptInfo,/, 'index.tsx 必须把两个视图的截断信息都交给数据层')
+  const model = readFileSync(new URL('../src/client/dayPanelModel.ts', import.meta.url), 'utf8')
+  assert.match(model, /const promptInfo = isTodayView \? todayPromptInfo : pickedPromptInfo/,
+    '数据层必须按当前视图给出对应的截断信息（两处各判一遍就是"同一语义两处实现"）')
+  const dayPanel = readFileSync(new URL('../src/client/components/DayPanel.tsx', import.meta.url), 'utf8')
+  assert.match(dayPanel, /promptInfo\.truncated/, '日期面板必须在截断时显示提示（不宣称全量）')
+  assert.match(dayPanel, /role="status"/, '提示要带 role=status（无障碍与判据都要）')
 })
 
 test('AX-C06 客户端容量接线是薄的：不求和、不判 open、不内联默认耗时', () => {

@@ -22,7 +22,10 @@ import {
   type TaskTreeNode,
 } from './taskFilterSort.js'
 import { isWslStylePath, joinPath, normalizeWindowsPathToWsl } from './workspacePath.js'
-import { DEFAULT_ESTIMATE_MINUTES, MAX_ESTIMATE_MINUTES, capacityTodayKey, computeTodayCapacity, todayPlanCandidates } from './capacity.js'
+import { DEFAULT_ESTIMATE_MINUTES, MAX_ESTIMATE_MINUTES, capacityDayRange, capacityTodayKey, computeTodayCapacity, todayPlanCandidates } from './capacity.js'
+import { dayPanelSourceLabel, dayPanelTreeSources } from '../shared/dailyPlanPolicy.js'
+import { DayPanel } from './components/DayPanel.js'
+import { useDayPanelModel } from './dayPanelModel.js'
 import { buildPlanPrompt } from './dailyPlanPrompt.js'
 import { WORKBENCH_CSS } from './styles.js'
 import { ACTIVE_ATTR, OFFICIAL_ATTR, PANEL_NAME, PENDING_ATTR, VIEW_ATTR } from './constants.js'
@@ -66,6 +69,9 @@ import { TaskProgress } from './components/TaskProgress.js'
 import { pendingCompletionMap, taskProgressView } from './taskProgressView.js'
 import { ALL, buildTabs, TabBar, toggleTab } from './components/TabBar.js'
 import { LocalDocModal, type LocalDirListing } from './components/LocalDocModal.js'
+import { WorkspacePicker } from './components/WorkspacePicker.js'
+import { workspaceCandidates } from './workspacePicker.js'
+import { localDirRequestUrl } from './localDirBrowser.js'
 import { KnowledgeList, KnowledgePager, KnowledgeToolbar, EMPTY_KNOWLEDGE_FILTERS, kindTabs, reconcileKnowledgeKinds, selectedKind, type KnowledgeFilters } from './components/KnowledgeList.js'
 import { IdeaCardGrid, type IdeaCardItem } from './components/IdeaCardGrid.js'
 import {
@@ -471,6 +477,20 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   const [filePickerListing, setFilePickerListing] = useState<LocalDirListing | null>(null)
   const [filePickerLoading, setFilePickerLoading] = useState(false)
   const [filePickerError, setFilePickerError] = useState<string | null>(null)
+  /**
+   * 工作区的「浏览…」弹窗（批次2 #2/W03）。
+   *
+   * 与知识库那个弹窗**共用同一个组件**（`LocalDocModal` 的 `dir` 模式），只是状态与
+   * "选中后写到哪"不同 —— 所以这里用 `dirPickerTarget` 记"是哪个入口打开的"，
+   * 一个 sink 分派，而不是为三个入口各写一份弹窗状态。
+   */
+  const [dirPickerTarget, setDirPickerTarget] = useState<null | 'quick' | 'form' | 'edit'>(null)
+  const [dirPickerPath, setDirPickerPath] = useState('')
+  const [dirPickerListing, setDirPickerListing] = useState<LocalDirListing | null>(null)
+  const [dirPickerLoading, setDirPickerLoading] = useState(false)
+  const [dirPickerError, setDirPickerError] = useState<string | null>(null)
+  /** 新建任务表单里的工作区（表单本身是非受控的，这一格必须受控才能被"浏览…"写值）。 */
+  const [formWorkspace, setFormWorkspace] = useState('')
   const [taskKnowledge, setTaskKnowledge] = useState<KnowledgeEntry[]>([])
   const [ideas, setIdeas] = useState<Idea[]>([])
   const [ideaClusters, setIdeaClusters] = useState<IdeaClusterView[]>([])
@@ -1615,9 +1635,9 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   const loadFilePickerDir = async (path?: string | null): Promise<void> => {
     setFilePickerLoading(true); setFilePickerError(null)
     try {
-      // `null` = 要看「此电脑」（盘符列表）；不传 = 默认落在主目录
-      const qs = path === undefined || path === null || path === '' ? '' : `?path=${encodeURIComponent(path)}`
-      const res = await api<LocalDirListing>(`/api/workbench/knowledge/list-local-dir${qs}`)
+      // `null` = 要看「此电脑」（盘符列表）；不传 = 默认落在主目录。
+      // 请求形状的唯一实现在 `localDirBrowser.ts`（工作区的「浏览…」弹窗共用）。
+      const res = await api<LocalDirListing>(localDirRequestUrl(path))
       setFilePickerListing(res)
     } catch (e) {
       setFilePickerError(e instanceof Error ? e.message : String(e))
@@ -1649,6 +1669,48 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
     setLocalDocPath(entry.path)
     setFilePickerOpen(false)
     void summarizeLocalDoc(entry.path)
+  }
+
+  /**
+   * 列目录（工作区「浏览…」弹窗）——请求形状与知识库那个弹窗**同一实现**
+   * （`localDirBrowser.ts#localDirRequestUrl`），这里只管自己的状态。
+   */
+  const loadDirPickerDir = async (path?: string | null): Promise<void> => {
+    setDirPickerLoading(true); setDirPickerError(null)
+    try {
+      const res = await api<LocalDirListing>(localDirRequestUrl(path))
+      setDirPickerListing(res)
+      setDirPickerPath(res.path)
+    } catch (e) {
+      setDirPickerError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setDirPickerLoading(false)
+    }
+  }
+
+  /**
+   * 打开工作区的「浏览…」弹窗。
+   * 起始目录＝该入口当前的值（留空则后端默认落在主目录）。
+   */
+  const openDirPicker = (target: 'quick' | 'form' | 'edit'): void => {
+    setDirPickerTarget(target)
+    const start = target === 'quick' ? quickWorkspace : target === 'form' ? formWorkspace : (editDraft?.workspacePath ?? '')
+    setDirPickerPath(start)
+    void loadDirPickerDir(start)
+  }
+
+  /**
+   * 把选中的目录写回**打开弹窗的那个入口** —— 唯一分派点。
+   * 三个入口共用一份弹窗状态，所以这里必须按 `dirPickerTarget` 分流，不能各写一份。
+   */
+  const applyWorkspaceDir = (dirPath: string): void => {
+    const target = dirPickerTarget
+    setDirPickerTarget(null)
+    if (typeof dirPath !== 'string' || dirPath.trim() === '') return
+    const picked = dirPath.trim()
+    if (target === 'quick') { setQuickWorkspace(picked); setQuickWorkspaceTouched(true); return }
+    if (target === 'form') { setFormWorkspace(picked); return }
+    if (target === 'edit') { setEditDraft((prev) => (prev === null ? prev : { ...prev, workspacePath: picked })) }
   }
 
   const openKnowledgeFile = async (fileLink: string): Promise<void> => {
@@ -2093,11 +2155,6 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   }).candidates.map((candidate) => ({ id: candidate.taskId, title: candidate.title })),
   // eslint-disable-next-line react-hooks/exhaustive-deps -- now 用日键代替
   [tasks, pickedPlan, settings.dailyCapacityIncludeOverdue, settings.defaultEstimateMinutes, capacityTodayKey(now)])
-  const todayTree = useMemo(() => {
-    if (todayPlan === null || todayPlan.items.length === 0) return openTree
-    const order = new Map(todayPlan.items.map((item) => [item.taskId, item.order]))
-    return buildTaskTree(openTasks, order)
-  }, [tasks, todayPlan])
   const clearTodayPlan = async (): Promise<void> => {
     await api(`/api/workbench/plans/${localDateString()}`, { method: 'DELETE' })
     await refresh()
@@ -2347,14 +2404,25 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   const [cursor, setCursor] = useState<Date>(startOfWeek(now))
   const [calMode, setCalMode] = useState<'week' | 'month'>('week')
   const [dayTab, setDayTab] = useState<'plan' | 'done' | 'report'>('plan')
-  const reportAnchor = reportSubTab === 'week' ? localDateString(startOfWeek(picked)) : localDateString(picked)
+  /**
+   * 报告锚点跟着**当前面板选中的那一天**走（批次2 D15）：
+   * 今日视图看今天的报告，日历视图看选中那天的报告 —— 与树的锚点是同一个来源。
+   */
+  const reportAnchor = reportSubTab === 'week'
+    ? localDateString(startOfWeek(view === 'today' ? now : picked))
+    : localDateString(view === 'today' ? now : picked)
   const reportScope = reportSubTab === 'week' ? 'week_report' : 'day_report'
   const todayAnchor = localDateString(new Date())
   const thisWeekAnchor = localDateString(startOfWeek(new Date()))
   const reportIsFuture = reportSubTab === 'week' ? reportAnchor > thisWeekAnchor : reportAnchor > todayAnchor
 
   useEffect(() => {
-    if (view !== 'calendar' || dayTab !== 'report' || reportIsFuture) {
+    /**
+     * 报告的加载跟着**面板选中的那一天**走（批次2 D15）：报告页签现在今日/日历都有，
+     * 所以闸门从「必须是日历视图」改成「必须是报告页签」——仍然不许未来日期拉报告（只做复盘）。
+     */
+    if (view !== 'today' && view !== 'calendar') { setCurrentReport(null); setReportSession(null); return }
+    if (dayTab !== 'report' || reportIsFuture) {
       setCurrentReport(null); setReportSession(null)
       return
     }
@@ -2362,7 +2430,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
       api<{ report: TaskReportView | null }>(`/api/workbench/reports/${reportSubTab}/${reportAnchor}`),
       api<{ session: { sessionId: string } | null }>(`/api/workbench/ai-sessions?scope_code=${reportScope}&anchor=${reportAnchor}`),
     ]).then(([rep, sess]) => { setCurrentReport(rep.report); setReportSession(sess.session) }).catch(() => { setCurrentReport(null); setReportSession(null) })
-  }, [view, dayTab, reportSubTab, picked, reportIsFuture, reportRefreshKey])
+  }, [view, dayTab, reportSubTab, reportAnchor, reportIsFuture, reportRefreshKey])
 
   useEffect(() => {
     void api<{ session: { sessionId: string } | null }>(`/api/workbench/ai-sessions?scope_code=daily_plan&anchor=${todayAnchor}`)
@@ -2418,27 +2486,75 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
     return Array.from({ length: 42 }, (_, i) => { const d = new Date(start); d.setDate(d.getDate() + i); return d })
   })()
   const moveMonth = (delta: number): void => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() + delta, 1))
-  const noDueOpen = tasks.filter((t) => t.effectiveDueAt === null && t.statusCode !== 'done' && t.statusCode !== 'cancelled')
-  const planKeep = (t: Task): boolean => (t.effectiveDueAt !== null && sameDay(new Date(t.effectiveDueAt), picked) && t.statusCode !== 'cancelled') || (sameDay(picked, now) && noDueOpen.some((x) => x.id === t.id))
-  const doneKeep = (t: Task): boolean => t.completedAt !== null && sameDay(new Date(t.completedAt), picked)
-  const pickedPlanOrder = useMemo(() => {
-    if (pickedPlan === null || pickedPlan.items.length === 0) return undefined
-    return new Map(pickedPlan.items.map((item) => [item.taskId, item.order]))
-  }, [pickedPlan])
-  const pickedPlanTree = useMemo(() => filterTaskTree(buildTaskTree(tasks, pickedPlanOrder), planKeep), [tasks, picked, pickedPlanOrder]) // eslint 语义同 tasks
-  const pickedDoneTree = useMemo(() => filterTaskTree(buildTaskTree(tasks), doneKeep), [tasks, picked])
-  // 已完成面板中保留的父/祖父链只是上下文，不应计入统计，也以灰色弱化展示。
-  const doneContextIds = (() => {
-    const ids = new Set<string>()
-    const walk = (nodes: TaskTreeNode<Task>[]): void => {
-      for (const node of nodes) {
-        if (!doneKeep(node.task)) ids.add(node.task.id)
-        walk(node.children)
-      }
-    }
-    walk(pickedDoneTree)
-    return ids
-  })()
+
+  /**
+   * 日期面板的数据层（批次2 D15）：派生全部收在 `dayPanelModel.ts#useDayPanelModel` 里，
+   * 这里只调一次 —— 树的口径（当日到期 ∪ 当日计划项 ∪ 进行中）与"逐条标来源"都在那边，
+   * 本文件不再自己 filter 一遍。
+   */
+  const dayPanel = useDayPanelModel({
+    isTodayView: view === 'today',
+    tasks,
+    todayPlan,
+    pickedPlan,
+    todayCandidateRows: todayPlanCandidateRows,
+    pickedCandidateRows: pickedPlanCandidateRows,
+    todayExpanded,
+    calendarExpanded,
+    todayToggleExpanded: toggleTodayExpanded,
+    calendarToggleExpanded: toggleCalendarExpanded,
+    todayPromptInfo,
+    pickedPromptInfo,
+    todayAnchor,
+    pickedAnchor,
+    pickedDate: picked,
+    todayDate: now,
+  })
+
+  /**
+   * 两个入口**共用的一份面板 props**（今日与日历只差"哪一天"，而那已由 `dayPanel` 给出）。
+   *
+   * 共用是刻意的：ADR0001 要消灭的正是"同一天两处装配"——两份 props 清单迟早会漂移
+   *（一处加了新回调、另一处忘了），那就是下一个"同一语义两处实现"。
+   */
+  const dayPanelProps = {
+    ...dayPanel,
+    tab: dayTab,
+    onTabChange: setDayTab,
+    tasks,
+    dicts,
+    selectedId: selected?.task.id,
+    pending: pendingMap,
+    childrenOf,
+    busy,
+    onOpen: openTask,
+    onSort: () => void startAISession('plan', null, dayPanel.day),
+    onComplete: completePlanTask,
+    onDefer: deferPlanTask,
+    onEffortChange: (taskId: string, next: boolean) => patchPlanItem(dayPanel.day, taskId, { effortDone: next }),
+    onMinutesChange: (taskId: string, minutes: number) => patchPlanItem(dayPanel.day, taskId, { minutes }),
+    onProgressChange: saveProgress,
+    onClearPlan: () => {
+      void api(`/api/workbench/plans/${dayPanel.day}`, { method: 'DELETE' })
+        .then(() => { setPlanRefreshKey((v) => v + 1); setNotice('该日计划已清除') })
+        .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
+    },
+    onSavePlan: (items: Array<{ taskId: string; note: string; minutes?: number }>) => savePlan(dayPanel.day, items),
+    report: {
+      subTab: reportSubTab,
+      onSubTabChange: setReportSubTab,
+      isFuture: reportIsFuture,
+      current: currentReport,
+      sessionActive: reportSession !== null,
+      onGenerate: () => void startAISession('report', null, `${reportSubTab}:${reportAnchor}`),
+      onDelete: () => {
+        if (currentReport === null) return
+        void api(`/api/workbench/reports/${currentReport.periodCode}/${currentReport.periodStart}`, { method: 'DELETE' })
+          .then(() => { setCurrentReport(null); setReportSession(null); void refresh() })
+          .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
+      },
+    },
+  }
 
   /** 同上：`?.list.getSnapshot()` 只保护外层，低版本宿主缺 `list` 时会抛 —— 一并加固。 */
   const sessionListSnapshot = safeService<WorkbenchRuntime['sessions']>(runtime, 'sessions')?.list?.getSnapshot?.() ?? { ids: [], byId: {}, current: undefined }
@@ -2452,6 +2568,22 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
    * 两处各写一遍就是本项目最大的 bug 类别（同一个语义两处实现）。
    * 建资料夹的判据走 `quickFollowFolderDefault()`，与判定模块同一处口径。
    */
+  /**
+   * 工作区候选项（**三个入口共用一份**）：宿主已打开的工作区 ∪ 最近手动选择 ∪ 默认工作区。
+   *
+   * 判定在 `workspacePicker.ts#workspaceCandidates`（唯一实现，去重用全项目的
+   * `recentWorkspaceKey`）。这里刻意**不做 memo**：它读的是宿主快照（不是 React state），
+   * 缓存反而会让"用户刚在 DSH 里打开了新工作区"在面板里看不见。
+   */
+  const workspaceChoices = workspaceCandidates({
+    open: openWorkspacePaths(runtime),
+    recent: settings.quickWorkspaceRecent,
+    defaultWorkspace: settings.defaultWorkspace,
+  })
+
+  /** 新建任务表单每次打开都从空白开始（否则上一次"浏览…"选的目录会留在下一次）。 */
+  useEffect(() => { if (showForm) setFormWorkspace('') }, [showForm])
+
   const applyQuickWorkspaceDecision = (decided: QuickWorkspaceDefaultDecision, autoCreateTypeFolders: boolean): void => {
     setQuickWorkspace(decided.path)
     setQuickWorkspaceSource(decided.source)
@@ -3147,34 +3279,13 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                   />
                 </div>
               </div>
-              <div style={{ display: 'flex', gap: 8, marginBottom: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-                <button className="wb-btn primary" disabled={busy || openTasks.length === 0} onClick={() => void startAISession('plan', null, localDateString())}><Icon name="sparkles" />{todayPlan !== null || (pendingDraft?.kindCode === 'daily_plan' && String(pendingDraft.payload.planDate ?? '') === todayAnchor) ? '继续编辑今日计划' : 'AI 智能排序'}</button>
-                <span style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)' }}>AI 会先提交顺序提案，确认后才生效</span>
-                {/* 候选被截断时必须当场说出来：不给"全量排序"的假印象（需求 §5.1） */}
-                {todayPromptInfo.truncated && (
-                  <span style={{ fontSize: 12, color: '#d9a03f' }} role="status">{todayPromptInfo.notice}</span>
-                )}
-              </div>
-              {todayPlan !== null && (
-                <PlanPanel
-                  plan={todayPlan}
-                  tasks={tasks}
-                  title={`今日计划 · ${todayPlan.planDate}`}
-                  candidateTasks={todayPlanCandidateRows}
-                  canEndEffort
-                  onComplete={completePlanTask}
-                  onDefer={deferPlanTask}
-                  onEffortChange={(taskId, next) => patchPlanItem(localDateString(), taskId, { effortDone: next })}
-                  onMinutesChange={(taskId, minutes) => patchPlanItem(localDateString(), taskId, { minutes })}
-                  onProgressChange={saveProgress}
-                  onRefresh={() => void startAISession('plan', null, localDateString())}
-                  onClear={() => void clearTodayPlan()}
-                  onSave={(items) => savePlan(localDateString(), items)}
-                />
-              )}
-              <div className="wb-list">
-                <TaskTreeRows roots={todayTree} depth={0} expanded={todayExpanded} toggle={toggleTodayExpanded} dicts={dicts} onOpen={openTask} selectedId={selected?.task.id} pending={pendingMap} childrenOf={childrenOf} />
-                {openTasks.length === 0 && (
+              {/**
+                * 今日 = 日期面板的 **today 实例**（ADR0001 口径冻结 / D15）。
+                * 上面两张卡（统计 + 容量）是今日视图独有的，面板本身与日历共用一份。
+                */}
+              <DayPanel
+                {...dayPanelProps}
+                emptyPlanAction={(
                   <div className="wb-empty" style={{ padding: '28px 18px' }}>
                     <div style={{ marginBottom: 6, color: 'var(--dsw-alias-state-business-primary, #4f8ef7)' }}><Icon name="today" size={30} /></div>
                     <div style={{ fontWeight: 600, marginBottom: 4 }}>今天没有需要关注的任务</div>
@@ -3185,10 +3296,9 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                     </div>
                   </div>
                 )}
-              </div>
+              />
             </>
           )}
-
           {view === 'calendar' && (
             <>
               <div className="wb-cal-nav">
@@ -3228,103 +3338,22 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                 </div>
               )}
 
-              <div className="wb-segmented wb-sub-segmented">
-                <button className={`wb-seg ${dayTab === 'plan' ? 'on' : ''}`} onClick={() => setDayTab('plan')}><Icon name="list" />计划 <span className="count">{countTaskTree(pickedPlanTree)}</span></button>
-                <button className={`wb-seg ${dayTab === 'done' ? 'on' : ''}`} onClick={() => setDayTab('done')}><Icon name="check" />已完成 <span className="count">{countTaskTreeBy(pickedDoneTree, doneKeep)}</span></button>
-                <button className={`wb-seg ${dayTab === 'report' ? 'on' : ''}`} onClick={() => setDayTab('report')}><Icon name="report" />报告</button>
-              </div>
-              {dayTab === 'plan' && (
-                <>
-                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
-                    {pickedAnchor < todayAnchor
-                      ? <span style={{ fontSize: 12, color: '#999' }}>过去日期只读；如需为今天/未来排期，请选择今天或之后的日期。</span>
-                      : <button className="wb-btn primary" disabled={busy} onClick={() => void startAISession('plan', null, pickedAnchor)}><Icon name="sparkles" />{pickedPlan !== null || (pendingDraft?.kindCode === 'daily_plan' && String(pendingDraft.payload.planDate ?? '') === pickedAnchor) ? '继续编辑该日计划' : `AI 智能排序（${pickedAnchor}）`}</button>}
-                    <span style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)' }}>AI 会先提交顺序提案，确认后才生效</span>
-                    {pickedPromptInfo.truncated && (
-                      <span style={{ fontSize: 12, color: '#d9a03f' }} role="status">{pickedPromptInfo.notice}</span>
-                    )}
-                  </div>
-                  {pickedPlan !== null && (
-                    <PlanPanel
-                      plan={pickedPlan}
-                      tasks={tasks}
-                      title={`${pickedPlan.planDate} 计划`}
-                      canEdit={pickedAnchor >= todayAnchor}
-                      candidateTasks={pickedPlanCandidateRows}
-                      canEndEffort={pickedAnchor === todayAnchor}
-                      onComplete={completePlanTask}
-                      onDefer={deferPlanTask}
-                      onEffortChange={pickedAnchor === todayAnchor ? (taskId, next) => patchPlanItem(pickedAnchor, taskId, { effortDone: next }) : undefined}
-                      onMinutesChange={pickedAnchor >= todayAnchor ? (taskId, minutes) => patchPlanItem(pickedAnchor, taskId, { minutes }) : undefined}
-                      onProgressChange={saveProgress}
-                      onRefresh={pickedAnchor >= todayAnchor ? () => void startAISession('plan', null, pickedAnchor) : undefined}
-                      onClear={() => {
-                        void api(`/api/workbench/plans/${pickedAnchor}`, { method: 'DELETE' }).then(() => { setPlanRefreshKey((v) => v + 1); setNotice('该日计划已清除') }).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
-                      }}
-                      onSave={(items) => savePlan(pickedAnchor, items)}
-                    />
-                  )}
-                </>
-              )}
-              {dayTab === 'plan' && sameDay(picked, now) && noDueOpen.length > 0 && (
-                <div style={{ fontSize: 12, color: '#999', padding: '4px 2px' }}>另有 {noDueOpen.length} 个进行中任务未设置截止时间，暂列今天；点击父任务 ▶ 展开子任务</div>
-              )}
-              {dayTab === 'report' ? (
-                <div className="wb-card">
-                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                    <div className="wb-segmented wb-sub-segmented">
-                      <button className={`wb-seg ${reportSubTab === 'day' ? 'on' : ''}`} onClick={() => setReportSubTab('day')}>日报（{localDateString(picked)}）</button>
-                      <button className={`wb-seg ${reportSubTab === 'week' ? 'on' : ''}`} onClick={() => setReportSubTab('week')}>周报（{localDateString(startOfWeek(picked))} 起）</button>
-                    </div>
-                    <div style={{ flex: 1 }} />
-                  </div>
-                  {reportIsFuture ? (
-                    <div className="wb-empty">
-                      未来日期属于工作安排，报告只做复盘。<br />如需安排未来工作，请在「计划」页签给任务设置截止时间；AI 未来排期将在下版支持。
-                    </div>
-                  ) : currentReport !== null ? (
-                    <>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
-                        <h4 style={{ flex: 1, margin: 0 }}>{currentReport.title}</h4>
-                        <button className="wb-btn" onClick={() => {
-                          void api(`/api/workbench/reports/${currentReport.periodCode}/${currentReport.periodStart}`, { method: 'DELETE' }).then(() => { setCurrentReport(null); setReportSession(null); void refresh() }).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
-                        }}>删除</button>
-                      </div>
-                      <div style={{ marginTop: 6 }}><MarkdownText text={currentReport.summaryMd} /></div>
-                      <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-                        <button className="wb-btn primary" disabled={busy} onClick={() => void startAISession('report', null, `${reportSubTab}:${reportAnchor}`)}>
-                          {reportSession !== null || currentReport.sessionId !== null ? '继续编辑报告' : 'AI 生成报告'}
-                        </button>
-                      </div>
-                    </>
-                  ) : (
-                    <div className="wb-empty" style={{ marginTop: 8 }}>
-                      {reportSubTab === 'week' ? '本周' : '当天'}还没有报告。
-                      <div style={{ marginTop: 10 }}>
-                        <button className="wb-btn primary lg" disabled={busy} onClick={() => void startAISession('report', null, `${reportSubTab}:${reportAnchor}`)}>
-                          {reportSession !== null ? '继续编辑报告' : `AI 生成${reportSubTab === 'week' ? '周报' : '日报'}（${reportAnchor}）`}
-                        </button>
-                      </div>
-                      <div style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)', marginTop: 8 }}>同一周期只有一个报告会话，重复点击会回到原会话继续修改。</div>
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <div className="wb-list">
-                  <TaskTreeRows roots={dayTab === 'plan' ? pickedPlanTree : pickedDoneTree} depth={0} expanded={calendarExpanded} toggle={toggleCalendarExpanded} dicts={dicts} onOpen={openTask} selectedId={selected?.task.id} contextIds={dayTab === 'done' ? doneContextIds : undefined} pending={pendingMap} childrenOf={childrenOf} />
-                  {(dayTab === 'plan' ? pickedPlanTree : pickedDoneTree).length === 0 && (
-                    <div className="wb-empty" style={{ padding: '24px 18px' }}>
-                      <div style={{ fontWeight: 600, marginBottom: 4 }}>{picked.getMonth() + 1}/{picked.getDate()} 没有{dayTab === 'plan' ? '计划任务' : '完成记录'}</div>
-                      {dayTab === 'plan' && pickedAnchor >= todayAnchor
-                        ? <button className="wb-btn primary" style={{ marginTop: 8 }} onClick={() => void startAISession('plan', null, pickedAnchor)}>AI 智能排序</button>
-                        : <div style={{ fontSize: 12, opacity: .8, marginTop: 4 }}>切换到其他日期查看计划/记录</div>}
-                    </div>
-                  )}
-                </div>
-              )}
+              {/**
+                * 日历选中某天 = **同一个** 日期面板（ADR0001 / D15）。
+                * 页签（计划/已完成/报告）、计划面板、任务树、报告卡都来自它 ——
+                * 原来的两份装配（口径还不一致）已经删掉。
+                */}
+              <DayPanel
+                {...dayPanelProps}
+                emptyPlanAction={dayPanel.readOnly ? undefined : (
+                  <>
+                    <div style={{ fontWeight: 600, marginBottom: 4 }}>{dayPanel.day} 没有计划任务</div>
+                    <button className="wb-btn primary" style={{ marginTop: 8 }} onClick={() => void startAISession('plan', null, dayPanel.day)}>AI 智能排序</button>
+                  </>
+                )}
+              />
             </>
           )}
-
           {view === 'knowledge' && (
             <>
               {/* 本地文档三件套已收进弹窗（LocalDocModal）；工具栏只留一个按钮，和「新建」「清空筛选」同一行右对齐 */}
@@ -4138,49 +4167,30 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
               现在改成「工作区 → 技能 → 角色」。
               注意：三项都只是**本次会话的输入**，彼此没有依赖关系，
               所以移动顺序不改变任何判定（判定仍全在纯模块里）。 */}
-          <div className="wb-field">
-            <span>
-              AI 会话工作区
-              <span className="wb-field-note">
-                {/* 来源提示由判定一并给出（`quickWorkspaceSource`），界面不再自己判一遍 */}
-                {quickWorkspaceTouched ? '手动指定' : quickWorkspaceSourceLabel(quickWorkspaceSource)}
-              </span>
-            </span>
-            {/**
-              * 「输入框 + 不再记住」**同一行**（用户要求：按钮和输入框放一行）。
-              *
-              * 为什么这个按钮必须留着（不能顺手删）：它是**唯一**的"清掉上次手动选择"出口。
-              * 默认值判定是「上次手动选择 → 否则用设置里的默认工作区」，
-              * 没有这个出口时，用户改了设置里的默认工作区**永远不生效** ——
-              * 那正是这条 v1.15.2 修过的缺陷（`forgetQuickWorkspace` 里写明）。
-              */}
-            <div className="wb-field-row">
-              <input
-                name="quick-workspace"
-                list="wb-quick-workspace-options"
-                value={quickWorkspace}
-                placeholder={settings.defaultWorkspace || '例如 D:\Code\my-repo 或 /mnt/d/code/my-project'}
-                onChange={(e) => { setQuickWorkspaceTouched(true); setQuickWorkspace(e.target.value) }}
-              />
-              {quickWorkspaceSource === 'last-manual' && quickWorkspace.trim() !== '' && !quickWorkspaceTouched && (
-                <button
-                  type="button"
-                  className="wb-btn"
-                  title={`不再把 ${quickWorkspace} 当作默认工作区（下次打开改用设置里的默认值）`}
-                  onClick={() => void forgetQuickWorkspace(quickWorkspace)}
-                >
-                  不再记住
-                </button>
-              )}
-            </div>
-            <datalist id="wb-quick-workspace-options">
-              {[...new Set([
-                ...(settings.quickWorkspaceRecent ?? []),
-                ...openWorkspacePaths(runtime),
-                settings.defaultWorkspace,
-              ].filter((path) => path !== ''))].map((path) => <option key={path} value={path} />)}
-            </datalist>
-          </div>
+          {/**
+            * 「AI 会话工作区」——批次2 #2：三个入口共用 `WorkspacePicker`。
+            *
+            * 两种选法（用户原始诉求）：**已有工作区下拉** + **「浏览…」文件夹弹框**；
+            * 手打路径照旧。候选集只剩一处实现（`workspaceCandidates`），
+            * 原先现场拼的那行 `new Set([...recent, ...openWorkspacePaths, default])` 已删 ——
+            * 它的去重口径与全项目的 `recentWorkspaceKey` 不一致。
+            *
+            * 「不再记住」保留原条件（只有默认值来自"上次手动选择"且用户没动过时才显示）：
+            * 它是**唯一**的"清掉上次手动选择"出口，删了会让"设置里的默认工作区"永远不生效
+            * （v1.15.2 修过的缺陷）。
+            */}
+          <WorkspacePicker
+            value={quickWorkspace}
+            touched={quickWorkspaceTouched}
+            sourceLabel={quickWorkspaceSourceLabel(quickWorkspaceSource)}
+            candidates={workspaceChoices}
+            disabled={busy}
+            placeholder={settings.defaultWorkspace || '例如 D:\\Code\\my-repo 或 /mnt/d/code/my-project'}
+            onChange={(path) => { setQuickWorkspaceTouched(true); setQuickWorkspace(path) }}
+            onBrowse={() => openDirPicker('quick')}
+            showForget={quickWorkspaceSource === 'last-manual' && !quickWorkspaceTouched}
+            onForget={() => void forgetQuickWorkspace(quickWorkspace)}
+          />
           {quickWorkspace.trim() !== '' && (
             <label className="wb-inline-check">
               <input
@@ -4254,7 +4264,24 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
               </span>
               <span style={{ fontSize: 11, color: 'var(--dsw-alias-label-secondary)' }}>只影响显示与重复锚点，不改变容量计算</span>
             </label>
-            <label className="full">AI 会话工作区（可选，留空用默认）<input name="workspacePath" placeholder={settings.defaultWorkspace || '默认工作区未设置'} /></label>
+            {/**
+              * 批次2 #2：与快速录入、编辑任务**同一个组件**（两种选法：已有工作区下拉 + 浏览文件夹）。
+              * 表单本身是非受控的（提交时读 FormData），所以这里用一个 hidden 输入承接值 ——
+              * 受控的可见输入没法直接进 FormData 的可读列表之外的地方，用 hidden 更直白。
+              */}
+            <div className="full">
+              <WorkspacePicker
+                value={formWorkspace}
+                touched={false}
+                sourceLabel="留空 = 用默认工作区"
+                candidates={workspaceChoices}
+                disabled={busy}
+                placeholder={settings.defaultWorkspace || '默认工作区未设置'}
+                onChange={setFormWorkspace}
+                onBrowse={() => openDirPicker('form')}
+              />
+              <input type="hidden" name="workspacePath" value={formWorkspace} />
+            </div>
             <label className="full">描述<textarea name="description" rows={2} placeholder="背景 / 目标 / 验收标准（Markdown）" /></label>
             <div className="full" style={{ display: 'flex', gap: 8 }}>
               <button className="wb-btn primary lg" type="submit"><Icon name="check" />保存任务</button>
@@ -4300,7 +4327,18 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
             <p className="wb-hint" style={{ gridColumn: '1 / -1', margin: '0 0 4px' }}>
               {`耗时改完立即影响今日容量的「已排」；留空 = 按默认 ${settings.defaultEstimateMinutes} 分钟计入。`}
             </p>
-            <label className="full">AI 会话工作区（留空则继承父任务，父任务也没有才用默认）<input value={editDraft.workspacePath} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, workspacePath: e.target.value })} placeholder={settings.defaultWorkspace || '默认工作区未设置'} /></label>
+            <div className="full">
+              <WorkspacePicker
+                value={editDraft.workspacePath}
+                touched={false}
+                sourceLabel="留空 = 继承父任务，父任务也没有才用默认"
+                candidates={workspaceChoices}
+                disabled={busy}
+                placeholder={settings.defaultWorkspace || '默认工作区未设置'}
+                onChange={(path) => setEditDraft((prev) => (prev === null ? prev : { ...prev, workspacePath: path }))}
+                onBrowse={() => openDirPicker('edit')}
+              />
+            </div>
             <label className="full">描述（Markdown）<textarea rows={6} value={editDraft.description} onChange={(e) => setEditDraft((prev) => prev === null ? prev : { ...prev, description: e.target.value })} /></label>
             {/* ---------------- 改父任务（v1.14.0） ---------------- */}
             <label className="full">
@@ -4372,6 +4410,34 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
           </div>
         </Modal>
       )}
+      {/**
+        * 工作区的「浏览…」弹窗（批次2 #2/W03）：**同一个 `LocalDocModal`**，只是 `mode="dir"`。
+        * 复制第二份弹窗会让"上级 / 此电脑 / 主目录 / 错误 / 加载"这些骨架日后再分叉。
+        *
+        * ⚠️ 它**必须能盖住打开它的那个对话框**：这个弹窗会被三个入口调用，其中两个本身是对话框
+        *（快速录入 / 新建任务）。第一版有两个错：① 内联在面板里（对话框 portal 到 body，层级上排不上）；
+        * ② `.wb-modal-mask` 的 z-index 是 200，低于对话框的 `.wb-overlay`(300)。
+        * 结果是真实鼠标点在「选择此文件夹」的坐标上命中的是对话框里的元素 ——
+        * "点了没反应、值也没落进去"。修法是两处一起改：弹窗 portal 到 body（`LocalDocModal` 内），
+        * 遮罩抬到 320（夹在 overlay 300 与对话框内浮层 329/330 之间）。
+        * 这个 bug 是 `scripts/verify/suites/workspace-picker.mjs` 抓出来的（诊断里带 elementFromPoint 证据）。
+        */}
+      <LocalDocModal
+        open={dirPickerTarget !== null}
+        mode="dir"
+        path={dirPickerPath}
+        listing={dirPickerListing}
+        loading={dirPickerLoading}
+        error={dirPickerError}
+        busy={busy}
+        onPathChange={setDirPickerPath}
+        onClose={() => setDirPickerTarget(null)}
+        onNavigate={(target) => void loadDirPickerDir(target)}
+        onPick={() => undefined}
+        onPickAndSummarize={() => undefined}
+        onSummarize={() => undefined}
+        onPickDir={(entry) => applyWorkspaceDir(entry.path)}
+      />
       <ToastHost items={toasts} onDismiss={dismissToast} />
     </div>
   )

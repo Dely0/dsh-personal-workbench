@@ -29,13 +29,19 @@ export function countTaskTree(roots: TaskTreeNode<Task>[]): number {
   return roots.reduce((sum, node) => sum + 1 + countTaskTree(node.children), 0)
 }
 
-export function TaskTreeRows({ roots, depth, expanded, toggle, dicts, onOpen, selectedId, contextIds, pending = null, childrenOf }: {
+export function TaskTreeRows({ roots, depth, expanded, toggle, dicts, onOpen, selectedId, contextIds, pending = null, childrenOf, sourceLabelOf }: {
   roots: TaskTreeNode<Task>[]; depth: number; expanded: Set<string>; toggle: (id: string) => void
   dicts: Dict[]; onOpen: (task: Task) => void; selectedId?: string; contextIds?: Set<string>
   /** 待验收投影（一次取全量后传下来，绝不逐行发请求）。`null` = 服务端不支持。 */
   pending?: PendingMap
   /** 取某任务的**直接子任务**（旁证口径）；缺省表示没有旁证数据。 */
   childrenOf?: (taskId: string) => readonly Task[] | undefined
+  /**
+   * 行来源标签（批次2 D15）：日期面板的树要逐条标出这条任务为什么在这一天
+   *（到期 / 计划 / 进行中，可多标）。判定在 `shared/dailyPlanPolicy.ts`，
+   * 这里只把父级给的字符串画成一个徽标 —— 组件不自己判。
+   */
+  sourceLabelOf?: (taskId: string) => string | null
 }): JSX.Element {
   return (
     <>
@@ -45,10 +51,10 @@ export function TaskTreeRows({ roots, depth, expanded, toggle, dicts, onOpen, se
             <button type="button" className="wb-btn" style={{ padding: '2px 6px', border: 'none', flex: 'none' }} onClick={(e) => { e.stopPropagation(); toggle(node.task.id) }}>
               {node.children.length > 0 ? (expanded.has(node.task.id) ? '▼' : '▶') : '·'}
             </button>
-            <TaskRow task={node.task} dicts={dicts} onOpen={onOpen} bare pending={pending} childrenOf={childrenOf} />
+            <TaskRow task={node.task} dicts={dicts} onOpen={onOpen} bare pending={pending} childrenOf={childrenOf} sourceLabel={sourceLabelOf?.(node.task.id) ?? null} />
           </div>
           {node.children.length > 0 && expanded.has(node.task.id) && (
-            <TaskTreeRows roots={node.children} depth={depth + 1} expanded={expanded} toggle={toggle} dicts={dicts} onOpen={onOpen} selectedId={selectedId} contextIds={contextIds} pending={pending} childrenOf={childrenOf} />
+            <TaskTreeRows roots={node.children} depth={depth + 1} expanded={expanded} toggle={toggle} dicts={dicts} onOpen={onOpen} selectedId={selectedId} contextIds={contextIds} pending={pending} childrenOf={childrenOf} sourceLabelOf={sourceLabelOf} />
           )}
         </div>
       ))}
@@ -56,10 +62,12 @@ export function TaskTreeRows({ roots, depth, expanded, toggle, dicts, onOpen, se
   )
 }
 
-export function TaskRow({ task, dicts, onOpen, selected, bare = false, pending = null, childrenOf }: {
+export function TaskRow({ task, dicts, onOpen, selected, bare = false, pending = null, childrenOf, sourceLabel = null }: {
   task: Task; dicts: Dict[]; onOpen: (task: Task) => void; selected?: boolean; bare?: boolean
   pending?: PendingMap
   childrenOf?: (taskId: string) => readonly Task[] | undefined
+  /** 该行在这一天命中的来源（已由父级拼好，可多来源如「到期 · 计划」）。 */
+  sourceLabel?: string | null
 }): JSX.Element {
   const due = task.effectiveDueAt === null ? null : new Date(task.effectiveDueAt)
   const now = new Date()
@@ -80,7 +88,12 @@ export function TaskRow({ task, dicts, onOpen, selected, bare = false, pending =
               : fmtTime(task.effectiveDueAt!)
   const content = (
     <>
-      <div className="wb-row-title" style={{ fontWeight: 600 }}>{task.title}</div>
+      <div className="wb-row-title" style={{ fontWeight: 600 }}>
+        {task.title}
+        {sourceLabel !== null && sourceLabel !== '' && (
+          <span className="wb-src" data-task-source={sourceLabel} title={`为什么在这一天：${sourceLabel}`}>{sourceLabel}</span>
+        )}
+      </div>
       {/**
         * 右侧固定列区：优先级 / 状态 / 到期 / 进度。
         *

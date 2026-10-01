@@ -79,6 +79,11 @@ ${panelContainerCss({ view: VIEW_ATTR, official: OFFICIAL_ATTR, active: ACTIVE_A
 .wb-sub-segmented { padding:2px; }
 .wb-sub-segmented .wb-seg { padding:6px 14px; font-size:12.5px; }
 .wb-sub-segmented .count { min-width:17px; height:17px; padding:0 5px; border-radius:9px; background: color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 14%, transparent); color: var(--dsw-alias-label-primary); font-size:11px; display:inline-flex; align-items:center; justify-content:center; }
+/* 日期面板的三页签（计划/已完成/报告）与下方内容之间必须留呼吸。
+   ⚠️ 2026-10-01 用户实测反馈：'计划/已完成/报告"这三个Tab切换控件和下面控件的间隔几乎没有，有点丑'。
+   间距加在**页签的 margin-bottom**（而不是内容的 margin-top）：三个页签共用同一处间距 ——
+   否则"计划"（下面先是一行排序按钮）与"已完成"（下面直接是列表）会走出两种间距。 */
+.wb-segmented[data-day-tabs] { margin-bottom: 10px; }
 .wb-btn { display:inline-flex; align-items:center; gap:6px; border:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.26)); background:var(--dsw-alias-bg-layer-1, transparent); color:var(--dsw-alias-label-secondary); border-radius:9px; padding:7px 11px; cursor:pointer; font:inherit; font-size:13px; }
 .wb-btn svg { width:15px; height:15px; }
 .wb-btn:hover { background: color-mix(in srgb, var(--dsw-alias-label-primary, #fff) 6%, transparent); color:var(--dsw-alias-label-primary); }
@@ -134,8 +139,21 @@ ${panelContainerCss({ view: VIEW_ATTR, official: OFFICIAL_ATTR, active: ACTIVE_A
 .wb-plan-unreadable { border-color:color-mix(in srgb, #d9534f 42%, transparent); }
 .wb-plan-edit-actions { display:inline-flex; gap:4px; flex:none; margin-left:auto; }
 .wb-plan-edit-actions .wb-btn { padding:2px 7px; font-size:11px; }
+.wb-row-title { display:flex; align-items:center; gap:6px; min-width:0; }
+/* 日期面板的行来源徽标（批次2 D15）：到期 / 计划 / 进行中，可多来源并列 */
+.wb-src { flex:none; font-size:10px; font-weight:600; padding:1px 6px; border-radius:6px; letter-spacing:.2px;
+  background:color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 14%, transparent);
+  color:var(--dsw-alias-state-business-primary, #8fa8c8);
+  border:1px solid color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 38%, transparent); }
 .wb-plan-add { max-width:220px; background:var(--dsw-alias-bg-base,#17171a); border:1px solid var(--dsw-alias-border-l1, rgba(255,255,255,.18)); color:inherit; border-radius:8px; padding:5px 8px; font-size:12px; }
-.wb-modal-mask { position:fixed; inset:0; z-index:200; background:rgba(0,0,0,.55); display:flex; align-items:center; justify-content:center; }
+/* 文档/目录弹窗（LocalDocModal）的遮罩。
+   ⚠️ z-index 必须夹在 .wb-overlay(300) 与对话框内浮层（.wb-model-scrim 329 / .wb-model-menu 330）之间。
+   原来是 200 —— 低于 .wb-overlay，于是当这个弹窗**从另一个弹窗里**打开时（批次2 #2：快速录入 /
+   新建任务里的工作区「浏览…」），它整个被对话框盖住：真实鼠标点在「选择此文件夹」的坐标上，
+   命中的是对话框里的元素，表现为"点了没反应、值也不落进去"。这个 bug 是
+   scripts/verify/suites/workspace-picker.mjs 的 elementFromPoint 诊断抓出来的。
+   ⚠️ 本段在模板字符串里，**不能出现反引号**。 */
+.wb-modal-mask { position:fixed; inset:0; z-index:320; background:rgba(0,0,0,.55); display:flex; align-items:center; justify-content:center; }
 .wb-modal { width:min(520px, 92vw); background:var(--dsw-alias-bg-layer-2, #1c1c1f); border:1px solid var(--dsw-alias-border-l1, rgba(255,255,255,.25)); border-radius:14px; padding:18px; box-shadow:0 18px 50px rgba(0,0,0,.4); color:var(--dsw-alias-label-primary, #eee); font-family:var(--dsw-font-family, system-ui); }
 .wb-modal h4 { margin:0 0 8px; }
 .wb-modal p { margin:0 0 12px; font-size:12.5px; color:var(--dsw-alias-label-secondary); }

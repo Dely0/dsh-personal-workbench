@@ -153,6 +153,31 @@
       "reason": "S17-N/V05：AX-D07/D08/D09/C02/C05/C06 的 B 层。写入只对隔离测试库。"
     },
     {
+      "id": "day-panel",
+      "kind": "new",
+      "required": true,
+      "status": "active",
+      "repoPath": "scripts/verify/suites/day-panel.mjs",
+      "axIds": [
+        "AX-T03",
+        "AX-T04",
+        "AX-T05"
+      ],
+      "reason": "批次2 D15/S17-N：日期面板收敛的 B 层（今日 = 日历选中今天的同一面板：页签与行逐一相同；逐条标来源；旧口径补丁文案已删；今日独有的统计卡/容量条仍在）。"
+    },
+    {
+      "id": "workspace-picker",
+      "kind": "new",
+      "required": true,
+      "status": "active",
+      "repoPath": "scripts/verify/suites/workspace-picker.mjs",
+      "axIds": [
+        "AX-W02",
+        "AX-W03"
+      ],
+      "reason": "批次2 #2/S17-N：工作区双模式的 B 层（已有工作区下拉 + 文件夹弹框「选择此文件夹」+ 三个入口各自落到工作区字段 + dir 模式与 file 模式的区分），真实鼠标 + DOM 重读 + 截图。"
+    },
+    {
       "id": "persona",
       "kind": "new",
       "required": true,

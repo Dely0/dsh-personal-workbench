@@ -391,6 +391,136 @@ function candidateBand(priorityCode: string): 'p0' | 'p1' | 'p2' | 'p3' {
 const BAND_RANK: Record<'p0' | 'p1' | 'p2' | 'p3', number> = { p0: 0, p1: 1, p2: 2, p3: 3 }
 
 /**
+ * 一个任务在**某一天 D** 上的事实命中 —— 全项目唯一口径（ADR0001 口径冻结 / 批次2 D14）。
+ *
+ * 为什么必须抽出来：候选池（`planCandidates`）与日期面板的任务树
+ * （`dayPanelTreeSources`）问的是同一个问题 ——"这条任务和 D 这一天什么关系"。
+ * 各自再写一遍 `Date.parse` / 状态判断，就是本项目最大的 bug 类别
+ * （"同一个语义被独立计算多次"）：改了工作日界算法却只改了其中一处。
+ *
+ * `dayStartMs` / `dayEndMs` 由调用方显式传入（便于午夜与 DST 测试，不读系统时钟）。
+ */
+export interface TaskDayFacts {
+  /** 截止落在 [dayStart, dayEnd)。 */
+  dueToday: boolean
+  /** 截止早于 dayStart。 */
+  overdue: boolean
+  /** 状态是 `doing` / `blocked`（"在推进"）。 */
+  inProgress: boolean
+  /** 已排入该日计划。 */
+  planned: boolean
+  /** 截止串存在但无法解析（脏值）—— 它不是"无截止"，必须能被观测到。 */
+  dueUnparseable: boolean
+}
+
+export interface TaskDayFactsInput {
+  effectiveDueAt: string | null
+  statusCode: string
+  planned: boolean
+  dayStartMs: number
+  dayEndMs: number
+}
+
+/** 判定一个任务的"当日事实"。**唯一实现** —— 候选池与日期面板树都调它。 */
+export function classifyTaskDay(input: TaskDayFactsInput): TaskDayFacts {
+  const dueMs = input.effectiveDueAt === null ? Number.NaN : Date.parse(input.effectiveDueAt)
+  const hasDue = Number.isFinite(dueMs)
+  return {
+    dueToday: hasDue && dueMs >= input.dayStartMs && dueMs < input.dayEndMs,
+    overdue: hasDue && dueMs < input.dayStartMs,
+    inProgress: input.statusCode === 'doing' || input.statusCode === 'blocked',
+    planned: input.planned,
+    dueUnparseable: input.effectiveDueAt !== null && !hasDue,
+  }
+}
+
+/**
+ * 日期面板任务树的**来源**（ADR0001 口径冻结，2026-10-01 用户拍板）：
+ * **当日到期 ∪ 当日计划项 ∪ 进行中**。
+ *
+ * ⚠️ 「逾期」**不是**来源之一（是否加第 4 个来源待用户定案，见 ADR0001 的 ⚠️ 条）：
+ * 逾期任务只会因为"在推进"或"已排入计划"而出现在树里。
+ */
+export type DayPanelSource = 'due' | 'plan' | 'doing'
+
+/** 行标签的固定显示顺序：到期 → 计划 → 进行中（不许用"主来源"覆盖其余）。 */
+export const DAY_PANEL_SOURCE_ORDER: readonly DayPanelSource[] = ['due', 'plan', 'doing']
+
+/** 来源的中文行标签（界面直接用，不另写一份判断）。 */
+export function dayPanelSourceLabel(source: DayPanelSource): string {
+  if (source === 'due') return '到期'
+  if (source === 'plan') return '计划'
+  return '进行中'
+}
+
+export interface DayPanelSourceInput {
+  /** **全量**任务（含 done/cancelled/归档）—— open 过滤在函数内做。 */
+  tasks: readonly PlanCandidateTask[]
+  /** 该日计划项（只看 taskId）。 */
+  planItems: readonly { taskId: string }[]
+  dayStartMs: number
+  dayEndMs: number
+}
+
+export interface DayPanelSourceEntry {
+  taskId: string
+  /** 命中的全部来源，按 `DAY_PANEL_SOURCE_ORDER` 排序（可能同时命中多个）。 */
+  sources: DayPanelSource[]
+}
+
+export interface DayPanelSourceResult {
+  /** 应进入该日面板树的任务及其全部来源（**不过滤父链** —— 树由调用方构建）。 */
+  entries: DayPanelSourceEntry[]
+  /** 计划项指向但任务已不存在的 taskId（树里不渲染，但要能说清为什么少了）。 */
+  missingTaskIds: string[]
+  diagnostics: PlanCandidateDiagnostic[]
+}
+
+/**
+ * 日期面板树的任务来源判定（**唯一实现**）。
+ *
+ * 与候选池的分工：候选池回答"AI/手动**可以往今天排**什么"（多一个"逾期开关"维度、还要排序与截断）；
+ * 本函数回答"这一天的树里**应该显示**什么"。两者共用 `classifyTaskDay`，不共用筛选公式。
+ */
+export function dayPanelTreeSources(input: DayPanelSourceInput): DayPanelSourceResult {
+  const planIds = new Set(input.planItems.map((item) => item.taskId))
+  const entries: DayPanelSourceEntry[] = []
+  const diagnostics: PlanCandidateDiagnostic[] = []
+  const seen = new Set<string>()
+
+  for (const task of input.tasks) {
+    if (!isOpenTask({ statusCode: task.statusCode, archived: archivedFlag(task.archived) })) continue
+    const facts = classifyTaskDay({
+      effectiveDueAt: task.effectiveDueAt,
+      statusCode: task.statusCode,
+      planned: planIds.has(task.id),
+      dayStartMs: input.dayStartMs,
+      dayEndMs: input.dayEndMs,
+    })
+    const sources: DayPanelSource[] = []
+    if (facts.dueToday) sources.push('due')
+    if (facts.planned) sources.push('plan')
+    if (facts.inProgress) sources.push('doing')
+    if (sources.length === 0) continue
+    seen.add(task.id)
+    if (facts.dueUnparseable) {
+      diagnostics.push({
+        code: 'due-unparseable',
+        taskId: task.id,
+        message: `任务「${task.title}」的截止时间无法解析（${task.effectiveDueAt ?? ''}）：仍按${facts.inProgress ? '进行中' : '已排入计划'}进入日期面板，但没有"当日到期"可言`,
+      })
+    }
+    entries.push({ taskId: task.id, sources })
+  }
+
+  return {
+    entries,
+    missingTaskIds: [...planIds].filter((id) => !seen.has(id)),
+    diagnostics,
+  }
+}
+
+/**
  * 当日候选全集（需求 §5.1）——**唯一实现**。
  *
  * 候选 = open 且满足任一：
@@ -410,15 +540,21 @@ export function planCandidates(input: PlanCandidateInput): PlanCandidateResult {
     if (!isOpenTask({ statusCode: task.statusCode, archived: archivedFlag(task.archived) })) continue
 
     const planned = planByTask.get(task.id)
-    const dueMs = task.effectiveDueAt === null ? Number.NaN : Date.parse(task.effectiveDueAt)
-    const hasDue = Number.isFinite(dueMs)
-    const dueUnparseable = task.effectiveDueAt !== null && !hasDue
-    const dueToday = hasDue && dueMs >= input.dayStartMs && dueMs < input.dayEndMs
-    const overdue = hasDue && dueMs < input.dayStartMs
-    const inProgress = task.statusCode === 'doing' || task.statusCode === 'blocked'
+    /**
+     * 当日事实走**唯一口径**（`classifyTaskDay`，与日期面板树共用）。
+     * 这里不再自己 `Date.parse` / 比状态 —— 两处各写一份正是本函数被抽出来的原因。
+     */
+    const facts = classifyTaskDay({
+      effectiveDueAt: task.effectiveDueAt,
+      statusCode: task.statusCode,
+      planned: planned !== undefined,
+      dayStartMs: input.dayStartMs,
+      dayEndMs: input.dayEndMs,
+    })
+    const { dueToday, overdue, inProgress, dueUnparseable } = facts
 
     const reasons: PlanCandidateReason[] = []
-    if (planned !== undefined) reasons.push('planned')
+    if (facts.planned) reasons.push('planned')
     if (overdue && input.includeOverdue) reasons.push('overdue')
     if (dueToday) reasons.push('due-today')
     if (inProgress) reasons.push('in-progress')

@@ -209,7 +209,20 @@ test('AX-V01：仓库真实白名单自洽（每一条必需套件要么现役�
   const loaded = loadManifest(manifestPath)
   assert.deepEqual(loaded.problems, [])
   const manifest = loaded.manifest
-  assert.ok(Array.isArray(manifest.suites) && manifest.suites.length === 8, '本轮登记 8 套：4 套历史回归 + 4 套新增（S17-N）')
+  /**
+   * ⚠️ 这里**刻意不写死总套数**（原来写的是 `length === 8`，批次2 一加套件就假红）。
+   * 要守的是**结构**：4 套历史回归 + 每一套 S17-N 新增都必须现役、文件在、且声明了判据编号。
+   * 套数会随批次增长，写死它等于给每次新增埋一个假红。
+   */
+  const legacySuites = manifest.suites.filter((suite) => suite.kind === 'legacy')
+  const newSuites = manifest.suites.filter((suite) => suite.kind === 'new')
+  assert.equal(legacySuites.length, 4, '历史回归固定 4 套：acceptance / final-2 / sidebar-collapse / duplicate-task')
+  assert.ok(newSuites.length >= 4, `S17-N 新增套件至少 4 套（当前 ${newSuites.length}）`)
+  for (const suite of newSuites) {
+    assert.ok(Array.isArray(suite.axIds) && suite.axIds.length > 0, `新增套件 ${suite.id} 必须声明它覆盖的 AX 编号`)
+  }
+  assert.ok(manifest.suites.some((suite) => suite.id === 'workspace-picker'),
+    '批次2 #2 的 B 层判据（AX-W02/W03）必须在白名单里，否则它永远不会被链跑到')
 
   // 历史四套的判据编号必须与 legacy-regression.md 的 43 个 LEG 逐一对上
   const expectedLegacy = { 'legacy-acceptance': 17, 'legacy-final-2': 9, 'legacy-sidebar-collapse': 6, 'legacy-duplicate-task': 11 }
@@ -234,5 +247,11 @@ test('AX-V01：仓库真实白名单自洽（每一条必需套件要么现役�
 
   const result = runCheck({ root: REPO })
   assert.equal(result.exitCode, 0, `仓库白名单必须自洽：${result.problems.join(' | ')}`)
-  assert.equal(result.counts.active + result.counts.pending, 8)
+  /**
+   * ⚠️ 同样**不写死总数**（原为 `=== 8`）：要守的是"checker 统计的现役+待迁移"与
+   * manifest 里声明的条数**一致**（避免 checker 与清单两处口径漂移），而不是某个具体数字。
+   */
+  const declared = manifest.suites.filter((suite) => suite.status === 'active' || suite.status === 'pending-migration').length
+  assert.equal(result.counts.active + result.counts.pending, declared,
+    'checker 统计的现役+待迁移条数必须与 suites.json 里声明的条数一致')
 })

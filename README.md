@@ -1,621 +1,190 @@
 # dsh-personal-workbench
 
 [![npm version](https://img.shields.io/npm/v/@dely0/dsh-personal-workbench)](https://www.npmjs.com/package/@dely0/dsh-personal-workbench)
+[![license](https://img.shields.io/npm/l/@dely0/dsh-personal-workbench)](./LICENSE)
 
-A personal workbench plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH) Web.
-Turn your DSH into a **calendar + task list + AI assistant workbench**.
+**DSH（DeepSeek Harness）个人工作台插件**：把 DSH 变成「日历 + 层级任务 + AI 助手」的工作台。
+自然语言录入任务，AI 澄清 / 拆解 / 执行 / 复盘，数据全部留在本机。
 
 [English](#english) · 简体中文
 
----
+![今日](screenshot/%E4%BB%8A%E6%97%A5%E4%BB%BB%E5%8A%A1.PNG)
 
-# 中文
-
-## 这是什么
-
-`dsh-personal-workbench` 是一个 **DSH 个人工作台插件**：
-
-- 📅 日历（周/月可切换）+ 任务列表（树状层级）
-- ✨ 自然语言快速录入，AI 澄清后自动生成任务
-- 🧠 每个任务可关联多个 AI 会话：澄清 / 咨询 / 拆解 / 执行 / 复盘
-- 🎯 AI 会话前可勾选本机已安装的 Skill，提示词自动注入“加载这些技能”的指令
-- ✅ 任务执行采用“AI 申请完成 → 用户验收”闭环
-- 🗂️ 每个任务一个 AI 会话工作区（默认工作区 + 任务名文件夹）
-- 📝 Markdown 任务描述、复盘记录、变更历史
-- ⏰ 到期提醒（页内横幅）
-- 🗄️ 归档区、任务恢复
-
-数据完全存储在本地 `~/.dsh/workbench`，不上传任何服务器。
-
-## 截图
-
-> 以下截图来自 **v1.14.58 + DSH 0.1.5-rc.1**（2026-09-13 实机拍摄）。
-> 面板走**官方槽位**路径：侧栏入口由宿主渲染，面板从侧栏右侧铺开、不覆盖左侧导航。
-
-| 今日（任务 + 今日容量） | 今日排序 | 任务列表 |
+| 日历 | 快速录入 | 知识库 |
 |---|---|---|
-| ![今日任务](screenshot/%E4%BB%8A%E6%97%A5%E4%BB%BB%E5%8A%A1.PNG) | ![今日排序](screenshot/%E4%BB%8A%E6%97%A5%E6%8E%92%E5%BA%8F.png) | ![任务列表](screenshot/%E4%BB%BB%E5%8A%A1%E5%88%97%E8%A1%A8.png) |
+| ![日历](screenshot/%E6%97%A5%E5%8E%86%E5%8A%9F%E8%83%BD.png) | ![快速录入](screenshot/%E5%BF%AB%E9%80%9F%E5%BD%95%E5%85%A5.png) | ![知识库](screenshot/%E7%9F%A5%E8%AF%86%E5%BA%93.png) |
 
-| 日历 | 知识库 | 点子 |
-|---|---|---|
-| ![日历](screenshot/%E6%97%A5%E5%8E%86%E5%8A%9F%E8%83%BD.png) | ![知识库](screenshot/%E7%9F%A5%E8%AF%86%E5%BA%93.png) | ![点子](screenshot/%E7%82%B9%E5%AD%90%E5%8A%9F%E8%83%BD.png) |
+## 亮点
 
-| 快速录入 | 微信接入 |
-|---|---|
-| ![快速录入](screenshot/%E5%BF%AB%E9%80%9F%E5%BD%95%E5%85%A5.png) | ![微信接入](screenshot/%E5%BE%AE%E4%BF%A1%E6%8E%A5%E5%85%A5.png) |
-
-## 功能清单
-
-### 任务
-- 任务字段：标题、Markdown 描述、类型、状态、优先级、截止时间、AI 策略、提醒、工作区
-- 无限层级子任务；今日 / 日历 / 列表三种视图
-- 任务页筛选/排序：关键词（标题/描述）+ 状态/优先级/类型下拉多选可组合筛选；支持截止时间/优先级/创建时间/标题升降序；筛选保留父子层级，归档列表共用
-- 任务类型、状态、优先级全部由字典表驱动，可自行扩展（设置页“字典管理”已支持新增/编辑/停用类型、状态、优先级、点子类型，默认项受保护）
-- **任务资料夹（1.15.1 起的新口径）**：任务没填工作区时，资料夹名用 **`<任务ID>-<标题片段>`** 而不是标题 ——
-  改标题不再留下孤儿目录、同名任务不再挤同一目录、标题里的特殊字符也不再直接变成目录名。
-  判定只看 **ID 前缀**；用户**手填**的工作区**永不改写**（老口径的标题型路径仍能被识别为自动路径，
-  见 `docs/releases/v1.15.1.md` 第 1 节）
-- 已完成 / 已取消任务不可再次执行
-
-### AI
-- **快速录入澄清**：一句话 → 官方会话区进行需求澄清 → 生成待确认草稿。
-  可同时附带**图片（PNG/JPEG/WebP/GIF，最多 10 张）**与 **PDF / DOCX（最多 4 份、单份 ≤ 5MB，
-  正文由服务端抽取后随提示词一起交给 AI）**；也能直接**粘贴或拖入**。
-  拖入不支持的文件、超过大小/份数上限时**逐条给出中文原因**，不会静默丢弃
-- **模型选择器（快速录入内）**：为本次澄清会话选模型（含 reasoning effort）。
-  宿主目录里**没有**模型的"收不收图"信息，所以由工作台补一张能力对照表：
-  选中**未声明 image** 的模型还带了图，会在**发送前**给出可读中文拒绝
-  （否则宿主会把图片悄悄换成一行占位文字，AI 根本看不到图）
-- **`/workbench` 斜杠命令**：在官方输入框打 `/` 就能看到 **workbench**（走宿主原生命令注册，
-  因此**进原生 `/` 菜单**）；执行后当前会话直接进入澄清流程。
-  命令侧会先按 `<任务ID>-<标题片段>` 建好任务资料夹，并把同一个 id 写进提示词
-- **AI 咨询**：对任务提问、要建议（不执行）
-- **AI 拆解**：生成子任务提案树，确认后落库
-- **AI 执行**：任意节点（含父任务）且 AI 策略为“可执行”时均可执行；AI 完成后提交验收申请，用户验收后才算完成；父任务验收通过时未完成子任务会级联完成
-- **验收「暂存」**：验收弹窗除「验收通过 / 驳回」外新增「暂存（先验证）」——草稿仍是待确认状态，但不再自动弹窗打断你；你先去跑回归测试，之后从「待处理」弹窗的「已暂存」段点「继续验收」唤回。仅验收类草稿（完成验收申请 / 复盘草稿）支持暂存
-- **驳回有痕、AI 可见**：驳回或暂存都会写入任务事件与任务共享记忆；`workbench_request_completion` 支持 `feedback` 参数，返回里会告知「本次是第几次提交、上次被驳回/暂存于何时、原因」，AI 不必等你口头转述
-- **草稿通知推送微信**：AI 提交草稿（验收申请 / 复盘 / 日报周报 / 知识 / 点子提案）时可经微信推送，复用任务提醒同一条通道与策略（静默时段、小时/日上限、汇总、熔断、未装 dsh-im 静默降级）；默认只开「验收申请」与「复盘草稿」，可在设置页按类型开关
-- **Skill 选择器（AI 会话前加载技能）**：发起 AI 执行/协助/拆解/复盘/排序/报告等会话前，提示词弹窗内可直接勾选本机已安装的 DSH Skill（支持按名称/描述搜索、多选、点击标签移除）；选中项会以“请加载这些技能”的指令注入到提示词开头，技能正文由 AI 通过 `skill` 工具按需加载。技能目录来自宿主 `skills` 注册表（`GET /api/workbench/skills`），宿主未安装该服务时选择器自动隐藏、行为与旧版完全一致
-- **状态聚合**：所有子任务完成后父任务自动完成（递归到根）；直接完成父任务会级联完成后代
-- **任务共享记忆**：同一任务/子树下的多个 AI 会话共享上下文，父任务会话自动加载整棵子树记忆，避免跨会话失忆
-- **存量修复**：提供 `pnpm repair` / `POST /api/workbench/maintenance/repair-parents` 幂等补齐历史父任务完成状态
-- **AI 智能排序（任意日期）**：今日/日历任一日期一键生成执行顺序提案，确认后应用（不修改任务字段）
-- **AI 日报/周报**：基于任务事件与完成记录自动生成报告草稿，确认后保存并可回看、删除
-- **系统级桌面提醒**：任务到期时在浏览器已授权的情况下发送系统通知（页面可最小化）
-- **重复任务**：任务可设置每天/每周/每月重复，到期自动生成实例（模板归档即停止）
-- **个人知识库 / 错题集**：经验教训、决策、笔记、片段沉淀为可搜索知识条目（**分类 Tab + 关键词搜索（标题/正文/标签）
-  + 标签筛选 + 排序 + 分页，并按时间自适应分组**），复盘一键沉淀，AI 可提交知识草稿
-- **知识库会被会话 AI 自动用起来（1.15.2）**：按「任务标题+描述」在会话开始、按你的提问在每回合收尾各检索一次，
-  命中条目在下一回合以「【工作台知识库】…」出现在**会话里**（看得见命中了哪几条，也能看出它没被引用）；
-  四个时机（开工前 / 报错时 / 写码前 / 验收前）AI 还会主动再查一次。**可关闭**：设置页有全局开关、
-  单会话可 `turn_off`；另有「召回日志」面板逐条记录检索了什么关键词、命中哪几条、是否被引用。
-  打分口径刻意做了**两档闸门**：过阈门的给完整块，没过的只给一行提示（明说"未达注入闸门、仅供参考"），
-  完全不相关的什么都不插 —— 宁可少给，也不拿噪声把提示词灌满
-- **点子文件夹**：点子按「文件夹」组织——AI 可自动关联成文件夹，也能手动新建空文件夹、改名、删除、合并（A 并入 B），并把点子归入/移出一个或多个文件夹（多对多）；「未归类」区收散点子，文件夹可整体转成任务树
-- **今日容量**：今日页顶部把当天要做的事按`预计耗时 × 优先级`摊成一条时间轴，并与你设置的「每天可投入时长」（默认 6.5 小时，点击数字即可改）对比，一眼看出今天塞不塞得下。
-  **（1.15.2）算法不再是个黑盒**：点「⌄ 规则」展开就能看到**七条口径**（算哪些任务、截止时间如何沿任务树继承、
-  今天到期 / 无截止在推进怎么算、**逾期默认不计入**、没填耗时按默认多少算、全天任务为什么不改变计算）和一本
-  **逐条账本**（每条任务的分钟数 + 出处标记，表尾合计 = 已排）；逾期任务单独成区并**可一键计入**（开关默认关）。
-  **每条任务可自定义「预计耗时（1–1440 分钟）」**，改完**不刷新**就能看到「已排」变化；没填的按**可配置的默认耗时**
-  （缺省 30 分钟，在设置里改）计入，账本里逐条标「按默认 N」。全天任务只影响显示与重复锚点，**不改变容量计算**。
-- **会话标题栏入口**：通过 DSH 官方槽位 `conversation.session.header.actions` 在每个会话标题栏注册「工作台」按钮（切换开关，再点收起）；DSH 侧栏入口同时保留
-- **知识库增强（AI 总结本地文档 + 文件链接）**：知识库页面支持弹窗浏览选择本地文件，也可直接填写本地文档路径或 `file://`；后端读取文档内容并让 AI 总结为知识草稿；知识条目可保存 `file_link` 并一键调用系统默认程序打开/追溯本地文件
-- **点子 / 点子王**：灵感卡片快速记录；AI 自动找关联生成“点子王”；AI 头脑风暴后可确认转为任务
-- **AI 复盘**：已完成任务一键复盘，结论确认后写回任务
-- 同一任务只保留一个复盘会话；重复复盘进入同一会话
-
-### 数据与安全
-- SQLite（`~/.dsh/workbench/workbench.db`）+ 每日 JSON 备份规划
-- 所有工作台 API 均挂载在 `/api/workbench/*` 且仅允许 loopback 访问
-- **请求围栏只有一份实现**（`src/api/http.ts`：loopback 判定 + 响应 + 体积上限在流式读取途中拦截），
-  并有源码扫描测试证明"不存在第二处实现"（原先四份逐字相同的副本，改一处就会漏掉另外三处）
-- 所有工作台响应带 `cache-control: no-store` 与 `x-content-type-options: nosniff`
-  （返回的是用户私有数据，不该被缓存；也不该让浏览器按内容猜 MIME）
-- 附件解析带**解压炸弹护栏**：解压前按声明值拦、解压时 `maxOutputLength`、解压后复核实际长度；
-  base64 走 canonical 校验（宽松解码会静默丢弃非法字符）
-- 不读取、不上传 DSH 之外的任何数据
+- 📅 **日历（周/月）+ 树状任务列表**；「今日」「日历」「任务」三视图，筛选排序可组合、保留父子层级
+- ✨ **自然语言快速录入** → AI 澄清后生成任务；支持贴图与 PDF/DOCX 附件，不收的文件逐条给原因
+- 🧠 **每个任务关联多个 AI 会话**：澄清 / 咨询 / 拆解 / 执行 / 复盘
+- 🎭 **专家人格（角色库）**：三级来源（用户库 > 外部目录 > 内置 15 篇）；会话前选定，正文按需加载、不进提示词
+- ✅ **「AI 申请完成 → 用户验收」闭环**；进度是显式值，AI 不能靠进度把任务标完成（ADR 0003/0004）
+- 🗓️ **每日计划 + 容量账本**：AI 排序提案 → 确认才生效；「今日投入结束」≠ 任务完成（ADR 0007）
+- 🎯 **会话前选 Skill / 模型 / 角色**，提示词自动注入「加载这些技能」
+- ⏰ **到期提醒**：页内横幅 + 系统通知；可选微信通道（需 `@xmanrui/dsh-im`）
+- 🔒 **数据只在本机** `~/.dsh/workbench`，不上传任何服务器
 
 ## 安装
 
-### 前置条件
-
-- [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) **0.1.5-rc.1 及以上** Web 版
-  （这是硬边界：低于它面板整块不启动，理由见「兼容性与已知限制」）
-- Node.js `^22.19.0` 或 `>=24.0.0`
-- pnpm `>=11.7.0 <12`
-- 网络可访问 npm registry（或使用镜像）
-
-> ⚠️ **装完必须重启 `dsh web`，刷新页面不够。**
-> 客户端 bundle 由 `dsh-client-modules` 在宿主**启动时**读进内存 Map
-> （`bundleResource()` 只查那张 Map），所以"装好了 → 刷新浏览器"拿到的是**旧代码**，
-> 连 URL 上的 `rev` 都对不上。同理，升级/回退之后也都要重启。
-
-### 从 npm 安装（推荐）
+前置：**DSH ≥ `0.1.5-rc.1`**（Web 版）、Node `^22.19.0` 或 `>=24.0.0`、pnpm `>=11.7.0 <12`。
 
 ```sh
 dsh plugin --profile web add @dely0/dsh-personal-workbench
 ```
 
-或使用 npm 直接安装到项目：
+> ⚠️ **装完必须重启 `dsh web`，只刷新浏览器不够**：客户端 bundle 由宿主在**启动时**读进内存，
+> 刷新拿到的是旧代码。升级/回退同理。
+
+其它装法：
 
 ```sh
-npm install @dely0/dsh-personal-workbench
-```
-
-### 从 GitHub 安装
-
-```sh
+# GitHub 源码
 dsh plugin --profile web add git+https://github.com/Dely0/dsh-personal-workbench.git
-```
-
-或安装 Release tarball：
-
-```sh
+# Release tarball
 dsh plugin --profile web add file:/path/to/dsh-personal-workbench-<version>.tgz
 ```
 
-安装后重启 `dsh web`，浏览器硬刷新（Ctrl+Shift+R）。
+## 快速上手
 
-### 从源码开发
+1. 侧栏点「工作台」打开面板；
+2. 「快速录入」说一句话 → AI 澄清 → 确认建任务；
+3. 任务详情点「AI 执行」→ 在会话里干活 → 完成后回面板**验收**；
+4. 「今日」看待办与容量，需要时点「AI 智能排序」排今天的顺序；「日历」按天回看与排期。
+
+## 兼容性
+
+| 项 | 要求 | 拿不到时 |
+|---|---|---|
+| **面板本体**（官方槽位 + `layout.selectPanel`） | **DSH `0.1.5-rc.1+`** | **面板整块不启动**并打一条可读日志（刻意不降级） |
+| 服务端能力：任务/日历/知识库/点子、提醒、日报周报、`workbench_*` 工具 | `0.1.0-rc.6+` | — |
+| 会话绑定 `sessions.retain()` | `0.1.7-rc.2+` | 旧宿主自动回落 `sessions.binding()` |
+| Skill 选择器 | 宿主 `skills` 注册表 | 选择器隐藏 |
+| 微信提醒 | 可选插件 `@xmanrui/dsh-im` | 静默降级为页内提醒 + 系统通知 |
+
+**最低支持版本是 `0.1.5-rc.1`，这是硬边界。** 为什么低于它选择"明确不启动"而不是降级、
+以及 0.2.0 引入的插件兼容性预检（peer 区间为什么写成并列区间）：
+见 [`docs/releases/v1.15.8.md`](docs/releases/v1.15.8.md) 与
+[`docs/design/2026-09-13-client-architecture-official-only.md`](docs/design/2026-09-13-client-architecture-official-only.md)。
+
+## 开发
 
 ```sh
 git clone https://github.com/Dely0/dsh-personal-workbench.git
 cd dsh-personal-workbench
 pnpm install
-pnpm check      # 类型检查 + 构建
-pnpm test       # 最小回归测试（使用构建产物）
+pnpm check                 # 类型检查 + 构建
+pnpm test                  # 全量回归（跑构建产物）
+pnpm build && pnpm dev:install   # 装盘到本机 profile（装完重启 dsh web）
 ```
 
-以开发模式挂载：
-
-```sh
-pnpm build
-dsh plugin --profile web add link:/path/to/dsh-personal-workbench
-```
-
-> 开发模式修改代码后需要重新 `pnpm build` 并重启 `dsh web`。
-
-## 参与开发：先读这份 skill
-
-本仓库自带一份**给 AI 编码助手用的开发规范 skill**：
-[`.dsh/skills/dsh-plugin-change/`](.dsh/skills/dsh-plugin-change/SKILL.md)。
-
-它在 DSH 的**项目级 skill 根**下，**clone 下来即自动被发现**（优先级高于用户级 skill），
-所以你和你的 AI 助手在改这个仓库时，会按同一套规矩走。内容包括：
-
-- **架构硬约束**：两半两入口、依赖方向（哪些模块不许 import React / 不许碰 DOM）、
-  **允许写哪些 DOM 的白名单**、文件规模红线、数据库写入契约，
-  以及一张"**不许做 / 必须做 / 谁拦它**"的速查表；
-- **编码规范**：单一权威源与派生、纯逻辑与组件解耦、政策要变成"会失败的测试"、
-  失败必须可观测、幂等与副作用时机、静默丢件的禁区、可选服务分两级、删除与重构的顺序；
-- **交付流程**：装盘/版本回退的门禁、"客户端改动必须重启宿主"、
-  验收判据为什么会变成假阴性、发布与回滚纪律；
-- **研发版本验收链**（SKILL §14）：这条链怎么跑、加一套件要动哪几处、
-  写套件时的硬纪律（不许空计数当通过、前置缺失记失败、`finally` 不改退出码）；
-- **事故档案**：13 起真实事故的"现象 → 根因 → 下次怎么避免"。
-
-> 这些不是风格偏好，**每条都对应一次真实事故**（整机 DSH 起不来、面板整块消失、发布后前端崩溃）。
-> 如果你用别的 AI 编码工具，也可以直接把 `SKILL.md` 及其 `references/` 喂给它 ——
-> 内容与工具无关，讲的是这个代码库的规矩。
-
-## 研发版本验收链（在隔离测试实例上真跑一遍）
-
-改了客户端或服务端之后，"我自己跑通了"和"**装盘的这一版在真实浏览器里跑通了**"是两件事。
-本仓库自带一条链，把后者做成一条命令（设计见 [`docs/adr/0006-dev-verify-chain.md`](docs/adr/0006-dev-verify-chain.md)）：
-
-```sh
-# 1) 只读预检：打印阶段计划，零写入（不构建/不装盘/不重启/不写库）
-node scripts/dev-verify.mjs --url http://127.0.0.1:3080 --profile web \
-  --profile-dir "<测试 profile 的绝对目录>" --db-path "<独立测试 DB 的绝对路径>" --dry-run
-
-# 2) 真跑：构建 → 装盘 → 零增量 diff → dump-config → 只重启 3080 → health → token → 套件 → 证据包
-node scripts/dev-verify.mjs --url http://127.0.0.1:3080 --profile web \
-  --profile-dir "<测试 profile 的绝对目录>" --db-path "<独立测试 DB 的绝对路径>"
-```
-
-- **目标实例只限 `3080` / `profile web`**（预授权范围）。当前 GUI 实例（桌面端 `19387`）**永不重启**：
-  同端口 / 同 profile 物理目录 / 同数据库文件三种情况一律 fail-closed 拒绝，`--force` 也绕不过前两种。
-- **必须给目标 profile 显式配独立数据库**。工作台默认库是 `~/.dsh/workbench/workbench.db`，
-  **不随 profile 变化** —— 桌面端和测试实例默认用的是同一个文件。没配独立 `dbPath` 时预检会拒绝，
-  这是**正确行为**（否则一次验收就会把正式库迁到开发树的新 schema）。
-  配法见 [`.dsh/skills/dsh-safe-plugin-ops/`](.dsh/skills/dsh-safe-plugin-ops/SKILL.md) 的门禁 C。
-- 退出码：`0` 全过 / `1` 构建·装盘·断言失败 / `2` 自锁拒绝或前置缺失 / `3` 等待超时。
-- 证据落在 `test-results/workbench-verify/<runId>/`（已 gitignore）：`summary.json` / `summary.md` /
-  各套件截图与 DOM 读数；**token 全路径脱敏**，不会写进证据。
-- 已纳入白名单的套件（`scripts/verify/suites.json`）：4 套历史回归（acceptance / final-2 /
-  sidebar-collapse / duplicate-task，判据源 [`legacy-regression.md`](docs/tasks/36c8e8ef-1104-4e68-b55f-a2a6cc533ab9-工作台插件优化/legacy-regression.md)）
-  + 4 套本轮新增（progress / daily-effort / persona / verify-safety）。
-  脚本卫生与白名单校验：`node scripts/check-verify-scripts.mjs`。
-- **验收链的绿不等于上线**：最终判定由用户在正式实例上实测，公开版本号与发布仍走 `dsh-release` 的流程。
-
-## 兼容性与已知限制
-
-> 滚动维护的**已知问题与待办清单**见 [`docs/issues/2026-09-13-outstanding-issues.md`](docs/issues/2026-09-13-outstanding-issues.md)。
-> 本节只讲**当前版本的依赖与支持边界**。历史结论（DOM 降级腿、家族互斥）已随 v1.14.53 删除，
-> **别照着旧文档配环境**。
-
-### 一句话依赖结论
-
-| 项 | 要求 | 说明 |
-|---|---|---|
-| **DSH** | **`0.1.5-rc.1` 及以上**（Web 版） | 低于此版本**客户端面板整块不启动**（刻意如此，见下） |
-| Node | `^22.19.0` 或 `>=24.0.0` | 与 `package.json` 的 `engines` 一致 |
-| pnpm | `>=11.7.0 <12` | 仅开发/构建时需要 |
-| `@deepseek-ai/cordis` | `^4.0.1` | peer 依赖 |
-| `@deepseek-ai/dsh-host-webserver` / `dsh-system-prompt` / `dsh-tools` | `^0.1.0-rc.6` | peer 依赖（服务端半边） |
-| DSH 提供的客户端槽位 | `sidebar.panellist` + `main` + `shell.overlay` | **三个都要有**，缺一个就不启动 |
-| `layout.selectPanel` | 必须有 | 它是"面板能被选中"的唯一开关 |
-| `@xmanrui/dsh-im` | 可选 | 微信提醒通道；未装则降级为页内提醒 + 桌面通知 |
-
-**最低支持版本：DSH `0.1.5-rc.1`。** 这一条是硬边界，不是"建议"。
-
-### 低于最低版本会怎样：**明确不启动**（不是降级）
-
-`inject` 精确声明 5 项：`sessions` / `workspaces` / `connection` / `slots` / `layout`
-（唯一实现见 `src/client/capabilities.ts`，`test/capabilities.test.mjs` 把它锁死）。
-缺任何一项，cordis 会让插件 pending；万一进来了但槽位不全，`apply()` 会打一条
-**含"缺什么 + 要求什么版本"的中文日志**后直接返回 —— **不注册任何东西、不写任何 DOM**。
-
-为什么不做兼容层：早先的实现是"探测不到官方槽位就换自建 DOM 腿"，
-而那条腿会铺一张 `position:fixed; inset:0` 的**满屏层**，一旦收不起来就永久盖住会话区
-（用户原话："除左栏外什么都点不了"）。与其"半死不活地降级"，不如**明确不启动并说明原因**。
-
-> **服务端能力不受此限制**：任务/日历/知识库/点子、提醒、日报周报与 `workbench_*` 工具
-> 只需要 `0.1.0-rc.6+`。所以老宿主上你仍能用 AI 侧的工具与提醒，只是**看不到面板界面**。
-
-### 支持的能力矩阵
-
-| 能力 | 需要的 DSH 版本 | 拿不到时 |
-|---|---|---|
-| 服务端能力：任务/日历/知识库/点子、AI 会话关联、提醒、日报周报、`workbench_*` 工具 | 0.1.0-rc.6+ | — |
-| **面板本体：`sidebar.panellist` + `main` + `shell.overlay`** | **0.1.5-rc.1+** | **面板整块不启动**（打可读日志） |
-| **`layout.selectPanel`**（面板选中状态由宿主单值状态管理） | **0.1.5-rc.1+** | 同上 |
-| 会话标题栏入口（官方槽位 `conversation.session.header.actions`） | 0.1.5-rc.1+ | 无该按钮；侧栏面板行仍可用 |
-| 官方 `uiWorkspace.connectWorkspace`（AI 会话切工作区） | 0.1.5-rc.1+ | 回落 `workspaces.openPath` |
-| **新建 AI 会话后取会话绑定**（`sessions.retain()`） | 0.1.7-rc.2+ | 旧宿主自动回落 `sessions.binding()`（0.1.5-rc.1 起可用） |
-| 微信提醒 | 可选插件 `@xmanrui/dsh-im` | 静默降级为页内提醒 + 桌面通知 |
-| 技能选择器 | 宿主 `skills` 注册表 | 选择器自动隐藏 |
-
-> **会话绑定为什么有两档**（0.1.7-rc.2 改过语义，两类宿主都是正常的）：
-> `binding(id)` 在 `≤0.1.5` 是"在列表里/是当前会话就给你"，在 `0.1.7-rc.2` 变成
-> **"只给已被 retain 的 scope"** —— 而插件自己 `create()` 出来的会话谁都没 retain，
-> 于是取不到绑定、报「会话绑定未就绪」。现在统一走
-> `src/client/sessionRef.ts#acquireSession()`：宿主有 `retain` 就 retain（用完 release，
-> 与引用计数配对），没有就回落 `binding()`。这条语义**只有一处实现**
-> （`test/panelCss.test.mjs` 有源码扫描断言，业务代码里再写一次 `sessions.binding(...)` 会红）。
-
-> **桌面端（Windows 免边框窗口）的标题栏**：0.1.7-rc.2 桌面壳会在 `<html>` 上加
-> `data-windows-titlebar`，并给内容区让出一条标题栏（窗口按钮就在里面）。面板挂在
-> `shell.overlay` 下、自己 `position:fixed`，所以由 `--wb-top-inset` 主动让位
-> （判据 `src/client/panelGeometry.ts#decideTopInset`，纯函数 + 单测）；普通网页版 /
-> macOS / 老宿主没有这个属性 → 让位值为 0，行为与改动前一致。
-
-> 历史说明（仅供对照，**已不适用**）：v1.14.0–v1.14.52 曾支持 DSH `0.1.1-rc.1`，
-> 走的是"往侧栏 DOM 注入入口行 + 自建覆盖层"的降级腿。那条腿连同社区
-> 「sidebar-entry 家族约定」（`data-dsh-<pkg>-entry` / `dsh-panel-activate` / 摘兄弟
-> `data-dsh-*-active`）在 v1.14.53 **整体删除**。定稿设计见
-> [`docs/design/2026-09-13-client-architecture-official-only.md`](docs/design/2026-09-13-client-architecture-official-only.md)。
-
-### 唯一的入口与面板路径（v1.14.53 起）
-
-1. **侧栏面板行**注册到官方槽位 `sidebar.panellist`（`kind=list`、`scope=root`）——
-   行按钮、Tooltip、`aria-label`/`aria-current`、行高与折叠态圆形**全部由宿主 `PanelRow` 渲染**，
-   本插件只提供图标（`WorkbenchPanelIcon`）。
-2. **中央面板**注册到官方键槽 `main`，但**只放一个返回 `null` 的空占位** ——
-   它存在的唯一理由是让 `layout.selectPanel(id)` 的校验通过。
-3. **真内容**注册到 `shell.overlay`（框架级浮层，**始终挂载**）。
-   为什么不放 `main`：`main` 是键槽，`activePanelId` 一变宿主就卸载整棵子树，
-   而我们这棵树里装着**跨页面常驻的草稿弹框** —— 关面板会连弹框一起消失
-   （用户实测"只能回到工作台页面才看得到弹框"）。
-4. **面板显隐**只有一个答案：`decidePanel()`（`src/client/panelState.ts`，纯函数 + 表驱动单测）。
-   宿主状态可读时只信 `activePanelId`，不可读时才退回本地意图。
-   `data-open` 属性由同一个函数派生（`panelDataOpen()`），所以"决策"与"投影"不可能打架。
-
-**没有第二条路径。** 本插件不往宿主侧栏注入任何 DOM（`test/clientInvariants.test.mjs` 的 I6 钉住）。
-
-判定"面板该不该显示"的只有一处实现（`decidePanel()`）；**没有"走哪条路径"的选择逻辑了** ——
-`officialSlotDecision()` / `officialPathConfirmed()` 随降级腿一起删除。**能力不满足就明确不启动。**
-
-### 硬规则：可选服务一律软探测
-
-**任何 DSH 服务，只要不是所有受支持版本都有，就必须 `ctx.get('x')` 软探测，绝不放进
-`inject`、也绝不直接 `ctx.x`。** cordis 的 `inject` 语义是"缺一个就整个插件 pending"，
-把它当成"可选依赖"用会让插件在旧宿主上整体加载失败（前端表现为 `Failed to load plugins`）。
-
-这条规则来自三次真实事故：v1.10.1 的 `uiWorkspace`、v1.13.0 的 `runtime.slots`、
-v1.13.3 的再次根治；v1.13.1 的标题栏入口则是因为直接读 `ctx.slots` 而崩。
-
-**边界要分清**：`slots` / `layout` / `commands` 是**前置条件**，
-所以它们进 `inject` —— 拿不到就整块不启动（明说原因），而不是偷偷降级；
-`uiWorkspace` / `dshIm` / `skills` / `modelDirectories` / `llm` 是**可选增强**，一律软探测、缺了只是少一个能力。
-
-> ⚠️ 一个容易搞反的点：`ctx.get('x')` 的确**不需要**把 `x` 写进 `inject`（cordis 的 `get` 文档原话是
-> "without the inject requirement"；会抛 `cannot get property "x" without inject` 的是**代理属性访问**那条路）。
-> 但**服务端与客户端同一个 `get` 语义下，只有当提供方 fiber 处于活动态时才拿得到** ——
-> 所以"要不要进 inject"仍应按上面这两级来分：缺了功能就不成立的进，
-> 只是锦上添花的软探测（`modelDirectories` 就是后者：写进 `inject` 会让没装
-> `dsh-client-ui-model-selection` 的机器上**整个面板 pending**，丢整块换一个下拉框）。
-
-### 其它
-
-- 入口只有一个：**宿主渲染的侧栏面板行**（`sidebar.panellist`）。会话标题栏按钮同样走官方槽位
-  `conversation.session.header.actions`。
-- **面板互斥由 DSH 宿主的 `activePanelId` 保证**（`layout.selectPanel` 是单值状态）。
-  若同时使用**不使用官方槽位、而以 DOM 接管中栏**的插件（如 `dsh-client-ui-task-board` /
-  `dsh-ssh` / `dsh-mnemon`），可能出现两个面板同时激活 ——
-  **这是宿主缺少统一面板机制导致的已知限制，不是本插件的缺陷**：那些插件没向宿主注册面板，
-  宿主的 `activePanelId` 无从知晓它们存在。因此本插件**不做跨插件 DOM 协调**：
-  不读、不写任何兄弟插件的 `data-dsh-*` 属性，也不广播/监听 `dsh-panel-activate`。
-  本插件只写两个自带属性（且幂等）：`<html data-dsh-personal-workbench-active>` 与
-  `<html style="--wb-sidebar-w: Npx">`；`test/clientInvariants.test.mjs` 的 I4/I5 把这两条钉住。
-- 微信提醒依赖 `@xmanrui/dsh-im`：**软探测**（`ctx.get('dshIm')`），未安装或未配置投递目标时静默降级为页内提醒 + 桌面通知，不影响其它功能。
-- 技能目录依赖宿主 `skills` 注册表：未安装时 Skill 选择器自动隐藏。
-- 仅支持单用户本地使用；无云同步、无多用户权限体系。
-- AI 能力依赖你在 DSH 中已配置的模型与凭证；执行/咨询等会真实消耗 token。
-
-## 遗留问题与已知限制
-
-**已知问题、待办与"已确认不是问题"的清单集中在
-[`docs/issues/2026-09-13-outstanding-issues.md`](docs/issues/2026-09-13-outstanding-issues.md)**（滚动更新）。
-下面只列与本版本最相关的两条：
-
-1. **`.pwtest/` 里有一批脚本是"架构变更前"写的**（约 80 个长期迭代产物）。
-   家族互斥与 DOM 降级腿已在 v1.14.53 删除，`verify-mutex-family.mjs` /
-   `verify-board-takeover.mjs` / `verify-board-overlap.mjs` / `verify-stable.mjs`
-   仍断言那些已删除的行为，**跑起来会失败但那是假失败**，别当成回归。
-   `verify-acceptance.mjs` 里示范了正确做法（反转判据 + 写清原因）。
-2. **客户端改动必须重启 `dsh web` 才生效** —— 不是"刷新页面即可"。
-   `dsh-client-modules` 的 `bundleResource()` 只从宿主**启动时**建好的内存 Map 取 bundle。
-   本地迭代走 `node scripts/dev-install.mjs --apply`（构建 → 打包到**带构建戳的新路径** →
-   装盘 → 三道门禁），**不要再改 `package.json` 的 version**（版本号只在发布时增长）；
-   装完重启 `dsh web` 并硬刷新浏览器。
-   ⚠️ 装盘产物是否真的刷新，**只信** `node scripts/check-installed-fingerprint.mjs`（逐文件 SHA256）：
-   实测**同一 `file:` 路径**下 pnpm 会复用已解包的文件（锁文件 integrity 变了、`lib/` 还是旧的），
-   所以每次装盘都要落到一个没装过的新路径。
+| 文档 | 用途 |
+|---|---|
+| [`.dsh/skills/dsh-plugin-change/`](.dsh/skills/dsh-plugin-change/SKILL.md) | **改代码前先读**：架构硬约束、本项目的编码规范与回归防线 |
+| [`docs/release-checklist.md`](docs/release-checklist.md) | 发版前自检清单 |
+| [`scripts/dev-verify.mjs`](scripts/dev-verify.mjs) | 研发版本验收链：构建 → 装盘 → 隔离实例重启 → 浏览器套件 → 证据包 |
+| [`docs/issues/`](docs/issues/) | 滚动维护的已知问题与待办 |
+| [`docs/adr/`](docs/adr/) | 已冻结的口径决策（容量、进度、角色、验收链、每日投入） |
 
 ## 版本历史
 
-> 详细发行说明（含依赖/支持边界、验收证据、踩坑记录）：**[`docs/releases/v1.16.0.md`](docs/releases/v1.16.0.md)**；
-> 更早的见 [`docs/releases/`](docs/releases/)。
-
 | 版本 | 要点 |
 |---|---|
-| **1.16.0** | **任务进度 + 专家人格角色库 + 研发版本验收链（三条主线）+ 客户端 P0**。① **任务进度**：显式字段（ADR 0004）、AI 不能靠进度完成任务（ADR 0003）、日投入≠完成（ADR 0007）；列表行紧凑条 + 详情页完整卡（五档预设/输入框/子任务旁证）。② **角色库**：三级来源（用户库 > 外部目录 > 内置）+ 会话绑定 + 按需加载（正文不进提示词）；**内置角色从 6 篇扩到 15 篇**，分 `generic/`（自写通用）与 `domain/`（领域岗位，随包含 MIT 署名链）两个来源区。③ **验收链** `scripts/dev-verify.mjs`：13 阶段 + 8 个 CDP 套件 + 构建标识三方一致；`scripts/check-pii.mjs` 分「GitHub 面 / npm 包内容面」扫私人信息。④ **P0**：面板里点链接不再导航宿主文档（桌面端不可恢复 / Web 端页面被顶走）。 ⚠️ 本版 **schema 18 → 19**（单向前进）；内置角色 id 路径形态变化会让旧的收藏/绑定记录显示"已不在角色库里"（重选即可）。完整说明见 [`docs/releases/v1.16.0.md`](docs/releases/v1.16.0.md)。 |
-| **1.15.8** | **适配 DSH `0.2.0-rc.1`（桌面端）—— 只改兼容性声明**。`0.2.0` 给核心加了**插件兼容性预检**（`0.1.7` 没有这段）：它**只读** `peerDependencies`，把 `@deepseek-ai/dsh` / `@deepseek-ai/dsh-*` 的区间与运行时做 `semver.satisfies(..., { includePrerelease: true })` 比对，**判不过就把该插件整行 `disabled = true`**（静默禁用）—— 于是升级后**不报错、服务照常、页面照常，只是工作台整体消失**（入口/面板/tool/`/workbench` 命令全没了），极易误判成"新版破坏性更新"或"插件坏了"。修法是把 4 个 `dsh-*` peer 改成**并列区间**（如 `^0.1.5-rc.1` 与 `^0.2.0-rc.1` 两段并列，见 `package.json`）：**下界一律不动** —— 若直接把区间换成 `^0.2.0-rc.1`，会把**所有还在 `0.1.x` 上的用户**用同一套新门禁全部挡掉，只是把受害者换了个人。测试也从**等号断言**（`assert.equal(peer, '^' + MIN_HOST_VERSION)`，一升核心就假红）改成**区间形状断言**，把「运行时能力门槛」与「声明兼容范围」这两件事正式拆开，并新增"下界没被抬高 / 未退化成 `*` 或 `>=0`"的判据（未引入 `semver` 依赖，自写判定器用真 `semver` 逐例校准 **80/80 一致**）。**实测确认 `0.2.0-rc.1` 没有破坏性更新**：对比从桌面端 `app.asar` 解出的完整 `0.2.0-rc.1` 核心树（289 包），**移除的包 0、移除的 export 0**；工作台真正 import 的 `dsh-tools`(12/12) / `dsh-llm`(18/18) / `dsh-system-prompt`(2/2) / `cordis`(2/2) **逐字节相同**；并用 ESM `resolve` hook 把说明符重定向到 `0.2.0` 核心树**真加载构建产物**，13 个真实 tool 在 `defineTool`（**定义时就转换参数 schema、不认识立刻抛**，不是透传）下 **13/13 通过、工具名逐字一致**。⚠️ 本版 `lib/` 与 `v1.15.7` **内容完全相同**（拉回 npm 真实产物逐文件比对：185 个文件全一致；其中 2 个仅行尾 CRLF 不同、归一化后哈希相等），包内差异只有 `peerDependencies` —— 必须发新号是因为 npm 不允许覆盖已发布版本，而 `0.2.0-rc.1` 上的用户只有装新版本才能过预检。用例 593 → 594，并对 peer 破坏做了两次反向验证（换单区间 / 抬高下界都必须变红）。 |
-| **1.15.7** | **客户端两处 P0**：**① 快速录入的模型选择「死锁」** —— 用户选过模型（选择落在 `localStorage['dsh-personal-workbench.quickModelSelection']`）之后，只要当次解析不到模型目录，提交时旧代码会**直接抛错中断整条快速录入**，而唯一的写入口（模型下拉框）又被门禁挡死 ⇒ **界面内无法改回默认模型，只能手改浏览器存储**。根因不是"没装插件"：`@deepseek-ai/dsh-client-ui-model-selection`（经 `dsh-web-app` 进 web profile）**装着**，旧写法 `try { … } catch { return undefined }` 把「服务不在场」与「服务在场、但这个会话取不到目录」压成同一个 `undefined` —— 后者的真实形态是宿主 `directoryFor(sessionId)` 抛 `resolved no binding`（与 v1.15.5 记的 rc2 `retain`/`binding` 契约漂移同源），却被说成「当前 DSH 未提供模型选择接口」，**报错文案把排查方向整个带偏**。改为纯判定 `resolveModelDirectoryOutcome()`（`code: 'service' | 'session'`，成因由 `modelDirectoryUnavailableReason()` 唯一产出）+ **口径 A 自动降级**（`selectionToApply()`：拿不到目录就忽略已有选择、按「跟随 DSH 默认模型」跑完并给可读提示，**不再中断**；拿到目录时照旧换模型，`select()` 的真实失败仍原样上抛）+ **口径 B 保留出口**（`gateModelPicker` 接收算好的成因与出口可达性；有残留选择时菜单照常开得起来、退化成只列「跟随 DSH 默认模型」+ 原因，清空不依赖任何模型目录）+ **每次点击重新解析**（不再"一次失败即永久不可用"）。**② rc.2 上系统通知失败被完全吞掉** —— 发送测试通知外面是空 `catch`（失败在界面与控制台都不存在），请求授权没先判 `typeof Notification === 'undefined'`（不支持的客户端抛 `TypeError` 且无 `.catch` ⇒ 点了没反应）。新增纯模块 `src/client/notificationCapability.ts`：**四态**（不支持 / 未授权可请求 / 被拒绝 / 已授权）+ 请求授权的不支持前置判定 + `sendSystemNotification()` **失败返回原因并落控制台**，设置面板按四态给对应操作与文案（`granted` 明确交代系统级仍可能丢弃：Windows 通知总开关 / 专注助手 / 按应用单关，这层网页读不到）。本版还跑了**一轮独立审查**，它报的 2 条（门禁成因仍写死"接口没提供"、一处只写不读的 state）**均已确认并修掉**。用例 579 → 593，新增变异探针 10/10 条变红。 |
-| **1.15.6** | **补齐 DSH 0.1.7-rc.2 上漏掉的「当前会话」读取**（v1.15.5 只修了会话**契约**，没修会话**选择**）。rc2 把 `sessions.list.current` **整个删掉**（快照只剩 `ids`/`byId`/`phase`，`ClientSessions` 连 `open()`/`clear()` 都删了；选择语义搬进 `uiWorkspace` 的 `mainView` 引用，对外由 `uiSession.adapter.current` 投影），而工作台有**三处**在读它 → **三处同时静默拿到 `undefined`**（不报错，只是读不到）：**①** 快速录入的模型目录落到 `ids[0]`（列表第一个会话）；**②** 推断工作区时 `currentCwd` 恒为空 → 判据第 1 档「当前会话 cwd 命中谁就用谁」**整档失效** → 工作区多于一个候选时**必然报「无法确定这次会话该用哪个工作区」**，而报错文案还让用户"在 DSH 里切到目标任务所在的工作区"——**切了也读不到**（实测发生在工作区落在任务资料夹里的任务上，点「AI 执行/协助/拆解」即触发）；**③** 复用型会话少了"它就是当前会话"这条旁证。新增 **`src/client/currentSession.ts#readCurrentSessionId()`** 作为唯一入口（纯函数 + 9 条单测）：优先 `uiSession.adapter.current`（rc2 的权威出口，且 `dsh-client-ui-session` 在 **0.1.5 与 0.1.7 两份里逐字相同**，一条判据覆盖新旧两端）→ 回落旧宿主的 `list.current` → 都读不到返回空串按"**不知道**"处理（**绝不退化成"列表里第一个会话"**，那正是 v1.15.1 修掉的"文件建进别的任务目录"）。**同一版顺带让 Skill 目录可见**：宿主 `SkillRegistry.list()` 对 provider 失败是**静默降级**（`catch → cacheable=false → warn` 后照常返回其余，可能为空列表），插件原先把"这次目录为空"和"宿主没装 skills 服务"当成一件事、一律**整块隐藏** → 用户看到的是"Skill 选择功能没了"且无恢复入口；现在拆成三态（无服务→隐藏 / 目录为空或失败→**原因 + 重试** / 正常→列表）。另**更正 v1.15.5 §5 那条与宿主事实相反的判据**：`ctx.workspaces.create()`（我们调的服务面）**已经拆包**、直接返回 `WorkspaceView`（顶层就有 `workspaceId`），`{ok,value:{workspace}}` 是未经服务面的 Remote 形态 —— 旧代码本来就能工作，本版只改注释与一条测试标题，**行为不变**。用例 568 → 579（另加 2 条源码不变量：业务代码再直接读列表快照的 `current` 会当场失败；`currentSessionIdOf` 必须有三处调用点）。 |
-| **1.15.5** | **适配 DSH 0.1.7-rc.2（桌面端）**，五个真问题：**①「快速录入 / 创建澄清会话」报「会话绑定未就绪，请稍后重试」** —— rc2 把 `sessions.binding(id)` 的语义收成"只给**已被 retain** 的 scope"，而 `uiWorkspace.connectWorkspace()` 内部只是 `create()`、**谁都没 retain**，于是绑定恒 undefined。改为统一走 `src/client/sessionRef.ts#acquireSession()`：有 `retain` 就 `retain(id,{source})`（用完 release，与宿主引用计数配对），旧宿主自动回落 `binding()`。**② 澄清能发出去、界面却报 `?.open is not a function`** —— rc2 把 `sessions.open(id)` **整个移除**（改由 `uiWorkspace.openSession(target)` 承担：内部 `retain(id,{source:'mainView'})` + 选中，并释放上一条 mainView 引用）。这个语义原先在 `index.tsx` 里抄了 **4 遍**、`DraftBanner.tsx` 里还有 1 遍 → 升级后 **5 个入口同时报错**；现在收敛成 `openSessionInMainView()` 一处，并用**源码扫描测试**钉住"业务代码不许再直接 `sessions.binding/retain/open`"（`test/panelCss.test.mjs`）。**③ 面板顶部压住桌面端标题栏、窗口按钮点不动** —— rc2 桌面壳给内容区加了 `padding-top: var(--dsh-windows-titlebar-height)`，而面板挂在 `shell.overlay` 下自己 `position:fixed`，不跟那个 padding 走；现在由 `--wb-top-inset` 主动让位（判据 `panelGeometry.ts#decideTopInset`，纯函数 + 单测）。**④ 收起侧栏后工作台铺不满（左边界停在 280px）** —— 旧口径把"量到 0"当成"量取失败、不更新"，而 rc2 收起侧栏时栏目宽度**就是 0**；现在判据是 `decideSidebarWidth()`：宿主公布值优先、几何 ≤0 **采信 0**、超过视口 40% 才判为量错元素而不更新，并同时盯侧栏列尺寸与 frame 的 `data-sidebar-collapsed`。**⑤ 顺带修掉一处既存静默丢件**（两版都存在，核对宿主契约时发现）：`workspaces.create()` 返回 `{ok, value:{workspace}}`，工作区 id 嵌在 `value.workspace.workspaceId`，而旧代码读顶层 `created.workspaceId`（该字段从不存在）→ **用户显式选的 AI 会话工作区被静默忽略**、落回"按当前 cwd 猜"；现在由纯函数 `readCreatedWorkspaceId()` 读取（读不出来时**显式报错**，不再假装成功）。另核对到两处已失效的宿主面：`connection.generation.getSnapshot()`（rc2 的 connection 只剩 `start({source,sinks})`，工作台那段会安全退化到按路径猜 WSL）与 `workspaces.openPath`（0.1.5 与 rc2 **都没有**，兜底腿实为死路，暂留守卫）。用例 534 → 568。 |
-| **1.15.4** | **文档版**（与 v1.15.3 功能完全相同，**无代码改动**）：补上 v1.15.3 贡献者的致谢（中英双段）与 [`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md) 条目。⚠️ **这个版本是一个判断失误，不要当先例** —— 事后确定的规矩是「**只改文档/配置/测试等非编译内容时不单独发版**，跟随下一个有代码改动的版本一起发布」；当时误以为"npm 页面渲染包内 README、又不能覆盖已发布版本，所以只能补发版本号"，事实成立但**结论错了**（正确做法是发版前把文档核对干净）。规矩已写进 [`docs/release-checklist.md`](./docs/release-checklist.md) 第 5 节。 |
-| **1.15.3** | **合入社区反馈的三个缺陷修复**（来自 [@SnowNight777](https://github.com/SnowNight777) 的 #4 / #5 / #7 与 PR #6 / #8，提交作者署名保留）。**任务提醒**：原先只有"草稿确认时的父任务"与"手动接口"两条路径建提醒记录，于是**草稿拆出的子任务 / `POST` 建任务 / `PATCH` 改截止时间**建出来的任务**永远不会提醒** —— 现在三处统一按「显式 offset → 类型默认 → 优先级默认」补建，`PATCH` 只在没有生效中提醒时补，避免重复（提醒按 `offset_minutes` 存、按 `dueAt − offset` 现算，不是存绝对时间，所以不会留下过期时间戳）。**投递目标缓存**：`status().configured` 读的是只在 `resolveTarget()` 里填充的内存缓存，而 `GET /reminders/channel` 只调 `listOptions()` ⇒ 重启后设置页把已绑定目标误报「未配置」，且 `isTargetConfigured` 为假让**包括启动补发在内的所有任务提醒被静默跳过** —— 现在改为「缓存命中 → 数据库有显式绑定」两级（**末行不要用 `available()` 兜底**：那会让没绑过目标的用户从"安静地不做事"变成"安静地反复投递失败"，由 `test/reminderWiring.test.mjs` 钉住）。**复用型会话**（计划 / 日报周报 / 点子关联 / 点子头脑风暴）：登记或引用的会话被**归档或删除**后，点下去没有任何反应、且那行陈旧引用**永不更新**（该链路从此开不出会话）—— 根因是客户端拿着旧 `session_id` 直接切、不验可用性；新增纯判据 `aiSessionReuse.ts#isAiSessionReusable()`（归档集命中 / 列表 ready 却查不到 → 不可复用；列表 `pending` 或旧宿主缺快照 → **不下结论**，零回归），覆盖**五处**裸切（含**报告行自己的 `sessionId` 回退**这条独立路径），不成立时落回新建或给明确提示。用例 521 → 534。 |
-| **1.15.2** | 本版对应父任务**「工作台插件 v1.15.2 版本优化」及其 5 个子任务 + 1 条同期独立任务**（完整对照见 [`docs/releases/v1.15.2.md`](docs/releases/v1.15.2.md) §0）。**① 快速录入的模型选择框被遮挡**（P1）：根因不是 z-index 而是**裁剪** —— 浮层挂在弹窗滚动容器（`overflow:auto`）里、只会朝上开，真浏览器实测常见窗口**可见比例仅 48%**、`1000×400` 时菜单顶边 -94px 画到视口外；改为 portal 到 body + `fixed` + 纯函数 `placePopover()` 摆放（翻转/收敛/保证在视口内）+ 滚动·缩放·异步长高重算 + `Esc` 只关浮层 + `↑↓` 键盘。**② 快速录入的默认工作区被上一次执行的任务污染**（P1）：根因不是"执行时写坏了存储"，而是 `openQuickEntry()` 从**当前选中任务**派生默认值，而点「AI 执行」前 `selected` 必然就是那个任务、且面板收起**不卸载 React 树**；改为纯函数 `decideQuickWorkspaceDefault`（上次手动选择 → 系统默认 → 空，**输入里没有任何任务/选中项**）+ 只有用户动过输入框才写最近列表 + 「不再记住这个目录」出口。**③ 今日容量的算法被摆到台面上**（P2，本版最大一项）：原先「已排 0 min」是个黑盒（内联在 4987 行组件里、无测试、逾期完全不参与），现在抽出**纯函数唯一权威源** `capacity.ts`，界面给出**七条口径 + 逐条账本**（表尾合计 = 已排）、**逾期单独成区并可一键计入**（默认不计入）、**每条任务可自定义耗时**（改完不刷新即见效）、没填耗时按**可配置的默认耗时**计入并逐条标注、全天任务不改变容量计算。**④ 知识库分类改 Tab**（P2）：下拉 → Tab + 关键词搜索（标题/正文/标签）+ 标签筛选 + 排序 + 分页 + 自适应时间分组；一并修「选择文件只能选 C 盘」；知识库类型颜色来自**迁移 16** 回填（根因是种子 `config` 为空、圆点取不到色）。**任务列表**按"与知识库一致"这一半做了**类型改 Tab**（Ctrl/Cmd 多选），搜索框/虚拟滚动/置顶/最近使用**经澄清后取消**（见该说明 §4 末尾）。点子页改 2 列卡片瀑布。**⑤ 知识库被会话 AI 自动调用**（P1）：四个时机自动检索、命中条目**在会话里可见**、可全局/单会话关闭、有召回日志与"是否被引用"回报；打分口径被两轮实测逼出来，含**两档闸门**让未达阈门的条目也留一行提示。**另**：知识草稿覆盖不再静默（回执与界面列出被替换的标题，同期独立任务）、dev-install 不再删掉刚打好的包、私有信息清理。`SCHEMA_VERSION` **15 → 18**（迁移 16/17/18）。用例 240 → 521。 |
-| **1.15.1** | **任务资料夹改用 `<任务ID>-<标题片段>`**（旧口径按标题：改标题成孤儿、同名挤一个目录、特殊字符变目录名），澄清阶段**先预留任务 ID** 并复用它落库；**不再为每个任务注册 AI 工作区**（会话用当前工作区 + 提示词声明资料夹，避免宿主工作区列表被任务撑爆）；**老路径兼容**判据必须带"位于默认根目录之下"这条旁证（否则手填目录会被当成自动路径改写，且本机 3 条标题型老路径会永远不再迁移）。新增：快速录入**图片（走宿主原生多模态）与 PDF/DOCX 附件**（不收的文件逐条给原因）、**模型选择器**（未声明 image 的模型在**发送前**给可读拒绝，而不是让宿主静默把图换成占位文字）、**`/workbench` 斜杠命令**（进原生 `/` 菜单，执行后当前会话进入澄清流程）。修：**任务没填路径时会话挂到无关工作区**（原 `ws.items[0]`，最坏会把文件建进别的任务目录）、**PDF 文本抽取的 O(n²) 灾难性回溯**（3 KB 恶意 pdf 可让整个 dsh web 无响应，由独立审查发现）、解压超限回 zlib 英文原文、预分配任务 id 不校验（非法 id 落库 / 重复 id 抛英文 SQL）、`/workbench` 侧未做 WSL 路径归一化。四份重复的请求围栏合并成一份并加 `no-store` / `nosniff`。用例 168 → 240。 |
-| **1.15.0** | 让 dsh-market 能装上、能统计（补 `repository` 字段，市场靠它把 npm 包映射回仓库）；本地迭代**不再消耗公开版本号**（身份交给带构建戳的包路径，新增 `scripts/dev-install.mjs`）；修 CI 长期红（两条测试依赖开发机环境）与 `check-installed-version.mjs` 的 `file:` 形态空转 |
-| **1.14.57** | **架构重构三阶段完成，只支持 DSH 新版（最低 `0.1.5-rc.1`）**：① 抽出 `panelState.ts` —— 面板可见性的**唯一权威源**（原先把同一语义写了 5 遍、读的输入还不同，bug 2/6/9 都出在这里），决策表 5 行穷举并有表驱动单测 + 源码级断言"不许再内联判定"；② **删除 DOM 降级腿与家族互斥**（不再往宿主侧栏注入入口行、不再自建覆盖层容器、不再读写兄弟插件的 `data-dsh-*`、不再广播 `dsh-panel-activate`）——`entryContract.ts` 652→145 行、`index.tsx` 4109→3795 行，新增 I4/I5/I6 源码扫描测试；③ 新增 `capabilities.ts` 能力门槛（`inject` 精确 5 项、缺能力时**明确不启动并打可读日志**，不再"半死不活地降级"），README 写清最低版本与冲突政策。另修：点「回到会话」后弹框要等 5 秒轮询才消失（改为同一帧收掉）。出口判据：`verify-acceptance` 17/17、`verify-final-2` 9/9、`verify-sidebar-collapse` 6/6、`verify-duplicate-task` 11/11 |
-| **1.14.51** | 修复「快速录入 → AI 执行 → 验收后，待处理里多出一条**同名重复任务**」：根因是 `withDraftConfirm()` 不校验草稿状态也不记录产出（同一条 task 草稿确认两次就建出两条任务），且 `confirmTaskDraft()` 没有同父同名幂等。现在确认会把产出回写草稿并支持**回放**（同一条草稿绝不会产出两个任务）；跨草稿同名**只告警不静默合并**（新增「库里已经有一条同名任务」选择框：保留两条 / 就用已有那条并归档多建的）；`workbench_submit_task` 在当前会话就是该任务关联会话时直说"几乎肯定是重复录入" |
-| **1.14.10** | 修复**在官方 `main` 槽位里自建独立 React root** 引发的连串问题（弹框反复重挂 → 背景一顿一顿变黑、按钮要点两次、`inactive context` 报错、同一构建下部分 App 窗口整片黑）：官方槽位里改为**直接返回 `WorkbenchApp`**、生命周期交给宿主 reconciler（与宿主自带弹框一致）；面板容器改 `position:absolute; inset:0`，不再依赖宿主高度链；新增**可见性自查**（激活时容器持续 0 尺寸就自动切覆盖层）。顺带移除上一版引入的"自愈复核"（它会在注册其实成功时撤销注册，导致侧栏出现两行入口）与 generator 形式的 `slots.inject`（本宿主的 cordis 不支持，注册不生效） |
-| **1.14.1** | 修复 1.14.0 本机验收发现的 4 个问题：① 点「工作台」导致会话区**整片空白且回不去**（`entriesOfSlot` 脱绑调用被误判成"宿主不支持" + `selectPanel` 抛错时 `open` 已被置真）—— 改为**自愈判定**：注册表与 DOM 两侧都有证据才走官方槽位，4 秒复核窗口内不成立就撤销注册并回退 DOM 腿，且入口与覆盖层始终就绪，绝不留空白；② 草稿弹框背景变黑/闪烁、点「暂存」要连点 5-8 次（`WorkbenchApp` 被挂了两份互相打架）—— 两种容器严格二选一；③ 快速录入提示文字被输入框遮挡（`.wb-hint` 只有设置页作用域样式）；④ 顶层 `type_code` 非法值被**静默改写成 personal** 而非拒绝（与工具描述、子任务校验口径不一致）—— 改为封闭枚举严格校验 + 回执回显最终落库字段 |
-| **1.14.0** | **侧栏入口与中央面板改用 DSH 官方槽位**（`sidebar.panellist` + `main`，互斥交给宿主 `activePanelId`）；**任务支持改父任务**（含防环校验 + 变更留痕 + 表单选择项 + AI 工具，取代直接改库）；**快速录入/澄清支持指定工作区**（默认值与旧隐式行为逐字一致，路径不可用会明确报错而非静默换目录）；**所有草稿类型都可暂存**（白名单改为默认全开）且**草稿弹框信息量补齐**（任务草稿展示描述/截止/预估/工作区/AI 策略/子任务 + 回到会话）；**子任务 code 非法不再静默丢弃**（回传 problems 并在界面标黄，工具描述带封闭枚举）；数据库 schema 过新时**降级空转而不是拖死 DSH 启动** |
-| 1.13.4 | 修复：`uiWorkspace` 不再作为硬依赖（旧宿主上不再 `Failed to load plugins`）；数据库 schema 过新时降级而不是拒绝启动 |
-| 1.13.1 | 修复会话标题栏入口导致前端加载失败（cordis 服务读取必须用 `ctx.get`）；新增点子「文件夹」（手动建/改名/删除/合并、多对多归入与移出、整体转任务树）；新增「今日容量」条与每天可投入时长设置；UI 视觉层统一（边框/阴影/字号/间距，浅色下保持模块可辨识）；用户入口改用官方槽位 |
-| 1.12.1 | 微信草稿通知正文精简（任务标题 + 摘要首行 + 一行操作）；修复 reminder 测试在 Windows 下未关库导致临时目录删除失败 |
-| 1.12.0 | 验收「暂存」（草稿保持待确认但不再自动弹窗，可唤回）；驳回/暂存留痕并回传提交历史给 AI；草稿通知接入微信（默认只开验收与复盘） |
-| 1.11.0 | Skill 选择器：AI 会话前可勾选本机已安装 Skill，注入「加载这些技能」指令（不内联正文） |
-| 1.10.x | 微信任务提醒：通道适配、分级/静默/节流/熔断、补发队列、策略配置界面 |
-| 1.9.0 | 工作台 UI 优化 P0-P2（大屏分栏、详情摘要卡与吸顶操作条、变更历史时间线、空状态 CTA） |
+| **1.16.1** | AI 会话工作区**双模式**（已有工作区下拉 + 文件夹弹框）；「今日」与「日历」收敛为**同一个日期面板**（计划/已完成/报告三页签，树口径＝当日到期 ∪ 当日计划项 ∪ 进行中，逐条标来源）；构建期类型源对齐 DSH `0.2.0-rc.2`。详见 [`docs/releases/v1.16.1.md`](docs/releases/v1.16.1.md) |
+| 1.16.0 | 任务进度（显式值、AI 不能靠进度完成）+ 专家人格角色库（三级来源 / 15 篇内置）+ 研发版本验收链。⚠️ schema 18 → 19。详见 [`docs/releases/v1.16.0.md`](docs/releases/v1.16.0.md) |
+| 1.15.8 | 适配 DSH `0.2.0-rc.1` 的插件兼容性预检（peer 改**并列区间**，下界不动） |
+| 1.15.7 | 快速录入模型选择死锁 + rc.2 系统通知失败被吞（两处 P0） |
+| 1.15.6 | 补齐 `0.1.7-rc.2` 上「当前会话」读取的三处静默 `undefined` |
+| 1.15.5 | 适配 `0.1.7-rc.2`：会话绑定/打开、标题栏让位、侧栏量宽、工作区静默丢件 |
+| 1.15.3 | 合入社区三项修复（提醒漏建 / 投递目标缓存 / 复用会话陈旧引用） |
+| 1.15.2 | 模型浮层遮挡、默认工作区被任务污染、容量账本透明化、知识库 Tab 化、知识自动召回 |
+| 1.15.1 | 任务资料夹改 `<任务ID>-<标题片段>`、快录附件（图片/PDF/DOCX）、模型选择器、`/workbench` 命令 |
+| 1.14.57 | 架构重构：面板可见性唯一权威源、删除 DOM 降级腿、能力门槛「明确不启动」 |
+| 更早 | 完整发行说明见 [`docs/releases/`](docs/releases/) |
 
 ## 路线图
 
-- [x] V1：任务 / 日历 / 快速录入澄清 / 子任务 / 会话关联
-- [x] V1.5：AI 执行 + 用户验收 / 复盘 / 归档 / 变更历史 / 任务工作区
-- [x] V2 每日 AI 智能排序（0.6.0）
-- [x] V2：系统级桌面提醒（0.8.0）
-- [x] V2 日报/周报（0.7.0）
-- [x] V2：重复任务（0.12.0）
-- [x] V2：个人知识库 / 错题集（1.0.0）
-- [x] V2：知识库增强（AI 总结本地文档 + 文件链接）（1.2.0）
-- [x] V2：今日计划面板长列表优化（sticky 统计卡 / 固定高度内部滚动 / 展开收起 / 面板内完成·推迟）（1.4.0）
-- [x] V2：AI 会话前自定义提示词输入（除快速录入外，默认提示词 + 用户输入追加）（1.5.0）
-- [x] V2：今日/日历计划面板手动编辑（上下移、改备注、从今日任务增删计划项；保留 AI 生成 + 确认 + 完成/推迟）（1.5.0）
-- [x] V2：UI 美化（卡片/列表/表单/点子关联展示统一）
-- [x] V2：任务类型自定义 UI（设置页字典管理：类型/状态/优先级/点子类型）
-- [x] V2：任务到期提醒接入微信（1.10.x）
-- [x] V2：Skill 选择器（1.11.0）
-- [x] V2：验收暂存 / 驳回反馈闭环 / 草稿通知（1.12.0）
-- [x] V2：UI 视觉层重构 + 点子文件夹 + 官方槽位入口（1.13.x）
-- [x] V2：提醒状态语义修复（窗口/终态分离 + 重新武装）（1.13.2）
-- [x] V2：侧栏入口迁移到官方槽位 + 改父任务 + 草稿暂存推广（1.14.0）
-- [x] V2：**任务资料夹改口径（`<任务ID>-<标题片段>`）+ 快录附件（图片 / PDF / DOCX）+ 模型选择器 + `/workbench` 命令**（1.15.1）
-- [ ] 待规划：客户端 `WorkbenchApp` 拆分（施工图见 `docs/design/2026-09-09-client-split-backlog.md`）
-- [ ] V2：定时自动化
-- [ ] 未来：多端同步、任务拖拽排序、数据导入导出
+- [ ] 客户端 `WorkbenchApp` 拆分（施工图待重写）
+- [ ] 任务拖拽排序、数据导入导出
+- [ ] 定时自动化、多端同步（各自单独立项）
 
 ## 致谢
 
 - **[@Guojing6](https://github.com/Guojing6)** —— v1.15.1 的多项能力源自其 fork
-  [`Guojing6/dsh-workbench`](https://github.com/Guojing6/dsh-workbench)：任务资料夹改用任务 ID
-  （含"澄清阶段先预留任务 ID"这一关键设计）、快录附件（PDF/DOCX 抽正文、图片走宿主原生多模态）、
-  模型选择器、`/workbench` 斜杠命令、请求围栏加固；并定位了两个我们一直带着的真 bug
-  （任务没填路径时会话挂到无关工作区、澄清阶段按用户原话建文件夹）。
-  本仓按当前模块结构重做（其分支基于 v1.10.1），逐项来源见
-  [`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md)。
-- [@tujunwenjie](https://github.com/tujunwenjie) —— issue #3 的诊断报告与本地修复分支，
-  帮我们看清了"用 DOM 注入参与非官方家族约定"这条路的根因（v1.14.53 据此整条腿删除）。
-- [@lhmhz](https://github.com/lhmhz) —— issue #1（关联对话显示对话名 / 添加已有对话到任务）。
+  [`Guojing6/dsh-workbench`](https://github.com/Guojing6/dsh-workbench)：任务资料夹改用任务 ID、
+  快录附件、模型选择器、`/workbench` 斜杠命令、请求围栏加固；并定位了两个我们一直带着的真 bug。
 - **[@SnowNight777](https://github.com/SnowNight777)** —— v1.15.3 的三项修复全部来自其报告
   （issue [#4](https://github.com/Dely0/dsh-personal-workbench/issues/4) /
   [#5](https://github.com/Dely0/dsh-personal-workbench/issues/5) /
   [#7](https://github.com/Dely0/dsh-personal-workbench/issues/7) 与 PR
   [#6](https://github.com/Dely0/dsh-personal-workbench/pull/6) /
-  [#8](https://github.com/Dely0/dsh-personal-workbench/pull/8)，提交作者署名保留）：
-  ① **三条建任务路径不建提醒记录**（草稿拆出的子任务 / `POST` 建任务 / `PATCH` 改截止时间）
-  ——它们建出来的任务**永远不会提醒**；② **投递目标内存缓存引发的两个连锁缺陷**
-  （重启后设置页把已绑定目标误报「未配置」，且 `isTargetConfigured` 为假让**包括启动补发在内
-  的所有任务提醒被静默跳过**）——报告里引用 `draft-notify.ts` 那段"早就绕开同一个坑"的注释作为旁证，
-  一句话说清了"为什么只有任务提醒坏了"；③ **复用型会话的陈旧引用**（登记或引用的会话被归档/删除后
-  点下去没有任何反应，且那行陈旧引用永不更新，该链路从此开不出会话）——不仅给了**纯判据 + 表驱动单测**，
-  还自己补出了"报告行自己的 `sessionId` 回退"这条**独立的第二条复用路径**。
-  我们逐条对着代码核实过，三条全部成立；其中"列表 `pending` / 旧宿主缺快照时**不下结论**"
-  这个取舍尤其稳（避免了"启动瞬间凭空多开一个会话"），我们一个字没改。
-  详见 [`docs/releases/v1.15.3.md`](docs/releases/v1.15.3.md)。
+  [#8](https://github.com/Dely0/dsh-personal-workbench/pull/8)）。
+- [@tujunwenjie](https://github.com/tujunwenjie)、[@lhmhz](https://github.com/lhmhz) —— issue 诊断报告。
+- **内置角色库**含两个 MIT 上游（`novotnyllc/dotnet-artisan`、`K-Dense-AI/scientific-agents`）的领域角色，
+  完整署名与「我们改了什么」见 [`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md)。
 
-### 并行会话开发的隔离做法（1.15.2 起）
-
-1.15.2 的两条线（容量透明化 / 知识草稿覆盖可见性）是**两个会话同时改同一个本地仓库**推进的。
-做法记在 [`docs/design/2026-09-17-parallel-session-handover.md`](docs/design/2026-09-17-parallel-session-handover.md)：
-用 **`git worktree`**（而不是 `git switch -c` —— 后者会把工作区里未提交的改动一起带走，两边互相污染，
-且两个会话在同一目录跑 `pnpm build` 会互相删掉对方的 `lib/`）开第二份检出，
-开工前先把**文件级归属**写下来；合并时唯一的冲突确实出现在预判的那处
-（`tsconfig.build.json` 的 include 白名单里两边各加了一个组件条目且位置相邻，解法是**两边都保留**），
-其余共享文件自动合并成功。合并后**在合并后的工作区重跑一遍门禁**（两条线各自的"全绿"只证明各自成立）。
+逐项来源与许可证见 [`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md)。
 
 ## 免责声明
 
-本插件为社区项目，与 DeepSeek 官方无关，不提供任何担保。安装即表示你信任该代码会以你的 DSH 用户权限在本机运行。执行类 AI 操作可能修改工作区文件、消耗 API 额度，请先阅读代码并谨慎使用。
+社区项目，与 DeepSeek 官方无关，不提供任何担保。安装即表示你信任该代码会以你的 DSH 用户权限在本机运行；执行类 AI 操作可能修改工作区文件、消耗 API 额度，请先阅读代码并谨慎使用。
 
 ## License
 
-本项目代码使用 [MIT License](./LICENSE)。
-
-部分 DOM 挂载模式和客户端构建包装参考了以下开源项目，详见 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)：
-- `dsh-task-board`（dsh-web-ui，BSD-3-Clause）
-- `dsh-genui`（MIT）
+[MIT](./LICENSE)。部分 DOM 挂载模式与客户端构建包装参考了 `dsh-task-board`（BSD-3-Clause）与 `dsh-genui`（MIT），详见 [`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md)。
 
 ---
 
 # English
 
-## What is this
+**A personal workbench plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH)** —
+turn DSH into a calendar + hierarchical task list + AI assistant workbench. All data stays on your machine.
 
-`dsh-personal-workbench` is a personal workbench plugin for DeepSeek Harness Web:
-calendar + hierarchical task list, natural-language task intake with AI clarification
-(text plus **image / PDF / DOCX attachments**, an optional **model picker**, and a native
-**`/workbench`** slash command), multiple AI sessions per task (clarify / consult / break
-down / execute / review), execution with user acceptance, AI prioritization for any date,
-daily/weekly reports, desktop notifications, per-task task folders, reminders, archives,
-and Markdown reviews.
+## Highlights
 
-Task folders are named `<task-id>-<title-snippet>` (the ID is the stable part), so renaming a
-task never orphans its folder and two tasks with the same title never share one. Folders you
-type by hand are never rewritten.
-
-All task data is stored locally under `~/.dsh/workbench`.
+- 📅 Calendar (week/month) + tree task list; Today / Calendar / Tasks views with combinable filters that keep parent-child structure
+- ✨ Natural-language quick capture → AI clarification → task created; images and PDF/DOCX attachments supported
+- 🧠 Multiple AI sessions per task: clarify / consult / breakdown / execute / review
+- 🎭 **Personas**: three-tier library (user > external dir > 15 built-ins), picked per session, loaded on demand (never inlined into the prompt)
+- ✅ "AI requests completion → you accept" loop; progress is an explicit value the AI cannot use to complete a task
+- 🗓️ Daily plan + capacity ledger: AI proposes an order, only your confirmation applies it; "done for today" ≠ task completed
+- 🎯 Pick Skill / model / persona before each AI session; prompt gets a "load these skills" instruction
+- ⏰ Due reminders (in-panel banner + system notification), optional WeChat channel via `@xmanrui/dsh-im`
+- 🔒 Local-only storage at `~/.dsh/workbench`
 
 ## Install
 
-```sh
-# From npm (recommended)
-dsh plugin --profile web add @dely0/dsh-personal-workbench
+Requires **DSH ≥ `0.1.5-rc.1`** (web), Node `^22.19.0` or `>=24.0.0`, pnpm `>=11.7.0 <12`.
 
-# From source or release tarball
-dsh plugin --profile web add git+https://github.com/Dely0/dsh-personal-workbench.git
-dsh plugin --profile web add file:/path/to/dsh-personal-workbench-<version>.tgz
+```sh
+dsh plugin --profile web add @dely0/dsh-personal-workbench
+# or: dsh plugin --profile web add git+https://github.com/Dely0/dsh-personal-workbench.git
 ```
 
-Then restart `dsh web` and hard-refresh the browser.
+> ⚠️ **You must restart `dsh web` after installing** — the client bundle is read into memory at host startup, so a browser refresh keeps serving the old code.
 
 ## Compatibility
 
-**Minimum: DeepSeek Harness `0.1.5-rc.1` (Web).** This is a hard boundary, not a suggestion.
-
-| Requirement | Version | Notes |
+| | Requirement | If missing |
 |---|---|---|
-| DSH (Web) | **`0.1.5-rc.1`+** | Below this, **the panel does not start at all** (see below) |
-| Client slots provided by DSH | `sidebar.panellist` + `main` + `shell.overlay` | **All three** are required |
-| `layout.selectPanel` | required | The only switch that can select our panel |
-| Node.js | `^22.19.0 \|\| >=24.0.0` | matches `engines` |
-| pnpm | `>=11.7.0 <12` | dev/build only |
-| `@deepseek-ai/cordis` | `^4.0.1` | peer |
-| `@deepseek-ai/dsh-host-webserver`, `dsh-system-prompt`, `dsh-tools` | `^0.1.0-rc.6` | peer (server half) |
-| `@xmanrui/dsh-im` | optional | WeChat reminder channel; falls back to in-page + desktop notifications |
+| **Panel** (official slots + `layout.selectPanel`) | **DSH `0.1.5-rc.1+`** | Panel **refuses to start** and logs a readable reason (deliberately not degraded) |
+| Server-side features (tasks, reminders, reports, `workbench_*` tools) | `0.1.0-rc.6+` | — |
+| Session binding via `sessions.retain()` | `0.1.7-rc.2+` | Falls back to `sessions.binding()` on older hosts |
+| WeChat reminders | optional `@xmanrui/dsh-im` | Falls back to in-panel + system notifications |
 
-### On older hosts the panel **refuses to start** (it does not degrade)
+## Development
 
-`inject` declares exactly five services — `sessions`, `workspaces`, `connection`, `slots`, `layout`
-(see `src/client/capabilities.ts`; `test/capabilities.test.mjs` locks the list). Missing any of them
-makes cordis keep the plugin `pending`. If it does load but a slot is missing, `apply()` logs a
-**readable reason (what is missing + which version is required)** and returns immediately —
-**registering nothing and writing no DOM**.
+```sh
+pnpm install && pnpm check && pnpm test
+```
 
-Why there is no compatibility layer: the old implementation fell back to a self-built DOM leg, which
-laid down a full-screen `position:fixed; inset:0` layer. When it failed to collapse it covered the
-conversation area permanently (user quote: "nothing outside the left column is clickable").
-Refusing to start with a clear log is strictly better than half-working degradation.
+Read [`.dsh/skills/dsh-plugin-change/`](.dsh/skills/dsh-plugin-change/SKILL.md) before changing code;
+release steps live in [`docs/release-checklist.md`](docs/release-checklist.md), and the automated
+verification chain in [`scripts/dev-verify.mjs`](scripts/dev-verify.mjs).
 
-> **Server-side features are not gated by this**: tasks/calendar/knowledge/ideas, reminders,
-> reports and the `workbench_*` agent tools only need `0.1.0-rc.6+`. On an older host you can still
-> use them through the agent — you just get **no panel UI**.
+## Credits & License
 
-### Panel arbitration & sibling plugins: an explicit "not our problem" policy
-
-- Official slots only: `sidebar.panellist` for the sidebar row, `main` for a null placeholder
-  (so `layout.selectPanel` validation passes), `shell.overlay` for the real content —
-  it is always mounted, so the draft dialog survives closing the panel.
-- Whether the panel is visible is answered in **exactly one place**: `decidePanel()`
-  (`src/client/panelState.ts`, a pure function with table-driven tests).
-- **No cross-plugin DOM coordination.** Panel arbitration is owned by the host's single-value
-  `activePanelId`. Plugins that do *not* use official slots and instead take over the center column
-  via DOM (e.g. `dsh-client-ui-task-board`, `dsh-ssh`, `dsh-mnemon`) may end up active at the same
-  time. That is a **known limitation caused by the host lacking a unified panel registry**, not a
-  defect of this plugin. Accordingly we never read or write another plugin's `data-dsh-*`
-  attributes and never dispatch `dsh-panel-activate`. We only write two attributes of our own:
-  `<html data-dsh-personal-workbench-active>` and `<html style="--wb-sidebar-w: Npx">`
-  (enforced by `test/clientInvariants.test.mjs`, I4/I5/I6).
-
-### Soft-probing (this does not contradict the above)
-
-**Any DSH service that is not present in every supported version must be soft-probed with
-`ctx.get(name)` and never listed in `inject`.** The distinction:
-
-- `slots` / `layout` are **preconditions of the panel feature** → they go into `inject`,
-  and a missing one means the panel block does not start (with a readable log);
-- `uiWorkspace` / `dshIm` / `skills` are **optional enhancements** →
-  soft-probed; missing one only removes a feature.
-
-Does **not** depend on `dsh-web-ui`.
-
-## Roadmap
-
-- [x] V2: AI prioritization for any date, OS-level notifications, daily/weekly reports
-- [x] V2: recurring tasks, personal knowledge base / lessons, ideas & idea clusters
-- [x] V2: Today plan panel long-list optimization (sticky stats / fixed-height inner scroll / expand-collapse / inline complete & defer) (1.4.0)
-- [x] V2: Custom prompt input before AI sessions (except quick intake; append user input after the default prompt) (1.5.0)
-- [x] V2: Manual editing for today/calendar plan panel (reorder, edit notes, add/remove plan items; keep AI generate + confirm + complete/defer) (1.5.0)
-- [x] V2: Official sidebar slots, task re-parenting, defer for every draft kind (1.14.0)
-- [x] Official-slots-only architecture: single source of truth for panel visibility, DOM fallback leg removed, capability gate (1.14.57)
-- [x] Task folders keyed by task id, quick-intake attachments (image / PDF / DOCX), model picker, `/workbench` command (1.15.1)
-- [ ] Future: scheduled automation, multi-device sync, drag-and-drop, import/export
-
-## Credits
-
-- **[@Guojing6](https://github.com/Guojing6)** — several 1.15.1 features originate from their fork
-  [`Guojing6/dsh-workbench`](https://github.com/Guojing6/dsh-workbench): task folders keyed by task id
-  (including pre-allocating the id at clarification time), quick-intake attachments (PDF/DOCX text
-  extraction and images through the host's multimodal pipeline), the model picker, the `/workbench`
-  slash command, and consolidating the duplicated request-fence helpers — plus locating two real
-  bugs this project had been carrying. Re-implemented against this repository's current modules
-  (their branch is based on v1.10.1); see [`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md).
-- [@tujunwenjie](https://github.com/tujunwenjie) — the diagnosis and fix branch in issue #3 that
-  showed the root cause of participating in a non-official sidebar family via DOM injection.
-- [@lhmhz](https://github.com/lhmhz) — issue #1.
-- **[@SnowNight777](https://github.com/SnowNight777)** — all three v1.15.3 fixes come from their
-  reports (issues [#4](https://github.com/Dely0/dsh-personal-workbench/issues/4) /
-  [#5](https://github.com/Dely0/dsh-personal-workbench/issues/5) /
-  [#7](https://github.com/Dely0/dsh-personal-workbench/issues/7) and PRs
-  [#6](https://github.com/Dely0/dsh-personal-workbench/pull/6) /
-  [#8](https://github.com/Dely0/dsh-personal-workbench/pull/8); commit authorship preserved):
-  ① **three task-creation paths never wrote a reminder row** (subtasks from a draft, `POST /tasks`,
-  `PATCH /tasks/:id`) — so those tasks **could never fire a reminder**; ② **an in-memory delivery-target
-  cache caused two linked defects** (after a restart the settings page mis-reported a bound target as
-  "not configured", and `isTargetConfigured` being false made the scheduler **silently skip every due
-  reminder, including the startup catch-up**) — their report cites the `draft-notify.ts` comment that
-  had already worked around the same trap, which explains in one line why only task reminders broke;
-  ③ **stale session references in reusable AI sessions** (after the referenced session was archived or
-  deleted, clicking did nothing and the stale registry row was never updated, permanently wedging that
-  chain) — they shipped a **pure predicate with table-driven tests**, and also found the **independent
-  second reuse path** (the report row's own `sessionId` fallback).
-  We verified every claim against the code and all three held. See
-  [`docs/releases/v1.15.3.md`](docs/releases/v1.15.3.md).
-
-## License
-
-MIT. See [LICENSE](./LICENSE) and [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md).
+Community project, not affiliated with DeepSeek; provided as-is. External contributions and bundled
+MIT-licensed persona sources are listed in [`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md).
+Licensed under [MIT](./LICENSE).

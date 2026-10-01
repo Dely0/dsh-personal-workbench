@@ -197,6 +197,88 @@ D04/D07/D09/D13 + V04 --------------------------------> V05 新功能回归
 - 写任务共享记忆：已实现片段、未完成片段、验证命令/结果、用户待验收点。代码完成后申请工作台验收，不直接done；当前consult策略需用户先切execute才能走工具验收。
 - 未经用户真机确认不公开发布、不改公开版本号、不重启19387当前实例。
 
+## 4.5 批次2 施工片段（2026-10-01 用户拍板后新增）
+
+> 口径与边界见 [requirements.md](requirements.md) §8、[ADR0001](../../adr/0001-today-is-the-day-panel.md)。
+> 顺序由用户拍板：**先零风险小项（已完成）→ 补规格（本节所在轮次）→ 再做 #2 与 S14**。
+
+### ENV-0 测试实例宿主对齐（阶段 0，运行环境操作）
+
+- 输出：`web` profile / 3080 的宿主核心从 0.1.7-rc.2 对齐到 0.2.0-rc.2；19387 不受影响、不重启。
+- 做法：加载 `dsh-safe-plugin-ops` → 备份（profile 的 package.json / pnpm-lock.yaml / cordis.patch.yml
+  + 全局核心登记）→ `npm install -g --prefix <私有前缀> @deepseek-ai/dsh@0.2.0-rc.2` 暂存
+  → 停放旧核心并原子切换 → `--dump-config` 门禁（不许出现 `incompatible with dsh` / patch not found）
+  → 只重启 3080 → 三层验收。失败必回滚（把停放目录改回 + 重启）。
+- 验收：AX-H03；`node scripts/check-installed-version.mjs` 装前装后退出码 0。
+- 大小 M。**必须先向用户说明共享农场会跟着换核心**（见 requirements §8.6）。
+
+### D14 日期来源判定与行标签（S14-A）
+
+- 输出：把「当日到期 / 当日计划项 / 进行中」的判定与行标签收进**一个**共享纯函数；
+  候选池 `planCandidates()` 改为从它派生（对外行为不变，既有回归必须保持绿）。
+- 预计文件：`src/shared/dailyPlanPolicy.ts`、`test/dailyPlanPolicy.test.mjs`、
+  `test/dayPanelTree.test.mjs`（新）、`tsconfig.build.json`（若新增纯模块）。
+- 验收：表驱动覆盖三来源的全部命中组合（含三者同时命中）；顺序固定 到期→计划→进行中；
+  `done`/`cancelled` 排除；AX-T01/T02。
+- 验证：`pnpm build`、`node --test test/dailyPlanPolicy.test.mjs test/dayPanelTree.test.mjs`。
+- 依赖：无。大小 M。
+
+### D15 日期面板组件收敛（S14-B）
+
+- 输出：新增 `components/DayPanel.tsx`（计划/已完成/报告三页签 + 计划面板 + 树 + 报告）；
+  今日 view 与日历 view 都改为装配它；**`index.tsx` 行数下降**。
+- 预计文件：`src/client/components/DayPanel.tsx`（新）、`src/client/index.tsx`、
+  `src/client/taskFilterSort.ts`、`test/dayPanelWiring.test.mjs`（新）。
+- 验收：AX-T02/T04 的 W 层；`index.tsx` 行数小于改动前（数值进提交信息，不写进文档）。
+- 验证：`pnpm typecheck`、`pnpm build`、`node --test test/dayPanelWiring.test.mjs`。
+- 依赖：D14。大小 L，拆"三页签与树"和"统计卡/容量条归位"两次提交与验证。
+
+### D16 受影响判据同步 + 新浏览器套件（S14-C）
+
+- 输出：`test/capacityWiring.test.mjs`（两处接线合并后的调用点计数）、
+  `scripts/verify/suites/daily-effort.mjs`（三处 `clickByText('今日', '.wb-seg')`）按新结构改造；
+  新增 `scripts/verify/suites/day-panel.mjs` 并登记进 `suites.json`。
+- 验收：AX-T03/T05 的 B 层；旧四套与新套件全绿；**每条判据改动都要写清"为什么改"，这不是放宽**。
+- 验证：`node --test test/capacityWiring.test.mjs`、链真跑（需 ENV-0 与隔离确认）。
+- 依赖：D15。大小 M。
+
+### D17 WorkbenchApp 拆分（S14 之后）
+
+- 前置：**先重写** `docs/design/2026-09-09-client-split-backlog.md`（现状 5631 行、Windows 原生构建、
+  `DayPanel` 已是新边界），再动代码 —— 照抄旧行号地图等于拆两遍。
+- 出口判据：目标文件变小；对外 DOM 结构与 CSS 类名不变；不改 `/api/workbench/*` 形状。
+- 依赖：D16。大小 L（按视图逐个搬，一次一个、搬完即验）。可另立子任务。
+
+### W01 工作区候选与选择判定（#2-A）
+
+- 输出：已有工作区 ∪ 最近手动 ∪ 默认值的候选判定收成纯函数（唯一实现）；
+  新增 `components/WorkspacePicker.tsx`（下拉 + 「浏览…」按钮 + 弹框装配）。
+- 预计文件：`src/client/intakeWorkspace.ts`、`src/client/quickWorkspaceDefault.ts`、
+  `src/client/components/WorkspacePicker.tsx`（新）、`test/intakeWorkspace.test.mjs`。
+- 验收：AX-W01；默认值口径与「不再记住」出口行为逐字不变。
+- 依赖：无。大小 M。
+
+### W02 三个入口接线（#2-B）
+
+- 输出：快速录入 / 新建任务 / 编辑任务三处共用 `WorkspacePicker`；选中值落到各自 `workspacePath`。
+- 验收：AX-W02；三处文案与判定一致（同一字段两个入口两套说法＝迟早打架）。
+- 验证：`pnpm typecheck`、`pnpm build`、`node --test test/quickIntakeClient.test.mjs test/quickIntakeDefaultWiring.test.mjs`。
+- 依赖：W01。大小 M。
+
+### W03 文件夹浏览弹框复用（#2-C）
+
+- 输出：`components/LocalDocModal.tsx` 增加 `mode: 'file' | 'dir'`（目录行给「选择此文件夹」）；
+  复用 `src/api/localDirRoute.ts`，不新建路由、不复制弹窗。
+- 验收：AX-W03（file 模式行为逐字不变 + 失败路径可读）；新增 `suites/workspace-picker.mjs`。
+- 依赖：W01。大小 M。
+
+### H01 版本声明与构建期类型源（#1）
+
+- 已完成：`NEWEST_HOST` → `0.2.0-rc.2`（AX-H01）。
+- 待办：`devDependencies` 的 `@deepseek-ai/dsh-*` 对齐到声明覆盖的核心线，
+  付一次完整 typecheck/build/测试（AX-H02）。**不算零风险，单独一次提交与验证。**
+- 依赖：无。大小 S。
+
 ## 5. 保留与风险说明
 
 原10项、遗留清单、批次2/3路线图见工作台任务描述，不用这次新增规格覆盖历史范围。不改docs/release-checklist.md里用户已有修改。`.pwtest`和关联ADR当前可能未跟踪，但不要自动git add/commit全仓；用户未要求提交代码。
