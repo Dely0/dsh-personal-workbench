@@ -291,3 +291,30 @@ test('quickFollowFolderDefault: 只看全局开关与"有没有目标目录"，�
     '两条不同来源的路径在同一个开关下必须给出同一个默认勾选',
   )
 })
+
+/**
+ * 接线：**喂进候选集的那份"最近手动选择"必须是真的**。
+ *
+ * ## 为什么这条必须有（2026-10-02 由变异探针抓出，是真盲点）
+ *
+ * `probe-quick-workspace-mutations` 的 **M10** 把调用点的
+ * `recent: settings.quickWorkspaceRecent` 换成 `recent: []` —— **所有测试仍然全绿**。
+ * 也就是说：判定函数（合并/去重/删除）守着，`WorkspacePicker` 组件守着，
+ * 但"**调用点到底喂了什么**"没人守。后果是"最近手动选择"整条能力**静默失效**：
+ * 下拉里永远只剩「已打开」与「默认」，用户上次手选的目录再也不出现 ——
+ * 而这与"判定写错了"是两种完全不同的 bug（一个改函数，一个改调用点）。
+ *
+ * 判据刻意盯**实参**而不是函数名：`workspaceCandidates(...)` 被调用了不算数，
+ * 要真的把列表传进去。
+ */
+test('接线：workspaceCandidates 的 recent 必须是设置里的真实列表（传空数组 = 能力静默失效）', () => {
+  const { stripped } = readSource('../src/client/index.tsx')
+  const calls = [...stripped.matchAll(/workspaceCandidates\(\{[\s\S]*?\}\)/g)].map((matched) => matched[0])
+  assert.ok(calls.length >= 1, `预期至少一处 workspaceCandidates 调用，实际 ${calls.length} 处`)
+  for (const call of calls) {
+    assert.match(call, /recent:\s*settings\.quickWorkspaceRecent/,
+      'recent 必须来自 settings.quickWorkspaceRecent —— 传空数组会让「最近手动选择」静默消失（判定对、喂错了）')
+    assert.doesNotMatch(call, /recent:\s*\[\s*\]/, 'recent 不许写死成空数组')
+  }
+})
+

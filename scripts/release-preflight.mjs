@@ -70,7 +70,7 @@ const KNOWN_PROBE_DEBT = [
   },
   {
     probe: 'probe-quick-workspace-mutations',
-    reason: '真盲点 1 条（M10：调用点把 recent 传成空数组没有判据）+ 失效 2 条（M6/M14：调用点与按钮渲染条件已换位置）',
+    reason: '失效 2 条（M6/M14：调用点与按钮渲染条件已换位置，需重锚）—— 真盲点 M10 已于 2026-10-02 补判据并销账',
   },
 ]
 

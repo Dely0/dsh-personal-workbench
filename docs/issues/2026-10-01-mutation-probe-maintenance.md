@@ -25,9 +25,9 @@
 | `probe-capacity-mutations` | **M13** 客户端不再就地校验非法耗时 | 同上 |
 | `probe-capacity-mutations` | **M14** 删掉乐观更新（改完要刷新才看到「已排」变） | 同上 |
 | `probe-capacity-mutations` | **M19** 面板把逾期开关的勾选态写死 `false`（**开关变成假控件：点了不勾**） | 同上 |
-| `probe-quick-workspace-mutations` | **M10** 调用点把 `recent` 传成空数组（判定对、喂错了） | 同上 |
+| `probe-quick-workspace-mutations` | ~~**M10** 调用点把 `recent` 传成空数组（判定对、喂错了）~~ | ✅ **2026-10-02 已修**：在 `test/quickWorkspaceDefault.test.mjs` 补了一条**盯实参**的接线判据（`workspaceCandidates({...})` 里 `recent` 必须是 `settings.quickWorkspaceRecent`、不许写死 `[]`）；反向验证：装回缺陷该判据立刻变红，探针从 3/15 → **2/15**。教训：**"函数被调用了"不算数，要盯喂进去的实参** —— 判定函数与组件各自都有测试，唯独"调用点接线"没人守 |
 
-**优先级**：M19 与 M10（都是"用户可见的静默失效"）→ 再 M11–M14。
+**优先级**：M19（用户可见的静默失效）→ 再 capacity 的 M11–M14。
 
 ## B. 探针失效（19 条，**要重锚**）
 
