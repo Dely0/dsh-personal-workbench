@@ -39,13 +39,15 @@ foreach ($p in Get-ChildItem scripts\repro -Filter "probe-*-mutations.mjs") {
    `找不到替换片段（探针失效，需更新）`（M16/M17/M18 等）—— 批次1/1.5 的重构搬动了源码，
    探针锚的字符串已经不在了。**失效的探针等于没有探针**，必须一起修。
 
-## C. 顺带发现的文档缺陷
+## C. 顺带发现的文档缺陷（**已修**）
 
 `dsh-release` skill §3 写的是 `node scripts/probe-*-mutations.mjs` —— **路径过时**，
 实际在 `scripts/repro/` 下。这条路径错误大概率就是"漏跑门禁"的一部分原因（照着敲会找不到文件）。
 
-**待办**：改 skill（源仓库 `C:\Users\Administrator\dsh-private-toolkit` 的 skill 正文 +
-本机加载副本 `~/.dsh/skills/dsh-release/SKILL.md`，注意两者是**冻结快照**关系，要一起改）。
+**已处置（2026-10-02）**：把该 skill **落盘为项目级** [`.dsh/skills/dsh-release/SKILL.md`](../.dsh/skills/dsh-release/SKILL.md)
+（**V1.2.0**），修正了探针路径、补上"每个探针之间必须 `pnpm build`"、新增 §0.2 范围表、
+重写 §7 发布成功判据、新增 §11 npm 平台变更。项目级 `rank 100` **遮蔽**用户级 `rank 400`，
+所以本项目此后生效的就是这一份；跨项目源仓库 `Dely0/dsh-private-toolkit` 里那份**待回流**（否则别的项目仍是旧规矩）。
 
 ## D. 结论
 
