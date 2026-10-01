@@ -61,6 +61,30 @@ const FIND_ENTRY = `
   return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
 `
 
+/**
+ * 收尾：把侧栏还原成**展开**态。
+ *
+ * 本套件的 LEG-S04 是"面板开着时收起侧栏"，跑完**侧栏是收起的**。同一链里的后续套件
+ * 要先打开面板，而**收起的侧栏里没有「工作台」入口行**（宿主不渲染）⇒ 下一条套件会以
+ * "没找到按钮"失败，报错指向错误的方向（实测 `legacy-duplicate-task` LEG-D04）。
+ *
+ * 判定用**行为式**（入口行可见吗），不猜宿主内部标记。
+ * 返回 `'entry-visible' | 'expanded' | 'toggle-not-found' | 'entry-still-missing'`，只留痕、不改判定。
+ */
+async function restoreSidebarExpanded(browser) {
+  const entryVisible = () => browser.evaluate(`
+    const hit = Array.from(document.querySelectorAll('button'))
+      .find((n) => (n.textContent || '').includes('工作台') && n.offsetParent !== null);
+    return hit === undefined ? false : true;
+  `)
+  if ((await entryVisible()) === true) return 'entry-visible'
+  const toggle = await browser.evaluate(FIND_TOGGLE)
+  if (toggle === null) return 'toggle-not-found'
+  await browser.clickAt(toggle.x, toggle.y)
+  await new Promise((resolve) => setTimeout(resolve, 700))
+  return (await entryVisible()) === true ? 'expanded' : 'entry-still-missing'
+}
+
 const report = {}
 const steps = {}
 let browser
@@ -162,6 +186,19 @@ try {
 } finally {
   try {
     if (browser !== undefined) {
+      /**
+       * **收尾必须把侧栏还原成展开态**（2026-10-02 修）。
+       *
+       * 本套件的 LEG-S04 刻意在面板开着时把侧栏收起；而链是**同一个浏览器**跑完所有套件，
+       * 收起的侧栏会让**下一条套件**找不到「工作台」入口 —— 实测
+       * `legacy-duplicate-task` 的 LEG-D04 就是这么红的（`{present:true, dataOpen:null, w:0}`），
+       * 报错还指向"面板没打开"，与真实原因（侧栏被别人收起了）不符。
+       *
+       * 纪律：**谁污染谁还原**。harness 侧另有一层兜底（`expandSidebarIfCollapsed`），
+       * 这里做的是"不留脏状态"的本分。
+       */
+      const restored = await restoreSidebarExpanded(browser)
+      suite.note(`收尾：侧栏还原 = ${restored}`)
       await browser.screenshot(`${suite.dir}/99-收尾.png`).catch(() => undefined)
       await browser.close()
     }

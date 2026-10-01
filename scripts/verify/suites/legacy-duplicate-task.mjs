@@ -150,11 +150,18 @@ try {
   if (!entryReady) suite.note('等待 45s 仍无可见入口 —— 下面按 LEG 文档逐条记 fail（不跳过）')
   await sleep(800)
   const clicked = await ensureWorkbenchPanel(browser)
-  suite.note(`点击侧栏工作台入口：${clicked === null ? '(没找到按钮)' : '已点'}`)
-  await waitFor(async () => {
+  suite.note(`点击侧栏工作台入口：${clicked === null ? '(没找到按钮)' : `data-open=${clicked}`}`)
+  /**
+   * ⚠️ **不许吞超时**（2026-10-02 修）。
+   *
+   * 旧写法是 `.catch(() => undefined)`：等了 15s 面板没开也静默放过，最后红在下面那条断言上，
+   * 报错只写 `{present:true, dataOpen:null, w:0}` —— 与真实原因（冷启动首帧入口还没渲出来、
+   * 点击没生效）对不上，排查绕了很久。现在把**等待结果**与**入口点击结果**都写进 detail。
+   */
+  const openedInTime = await waitFor(async () => {
     const snap = await browser.evaluate(`const h = document.querySelector('.wb-panel-host'); return h !== null && h.getAttribute('data-open') === '1';`)
     return snap === true
-  }, { timeoutMs: 15000, description: '面板 data-open=1' }).catch(() => undefined)
+  }, { timeoutMs: 15000, description: '面板 data-open=1' }).then(() => true).catch(() => false)
   const opened = await browser.evaluate(`
     const host = document.querySelector('.wb-panel-host');
     const r = host === null ? null : host.getBoundingClientRect();
@@ -162,7 +169,7 @@ try {
   `)
   report.panel = opened
   await browser.screenshot(`${suite.dir}/01-panel-open.png`)
-  suite.check({ id: '工作台面板已打开（data-open=1 且宽>200）', legacyId: 'LEG-D04', layer: 'B', ok: opened.present && opened.dataOpen === '1' && opened.w > 200, detail: safeJson(opened) })
+  suite.check({ id: '工作台面板已打开（data-open=1 且宽>200）', legacyId: 'LEG-D04', layer: 'B', ok: opened.present && opened.dataOpen === '1' && opened.w > 200, detail: `${safeJson(opened)}；等 data-open=1：${openedInTime ? '成功' : '15s 超时'}；入口点击：${clicked === null ? '没找到按钮' : `data-open=${clicked}`}` })
 
   // ── LEG-D05 点第二份「确认入册」→ 出现「库里已经有一条同名任务」选择框 ──
   await sleep(6000) // 等宿主 5 秒轮询把第二份草稿推上来

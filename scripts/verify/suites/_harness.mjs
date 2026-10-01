@@ -99,15 +99,61 @@ export function originOf(url) {
  *
  * @returns 最终 `data-open` 值（`'1'` = 已打开；`null` = 面板壳还没渲染）
  */
+/**
+ * 点一下侧栏开合按钮（**只有在"等渲染等够了还是没有入口行"时**才该调用 —— 见
+ * `ensureWorkbenchPanel` 的顺序）。
+ *
+ * ⚠️ **踩过的坑（2026-10-02）**：先判"入口可见吗"再决定点不点，会把**首帧还没渲染**
+ * 误判成"侧栏已收起"，于是**把本来展开的侧栏收起来**，之后 12s 也找不到入口 ——
+ * 自作聪明的恢复反而制造了故障。所以判定顺序是"先等渲染，等不到才动开关"。
+ *
+ * @returns {Promise<'clicked'|'toggle-not-found'>}
+ */
+export async function clickSidebarToggleOnce(browser) {
+  const toggle = await browser.evaluate(`
+    const el = Array.from(document.querySelectorAll('button')).find((b) => {
+      const a = b.getAttribute('aria-label') || '';
+      return a.includes('收起侧边栏') || a.includes('展开侧边栏') || a.includes('侧边栏');
+    });
+    if (el === undefined) return null;
+    const r = el.getBoundingClientRect();
+    if (r.width <= 0 || r.height <= 0) return null;
+    return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+  `)
+  if (toggle === null) return 'toggle-not-found'
+  await browser.clickAt(toggle.x, toggle.y)
+  await new Promise((resolve) => setTimeout(resolve, 700))
+  return 'clicked'
+}
+
 export async function ensureWorkbenchPanel(browser, options = {}) {
-  const { attempts = 2, timeoutMs = 15000 } = options
+  const { attempts = 3, timeoutMs = 15000, entryWaitMs = 12000 } = options
   const readOpen = () => browser.evaluate(
     `const h = document.querySelector('.wb-panel-host'); return h === null ? null : h.getAttribute('data-open');`,
   )
+  const entryVisible = () => browser.evaluate(`
+    const hit = Array.from(document.querySelectorAll('button'))
+      .find((n) => (n.textContent || '').includes('工作台') && n.offsetParent !== null);
+    return hit === undefined ? false : true;
+  `)
+  /** 等入口行渲染出来（冷启动首帧要一会儿；旧实现只试一次就返回，报错方向完全指错）。 */
+  const waitEntry = async (ms) => {
+    const deadline = Date.now() + ms
+    while (Date.now() < deadline) {
+      if ((await entryVisible()) === true) return true
+      await new Promise((resolve) => setTimeout(resolve, 300))
+    }
+    return false
+  }
   for (let round = 0; round < attempts; round += 1) {
     if ((await readOpen()) === '1') return '1'
+    if ((await waitEntry(entryWaitMs)) !== true) {
+      // 等够了还是没有 ⇒ 才认定侧栏被收起了（收起的侧栏里宿主不渲染入口行），点开合按钮
+      await clickSidebarToggleOnce(browser)
+      if ((await waitEntry(5000)) !== true) continue
+    }
     const entry = await browser.clickByText('工作台', 'button')
-    if (entry === null) return await readOpen()
+    if (entry === null) continue
     const deadline = Date.now() + timeoutMs
     while (Date.now() < deadline) {
       if ((await readOpen()) === '1') return '1'
