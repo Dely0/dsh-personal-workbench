@@ -231,6 +231,18 @@ export async function launchDebugBrowser(options = {}) {
   await cdp.send('Runtime.enable')
   await cdp.send('Page.enable')
   await cdp.send('Log.enable')
+  /**
+   * **把本 target 拉到前台**（2026-10-02 实测踩到的一个致命坑）。
+   *
+   * `targets.find(t => t.type === 'page')` 取的是**第一个** page target；浏览器里只要多出
+   * 一个标签页（旧 profile 遗留、启动器先开的 about:blank 等），我们连上的页面就可能**不是前台标签**。
+   * Chromium 对**非前台 target 的输入事件会静默丢弃**：`Input.dispatchMouseEvent` 发出去，
+   * 页面**一个事件都收不到**（`pointerdown`/`click` 全空），而 `Runtime.evaluate` 照常有效 ——
+   * 于是"用 JS `.click()` 能生效、真实鼠标点击毫无反应"，排查方向会被带偏很远
+   *（本次就是这么绕进去的：链里 `legacy-duplicate-task` 的 LEG-D04 一直红，
+   * 而套件里其它"点了之后验证效果"的断言又是绿的，因为那些套件跑的时候页面恰好在前台）。
+   */
+  await cdp.send('Page.bringToFront').catch(() => undefined)
   cdp.onEvent((msg) => {
     if (msg.method === 'Runtime.consoleAPICalled') {
       const text = (msg.params.args ?? []).map((arg) => arg.value ?? arg.description ?? arg.type).join(' ')
@@ -295,6 +307,11 @@ export async function launchDebugBrowser(options = {}) {
     },
     /** 用坐标点击（viewport 像素）。 */
     async clickAt(x, y) {
+      /**
+       * 每次点击前都拉一次前台：**非前台 target 的输入事件会被 Chromium 静默丢弃**
+       *（页面一个事件都收不到，而 `evaluate` 照常有效）—— 见连接处的长注释。
+       */
+      await cdp.send('Page.bringToFront').catch(() => undefined)
       for (const type of ['mousePressed', 'mouseReleased']) {
         await cdp.send('Input.dispatchMouseEvent', { type, x, y, button: 'left', clickCount: 1 })
       }
@@ -336,8 +353,37 @@ export async function launchDebugBrowser(options = {}) {
         return { x: r.left + r.width / 2, y: r.top + r.height / 2, text: hit.textContent };
       `)
       const target = settled ?? box
+      /**
+       * ⚠️ **点完要验证"这次点击真的产生了事件"**（2026-10-02 实测踩到，代价很大）。
+       *
+       * 发生过的事实：坐标正确（命中测试就是那个元素、视口内、DPR=1、无滚动、无遮罩），
+       * `Input.dispatchMouseEvent` 也返回成功，但页面**一个事件都收不到**
+       *（`pointerdown`/`mouseup`/`click` 全空、`document` 上也没有），于是"点了没生效"；
+       * 而同一页面上 `Runtime.evaluate` 正常、JS `el.click()` 立刻生效。
+       * 症状极具欺骗性：套件里"点了之后**验证效果**"的断言会红（如 LEG-D04「面板已打开」），
+       * 而只检查"`clickByText` 返回了非 null"的地方却照样绿 —— 后者是**空洞的通过**。
+       *
+       * 处置：点完埋一个一次性探针确认事件是否到达；没到达就**退回 DOM 级点击**并留痕
+       *（`clickFallback: 'dom-click'`）。判据本身仍然验的是"效果"（如 `data-open=1`），
+       * 只是我们不再假装"发过事件就一定是点上了"。
+       */
+      await api.evaluate(`
+        window.__wbClickProbe = 0;
+        document.addEventListener('click', () => { window.__wbClickProbe = 1; }, { once: true, capture: true });
+        return true;
+      `)
       await api.clickAt(Math.round(target.x), Math.round(target.y))
-      return target
+      const seen = await api.evaluate(`return window.__wbClickProbe === 1;`)
+      if (seen === true) return { ...target, clickChannel: 'cdp-mouse' }
+      const fallback = await api.evaluate(`
+        const wanted = ${JSON.stringify(text)};
+        const nodes = Array.from(document.querySelectorAll(${JSON.stringify(selector)}));
+        const hit = nodes.find((n) => (n.textContent || '').includes(wanted) && n.offsetParent !== null);
+        if (!hit) return null;
+        hit.click();
+        return true;
+      `)
+      return { ...target, clickChannel: fallback === true ? 'dom-click' : 'none' }
     },
     /** 只关自己：自己的实例（browser 端点）、自己的 ws、自己的子进程、自己的临时 profile 目录。 */
     async close() {
