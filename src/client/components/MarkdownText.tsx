@@ -1,26 +1,56 @@
 /**
  * 极简 Markdown 渲染（标题 / 列表 / 表格 / 引用 / 代码块 / 行内样式）。
- * 从 index.tsx 原样抽出：草稿弹窗与详情页都要用，且与组件状态无关。
+ *
+ * ## 行内判定已经不在这个文件里（2026-10-01）
+ *
+ * 行内解析搬去了纯模块 `inlineMarkdown.ts`，链接判据在 `externalLink.ts`：
+ * 这里**只做投影**（token → JSX）。原因是真实事故：本组件原先直接渲染
+ * `<a href="...">`（没有 target、没有 onClick），点击即**导航宿主文档**，
+ * 桌面端（`dsh-app://app/…`）会白屏且不可恢复。规矩因此变成：
+ *
+ * - **组件里不许出现任何 href 判定**（谁可点由 `parseInline` 决定）；
+ * - 唯一允许出现的 `<a>` 的 `href` / `target` / `rel` 全部来自 token
+ *   （而 token 来自 `projectLink()` 的规范化结果）；
+ * - 点击统一走 `handleExternalLinkClick()`（与宿主 markdown 逐字同构：
+ *   未加修饰键的左键 → `preventDefault()` + `window.open(..., '_blank')`）。
  */
-function renderInline(text: string): (string | JSX.Element)[] {
-  const parts: (string | JSX.Element)[] = []
-  const regex = /(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\([^)]*\))/g
-  let last = 0
-  for (const match of text.matchAll(regex)) {
-    const idx = match.index
-    if (idx > last) parts.push(text.slice(last, idx))
-    const token = match[0]
-    if (token.startsWith('**')) parts.push(<strong key={idx}>{token.slice(2, -2)}</strong>)
-    else if (token.startsWith('`')) parts.push(<code key={idx} style={{ background: 'rgba(127,127,127,.14)', padding: '0 4px', borderRadius: 4 }}>{token.slice(1, -1)}</code>)
-    else {
-      const m = /^\[([^\]]+)\]\(([^)]*)\)$/.exec(token)
-      if (m !== null) parts.push(<a key={idx} href={m[2]} style={{ color: 'var(--dsw-alias-state-business-primary,#8fa8c8)' }}>{m[1]}</a>)
-      else parts.push(token)
+import { handleExternalLinkClick } from '../externalLink.js'
+import { parseInline, type InlineToken } from '../inlineMarkdown.js'
+
+const LINK_STYLE = { color: 'var(--dsw-alias-state-business-primary,#8fa8c8)' } as const
+const CODE_STYLE = { background: 'rgba(127,127,127,.14)', padding: '0 4px', borderRadius: 4 } as const
+
+/** token → JSX（纯投影，无判定）。 */
+function renderTokens(tokens: InlineToken[]): (string | JSX.Element)[] {
+  return tokens.map((token, index) => {
+    if (token.type === 'text') return token.text
+    if (token.type === 'strong') return <strong key={index}>{token.text}</strong>
+    if (token.type === 'code') return <code key={index} style={CODE_STYLE}>{token.text}</code>
+    if (token.type === 'link-inert') {
+      // 不可点：**不渲染 href**，只留文本 + 说明为什么点不了（相对路径在桌面端会白屏）
+      return <span key={index} style={LINK_STYLE} title={`未在 DSH 内打开：${token.hint}`}>{token.text}</span>
     }
-    last = idx + token.length
-  }
-  if (last < text.length) parts.push(text.slice(last))
-  return parts
+    return (
+      <a
+        key={index}
+        href={token.href}
+        target={token.target}
+        rel={token.rel}
+        style={LINK_STYLE}
+        onClick={(event) => {
+          handleExternalLinkClick(event, token.href, {
+            open: (url) => window.open(url, '_blank', 'noopener,noreferrer'),
+          })
+        }}
+      >
+        {token.text}
+      </a>
+    )
+  })
+}
+
+function renderInline(text: string): (string | JSX.Element)[] {
+  return renderTokens(parseInline(text))
 }
 
 export function MarkdownText({ text }: { text: string }): JSX.Element {
