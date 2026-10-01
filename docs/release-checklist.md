@@ -147,3 +147,35 @@ node scripts/dev-install.mjs --apply    # 真装：自动备份 + 零增量 diff
       `README.md` 的致谢段（中英双段）补上贡献者与具体贡献，
       `THIRD_PARTY_NOTICES.md` 登记可追溯信息（报告/PR 链接、许可证、逐项说明）。
       源头解决就不会出现"发布后才发现致谢漏了"这种被动局面。
+- [ ] 在 `docs/releases/v<ver>.md` 写下**发布产物表**（版本号 / tag / npm / Release URL / 提交 / **包哈希** / 文件数），
+      并附上"拉回真实产物复核"的结论 —— 这一节是"四者一致"的书面证据。
+
+## 7. 判"发布成功"的判据（v1.16.1 的血泪版）
+
+**退出码 0 不算、网页显示 "Published" 也不算。** 按这个顺序查：
+
+1. `GET https://registry.npmjs.org/-/package/<pkg>/dist-tags` → `latest` 指向新版本；
+2. `curl -sSL -o x.tgz https://registry.npmjs.org/<pkg>/-/<name>-<ver>.tgz` → **HTTP 200**（404 就是还没成）；
+   再 `Get-FileHash x.tgz -Algorithm SHA1`，与 `GET /<pkg>/<ver>` 的 `dist.shasum` **逐字节比对**；
+3. **用户视角**：空目录 + `--cache <全新目录>` 跑一次 `npm i <pkg>`（不指定版本，走 `latest`）必须成功。
+
+> 反面教材（2026-10-01 发 v1.16.1）：`npm publish` 在传输途中被掐断，服务端留下
+> "版本元数据已写、tarball 未落、packument/dist-tag 未提交"的中间态 ——
+> 此时 `GET /<pkg>/<ver>` 返回 **200**（极易误判成"发出去了"），而 tarball **404**；
+> **npm 网页对维护者还会把这条记录显示成 "Published" 并列出 `<ver> = latest`**。
+> 其后重发一律 `409 Cannot publish over previously staged version`（措辞会变，别按字面理解），
+> 而 `npm stage list` **同时是空的**（没有 stage-id 可批准）。
+> 真正解掉它的是：**在正确目录用会话身份（`npm login`）重发一次**，让提交完成。
+
+**两条配套硬规矩**（这次都踩了）：
+
+- **发布命令单独一条执行**，绝不与 `git push`（带 `HTTPS_PROXY`）写在同一条命令里 ——
+  同进程的环境变量会被包管理器继承，registry 请求走错代理而超时/被掐断。
+  发布前显式清：`Remove-Item Env:\HTTPS_PROXY,Env:\HTTP_PROXY,Env:\ALL_PROXY`。
+- **`npm view <pkg>@<ver>` / `npm i` 都可能命中本地 npm 缓存**（表现为 `E404` / `notarget`），
+  而**同一时刻直连原站的 HTTP 读取可能已经是最新的**。两边不一致时用 `curl` 直连原站裁决，别急着下结论。
+
+> 另注：npm 正在废除 **bypass-2FA granular token 的直接发布**（账户类操作 2026-08 已生效、
+> 直接发布预计 2027-01 取消），发布时会打 deprecation notice。长远要迁到
+> [trusted publishing (OIDC)](https://docs.npmjs.com/trusted-publishers) 或
+> [staged publishing](https://docs.npmjs.com/staged-publishing)（token 只 stage、人 2FA 批准）。
