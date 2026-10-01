@@ -126,11 +126,18 @@ node scripts/dev-install.mjs --apply    # 真装：自动备份 + 零增量 diff
       npm 又不允许覆盖已发布版本 —— 一旦发布后才发现漏了，npm 上就只剩两条路：
       发一个多余的 patch 版本（**不推荐**，见本节第一条），或者**等到下一个版本才送达**。
       所以正确做法是**在发版前把文档核对干净**，而不是事后补发版本。
-- [ ] 若目标是 npm：`pnpm publish`（`files` 白名单已含 `lib`、`cordis.patch.yml`、`README.md`、
-      `LICENSE`、`THIRD_PARTY_NOTICES.md`、`screenshot`；**确认 `lib/` 是最新构建产物**）。
+- [ ] ⚠️ **发版前跑 PII 扫描：`node scripts/check-pii.mjs`（退出码 0）**。
+      它分**两个面**扫：面一 = git 跟踪文件（GitHub 公开面）；面二 = `lib/**`（**会随 npm 包发布**，
+      源码里一句 JSDoc 注释也会被用户看到）。v1.16.0 发布前正是靠它抓出 3 处会随包外发的泄漏。
+      **命中不等于要删**：逐条判断是"给用户看的示例文案（合法）"还是真泄漏 —— 误报一键删会删掉产品文案。
+- [ ] 若目标是 npm：`pnpm publish`（`files` 白名单已含 `lib`、`assets/personas`、`cordis.patch.yml`、
+      `README.md`、`LICENSE`、`LICENSE-novotnyllc-dotnet-artisan`、`LICENSE-K-Dense-scientific-agents`、
+      `THIRD_PARTY_NOTICES.md`、`screenshot`；**确认 `lib/` 是最新构建产物**）。
+      ⚠️ 两份上游 `LICENSE-*` 是 **MIT 的硬要求**（"副本中保留版权声明与许可全文"）——
+      随包内置了第三方 persona 就必须带上，漏了等于署名义务破。
 - [ ] 发布后再跑一次 `node scripts/check-installed-version.mjs`（防止发布动作本身改了 profile）。
 - [ ] 发布后**拉回真实产物复核**：`npm pack <pkg>@<ver>` 解包，确认包内 README 是最新的、
-      不含 `docs/` `test/` `scripts/`、无私人信息（见 `scripts/` 下的扫描做法）。
+      不含 `docs/` `test/` `scripts/`、**无私人信息**（对解包目录再跑一次 `node scripts/check-pii.mjs dist`）。
 
 ## 6. 发布后
 
