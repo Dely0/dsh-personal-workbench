@@ -140,6 +140,9 @@ ${panelContainerCss({ view: VIEW_ATTR, official: OFFICIAL_ATTR, active: ACTIVE_A
 .wb-plan-edit-actions { display:inline-flex; gap:4px; flex:none; margin-left:auto; }
 .wb-plan-edit-actions .wb-btn { padding:2px 7px; font-size:11px; }
 .wb-row-title { display:flex; align-items:center; gap:6px; min-width:0; }
+/* 标题文字自己的节点（徽标是它的兄弟节点）：截断在这一层做，否则会把徽标一起截掉。
+   ⚠️ 别把徽标放回 .wb-row-title 的文字流里 —— 那会污染"标题"这个定位点（见 TaskList.tsx 的长注释）。 */
+.wb-row-title-text { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 /* 日期面板的行来源徽标（批次2 D15）：到期 / 计划 / 进行中，可多来源并列 */
 .wb-src { flex:none; font-size:10px; font-weight:600; padding:1px 6px; border-radius:6px; letter-spacing:.2px;
   background:color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 14%, transparent);

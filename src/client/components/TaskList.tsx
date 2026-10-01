@@ -89,7 +89,15 @@ export function TaskRow({ task, dicts, onOpen, selected, bare = false, pending =
   const content = (
     <>
       <div className="wb-row-title" style={{ fontWeight: 600 }}>
-        {task.title}
+        {/**
+          * ⚠️ 标题文字**必须有自己的节点**（`.wb-row-title-text`），不要把徽标塞进标题的文字流里。
+          *
+          * 2026-10-02 实测踩到：批次2 的「逐条标来源」把 `<span class="wb-src">` 直接追加在标题文字后面，
+          * `.wb-row-title` 的 `textContent` 于是变成「标题 + 徽标」—— 所有拿它当"标题"做**严格相等**比较的
+          * 套件/脚本全部找不到行（`progress` 套件 10 条断言级联失败，看着像"进度 UI 没了"，
+          * 实际是定位点被徽标污染）。给标题一个稳定节点，比让每个消费者各自去猜文本构成可靠。
+          */}
+        <span className="wb-row-title-text">{task.title}</span>
         {sourceLabel !== null && sourceLabel !== '' && (
           <span className="wb-src" data-task-source={sourceLabel} title={`为什么在这一天：${sourceLabel}`}>{sourceLabel}</span>
         )}

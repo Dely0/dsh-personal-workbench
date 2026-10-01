@@ -44,7 +44,7 @@ async function clickSelector(selector) {
 const READ_PANEL = `
   const tabs = Array.from(document.querySelectorAll('[data-day-tabs] .wb-seg')).map((b) => (b.textContent || '').trim().replace(/\\s+/g, ' '));
   const rows = Array.from(document.querySelectorAll('.wb-row')).map((row) => {
-    const title = row.querySelector('.wb-row-title');
+    const title = row.querySelector('.wb-row-title-text');
     const src = row.querySelector('[data-task-source]');
     return {
       title: title === null ? '' : (title.childNodes[0] === undefined ? '' : (title.childNodes[0].textContent || '').trim()),

@@ -305,17 +305,54 @@ export async function launchDebugBrowser(options = {}) {
       writeFileSync(file, Buffer.from(shot.data, 'base64'))
       return file
     },
-    /** 用坐标点击（viewport 像素）。 */
+    /**
+     * 用坐标点击（viewport 像素）。**点完会验证"事件真的到达了页面"**，没到达就退回 DOM 级点击。
+     *
+     * ## 为什么要验证（2026-10-02 实测，代价很大）
+     *
+     * 实测到过：坐标正确（命中测试就是那个元素、视口内、DPR=1、无滚动、无遮罩）、
+     * `Input.dispatchMouseEvent` 返回成功，但页面**一个事件都收不到**
+     *（`pointerdown`/`mouseup`/`click` 全空、`document` 上也没有）；
+     * 而同一页面 `Runtime.evaluate` 正常、JS `el.click()` **立刻生效**。
+     * `Page.bringToFront` 也救不了。
+     *
+     * 症状极具欺骗性：
+     * - 只检查"点击函数返回了坐标"的地方 → **照样绿**（空洞通过）；
+     * - 而"点了之后验证效果"的地方 → 红，且报错指向业务（如"面板没打开"、"列表里找不到任务行"），
+     *   实际是点击压根没发生。本次因此绕了很久（`legacy-duplicate-task` 的 LEG-D04、
+     *   `progress` 套件的 `gotoTaskList` 切不过去视图）。
+     *
+     * 所以这里统一埋一个一次性探针确认事件是否到达；没到达就退到
+     * `elementFromPoint(x,y).click()` 并**在返回值里标出来**（`clickChannel`），不静默。
+     * 这条兜底只在"CDP 鼠标事件确实没产生任何事件"时触发 —— 那本来也是一次无效点击。
+     */
     async clickAt(x, y) {
-      /**
-       * 每次点击前都拉一次前台：**非前台 target 的输入事件会被 Chromium 静默丢弃**
-       *（页面一个事件都收不到，而 `evaluate` 照常有效）—— 见连接处的长注释。
-       */
       await cdp.send('Page.bringToFront').catch(() => undefined)
+      await api.evaluate(`
+        window.__wbClickProbe = 0;
+        if (window.__wbClickProbeBound !== true) {
+          document.addEventListener('click', () => { window.__wbClickProbe = 1; }, { capture: true });
+          window.__wbClickProbeBound = true;
+        }
+        return true;
+      `)
       for (const type of ['mousePressed', 'mouseReleased']) {
         await cdp.send('Input.dispatchMouseEvent', { type, x, y, button: 'left', clickCount: 1 })
       }
+      await sleepImpl(200)
+      const seen = await api.evaluate(`return window.__wbClickProbe === 1;`)
+      if (seen === true) {
+        await sleepImpl(200)
+        return { x, y, clickChannel: 'cdp-mouse' }
+      }
+      const fallback = await api.evaluate(`
+        const el = document.elementFromPoint(${Math.round(x)}, ${Math.round(y)});
+        if (el === null) return null;
+        el.click();
+        return el.tagName.toLowerCase() + '.' + (el.className || '').toString().slice(0, 40);
+      `)
       await sleepImpl(400)
+      return { x, y, clickChannel: fallback === null ? 'none' : 'dom-click', fallbackTarget: fallback }
     },
     /**
      * 按可见文字点按钮：**先滚进视口**，再算中心点，再发真实鼠标事件。
@@ -354,36 +391,11 @@ export async function launchDebugBrowser(options = {}) {
       `)
       const target = settled ?? box
       /**
-       * ⚠️ **点完要验证"这次点击真的产生了事件"**（2026-10-02 实测踩到，代价很大）。
-       *
-       * 发生过的事实：坐标正确（命中测试就是那个元素、视口内、DPR=1、无滚动、无遮罩），
-       * `Input.dispatchMouseEvent` 也返回成功，但页面**一个事件都收不到**
-       *（`pointerdown`/`mouseup`/`click` 全空、`document` 上也没有），于是"点了没生效"；
-       * 而同一页面上 `Runtime.evaluate` 正常、JS `el.click()` 立刻生效。
-       * 症状极具欺骗性：套件里"点了之后**验证效果**"的断言会红（如 LEG-D04「面板已打开」），
-       * 而只检查"`clickByText` 返回了非 null"的地方却照样绿 —— 后者是**空洞的通过**。
-       *
-       * 处置：点完埋一个一次性探针确认事件是否到达；没到达就**退回 DOM 级点击**并留痕
-       *（`clickFallback: 'dom-click'`）。判据本身仍然验的是"效果"（如 `data-open=1`），
-       * 只是我们不再假装"发过事件就一定是点上了"。
+       * 点击与"验证事件真的到达"都收在 `clickAt` 里（见它的长注释）——
+       * 这里只把 `clickChannel` 透传给调用方，方便套件在证据里记下"这次点击走的哪条通道"。
        */
-      await api.evaluate(`
-        window.__wbClickProbe = 0;
-        document.addEventListener('click', () => { window.__wbClickProbe = 1; }, { once: true, capture: true });
-        return true;
-      `)
-      await api.clickAt(Math.round(target.x), Math.round(target.y))
-      const seen = await api.evaluate(`return window.__wbClickProbe === 1;`)
-      if (seen === true) return { ...target, clickChannel: 'cdp-mouse' }
-      const fallback = await api.evaluate(`
-        const wanted = ${JSON.stringify(text)};
-        const nodes = Array.from(document.querySelectorAll(${JSON.stringify(selector)}));
-        const hit = nodes.find((n) => (n.textContent || '').includes(wanted) && n.offsetParent !== null);
-        if (!hit) return null;
-        hit.click();
-        return true;
-      `)
-      return { ...target, clickChannel: fallback === true ? 'dom-click' : 'none' }
+      const outcome = await api.clickAt(Math.round(target.x), Math.round(target.y))
+      return { ...target, clickChannel: outcome?.clickChannel ?? 'unknown' }
     },
     /** 只关自己：自己的实例（browser 端点）、自己的 ws、自己的子进程、自己的临时 profile 目录。 */
     async close() {

@@ -23,7 +23,7 @@ const api = createApi(options.url, { token: options.token })
 const READ_LIST = `
   const rows = [];
   for (const row of document.querySelectorAll('.wb-row')) {
-    const title = (row.querySelector('.wb-row-title')?.textContent || '').trim();
+    const title = (row.querySelector('.wb-row-title-text')?.textContent || '').trim();
     const compact = row.querySelector('.wb-progress-compact');
     rows.push({
       title,
@@ -72,7 +72,7 @@ const openTaskByTitle = async (browser, title) => {
   const box = await browser.evaluate(`
     const wanted = ${JSON.stringify(title)};
     for (const row of document.querySelectorAll('.wb-row')) {
-      const t = (row.querySelector('.wb-row-title')?.textContent || '').trim();
+      const t = (row.querySelector('.wb-row-title-text')?.textContent || '').trim();
       if (t === wanted) { const r = row.getBoundingClientRect(); return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) }; }
     }
     return null;
