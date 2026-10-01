@@ -212,7 +212,7 @@ function dialogMarkup() {
       </div>
       <div class="wb-field">
         <span>AI 会话工作区<span class="wb-field-note">继承自父任务「快速录入：模型选择框被遮挡」</span></span>
-        <input value="E:\\Code\\dsh-personal-workbench\\dsh-personal-workbench">
+        <input value="（独立 worktree）\\dsh-personal-workbench">
       </div>
       <div class="wb-hint">留空则沿用既有规则（跟随父任务 → 否则默认工作区）；路径不存在时会<b>明确报错</b>，不会静默换目录。</div>
       <div class="wb-hint">AI 会先澄清必要信息（一次一个主题，最多 5 轮），再提交任务草稿由你确认。</div>

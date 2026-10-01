@@ -43,7 +43,7 @@
 
 | 项 | 值 |
 |---|---|
-| 仓库 | `D:\Code\my-workspace` |
+| 仓库 | `D:\Code\my-repo` |
 | profile | `C:\Users\<user>\.dsh\profiles\web` |
 | 宿主进程 | `node ...\@deepseek-ai\dsh\lib\bin.js web --port 3080 --no-open`，启动命令在 `%TEMP%\dsh-server-3080.log` 尾部 |
 | token | 同上文件里最后一条 `token=...`（**重启会换**） |
@@ -195,7 +195,7 @@ export const inject = ['sessions', 'workspaces', 'connection', 'slots', 'layout'
 ### 跑测试的统一前置
 
 ```powershell
-cd D:\Code\my-workspace
+cd D:\Code\my-repo
 $t = (Get-Content "$env:TEMP\dsh-server-3080.log" | Select-String 'token=([A-Za-z0-9_\-]+)' | Select-Object -Last 1).Matches[0].Groups[1].Value
 node .pwtest\verify-final-2.mjs "http://127.0.0.1:3080/?token=$t"
 ```

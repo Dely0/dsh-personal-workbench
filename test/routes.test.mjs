@@ -1000,11 +1000,11 @@ test('[角色] 三个设置键：缺省形状、写入回读、数组去重、�
     assert.deepEqual(initial.body.settings.personaDisabledIds, [])
 
     const written = await request('POST', '/api/workbench/settings', {
-      personaExternalDir: 'D:\\Code\\Linksight\\LS-Skills\\personas',
+      personaExternalDir: '（外部角色目录）',
       personaFavorites: ['rf/甲', ' rf/甲 ', 'rf/乙'],
       personaDisabledIds: ['dotnet/丙', 42, '', '  '],
     })
-    assert.equal(written.body.settings.personaExternalDir, 'D:\\Code\\Linksight\\LS-Skills\\personas')
+    assert.equal(written.body.settings.personaExternalDir, '（外部角色目录）')
     assert.deepEqual(written.body.settings.personaFavorites, ['rf/甲', 'rf/乙'], '去重 + 去首尾空白 + 保序')
     assert.deepEqual(written.body.settings.personaDisabledIds, ['dotnet/丙'], '丢非字符串与空白项')
 
@@ -1015,7 +1015,7 @@ test('[角色] 三个设置键：缺省形状、写入回读、数组去重、�
 
     /** 不传就不动。 */
     const kept = await request('POST', '/api/workbench/settings', { defaultWorkspace: 'D:\\Code\\x' })
-    assert.equal(kept.body.settings.personaExternalDir, 'D:\\Code\\Linksight\\LS-Skills\\personas')
+    assert.equal(kept.body.settings.personaExternalDir, '（外部角色目录）')
     assert.deepEqual(kept.body.settings.personaFavorites, ['rf/甲', 'rf/乙'])
 
     /** 非数组不当成"清空"（否则设置页漏传一个字段就会把用户的收藏抹掉）。 */

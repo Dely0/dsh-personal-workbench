@@ -7,7 +7,7 @@
  * |---|---|---|---|
  * | 内置 | 包内 `assets/personas/`（`lib/personas/library.js` → `../../assets/personas`） | 只读 | `builtin` |
  * | 用户 | `<home>/.dsh/workbench/personas/` | 用户自己放文档 | `user:<根哈希>` |
- * | 外部 | 设置项 `personaExternalDir`（默认空，如 `LS-Skills/personas`） | **只读**，工作台从不写 | `external:<根哈希>` |
+ * | 外部 | 设置项 `personaExternalDir`（默认空，如公司内部的 `personas/` 目录） | **只读**，工作台从不写 | `external:<根哈希>` |
  *
  * **同逻辑路径（ID）覆盖顺序：用户 > 外部 > 内置。**
  * **同显示名但不同相对路径 = 两个不同角色**，绝不按名称合并（需求 §6.1）。

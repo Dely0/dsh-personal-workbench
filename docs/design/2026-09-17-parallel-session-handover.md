@@ -19,7 +19,7 @@
 | | 会话 A（本会话：容量） | 会话 B（另一个会话：知识草稿） |
 |---|---|---|
 | 分支 | `feat/capacity-rules-transparency` | `fix/knowledge-draft-overwrite-visibility` |
-| 工作目录 | `E:\Code\dsh-personal-workbench\capacity-wt`（**独立 git worktree**，已删除） | `E:\Code\dsh-personal-workbench\dsh-personal-workbench`（主工作区） |
+| 工作目录 | `（独立 worktree）\capacity-wt`（**独立 git worktree**，已删除） | `（独立 worktree）\dsh-personal-workbench`（主工作区） |
 | 起点 | `main` @ `03fcdb5` | 同 |
 | 未提交改动 | 在 worktree 里，主工作区看不到 | 在主工作区里，worktree 看不到 |
 
@@ -42,7 +42,7 @@ git worktree list
 # 在主工作区执行（⚠️ 先确认自己的工作区干净，或先 commit）
 git switch main && git merge --ff-only feat/capacity-rules-transparency
 # 完成后可移除 worktree（它的分支内容已合并，不会丢）
-git worktree remove E:\Code\dsh-personal-workbench\capacity-wt
+git worktree remove （独立 worktree）\capacity-wt
 ```
 
 若 `--ff-only` 失败（两边都从 `03fcdb5` 出发、谁也没先合），就先合一方，另一方
@@ -117,7 +117,7 @@ git worktree remove E:\Code\dsh-personal-workbench\capacity-wt
 
 ## 四、给另一个会话的三条请求
 
-1. **请在主工作区继续**（`E:\Code\dsh-personal-workbench\dsh-personal-workbench`），
+1. **请在主工作区继续**（`（独立 worktree）\dsh-personal-workbench`），
    不要进 `capacity-wt` 改东西 —— 那是另一份检出，改了不会被你的 `git status` 看到。
 2. **不要动**上面「A 独占」清单里的文件。若确实需要（例如想复用 `clampEstimatedMinutes`），
    直接说，由本会话把它挪到共享位置（两侧各留一份同构实现 + 跨模块等价性断言，
@@ -134,7 +134,7 @@ git worktree remove E:\Code\dsh-personal-workbench\capacity-wt
 git switch main                       # 主工作区从 fix/knowledge-… 切回 main（两者都基于 03fcdb5）
 git merge --ff-only feat/capacity-rules-transparency          # 快进 → 1bb2366
 git merge --no-ff  fix/knowledge-draft-overwrite-visibility   # 合并点 → 375ebdb
-git worktree remove E:\Code\dsh-personal-workbench\capacity-wt
+git worktree remove （独立 worktree）\capacity-wt
 ```
 
 **`--no-ff` 的理由**：两条线是**同时并行**推进的。本项目有过"拆分与改动混在一起、

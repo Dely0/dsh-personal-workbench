@@ -4159,7 +4159,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                 name="quick-workspace"
                 list="wb-quick-workspace-options"
                 value={quickWorkspace}
-                placeholder={settings.defaultWorkspace || '例如 D:\\Code\\my-project 或 /mnt/d/code/my-project'}
+                placeholder={settings.defaultWorkspace || '例如 D:\Code\my-repo 或 /mnt/d/code/my-project'}
                 onChange={(e) => { setQuickWorkspaceTouched(true); setQuickWorkspace(e.target.value) }}
               />
               {quickWorkspaceSource === 'last-manual' && quickWorkspace.trim() !== '' && !quickWorkspaceTouched && (

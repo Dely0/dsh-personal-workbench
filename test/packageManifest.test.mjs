@@ -71,10 +71,10 @@ test('package.json 的 files 必须包含内置角色库目录（否则发布出
  * | 区 | 内容 | 规则 |
  * |---|---|---|
  * | `generic/` | 本项目自写的**通用工作方式型**角色（6 篇） | 不许出现任何公司领域岗位名或上游素材关键词 |
- * | `domain/` | 经 LS-Skills 转手的**公司领域岗位**角色（9 篇，上游 novotnyllc/dotnet-artisan + K-Dense-AI/scientific-agents，均 MIT） | 必须逐条登记在 `THIRD_PARTY_NOTICES.md` 里（署名义务） |
+ * | `domain/` | 经公司内部角色库转手的**公司领域岗位**角色（9 篇，上游 novotnyllc/dotnet-artisan + K-Dense-AI/scientific-agents，均 MIT） | 必须逐条登记在 `THIRD_PARTY_NOTICES.md` 里（署名义务） |
  *
  * ⚠️ 原先这两块是**禁止关系**：老判据写死"内置角色恰为六篇，且不含 `天线测量`/`VNA`/`K-Dense` 等词"，
- * 用来保证"内置库只放通用内容"。2026-10-01 用户要求把 LS-Skills 的 9 篇领域角色也内置，
+ * 用来保证"内置库只放通用内容"。2026-10-01 用户要求把公司内部角色库的 9 篇领域角色也内置，
  * 于是那条判据不能原样留着（它会和事实打架），也**不能直接删掉**（删掉就丢了"通用库不许被
  * 公司素材污染"这条真实约束）。
  *
@@ -142,7 +142,7 @@ test('AX-R08 内置角色库清单精确（6 通用 + 9 领域），且随包可
 test('AX-R08 通用角色区（generic/）不许混入公司领域岗位名或上游素材', async () => {
   const { readFileSync } = await import('node:fs')
   /** 只做"不许出现"的黑名单扫描（不复制任何公司正文进 fixture，任务边界明写）。 */
-  const forbidden = ['LS-Skills', '天线测量', '计量溯源', '不确定度预算', 'VNA', 'Blazor', 'K-Dense', 'scientific-agents']
+  const forbidden = ['内部角色库', '天线测量', '计量溯源', '不确定度预算', 'VNA', 'Blazor', 'K-Dense', 'scientific-agents']
   /**
    * ⚠️ 这个黑名单**只对 generic/ 生效**，不是对整棵 assets/personas 生效。
    * 2026-10-01 起 domain/ 下就**应该**出现这些词（那正是领域角色的本体）；

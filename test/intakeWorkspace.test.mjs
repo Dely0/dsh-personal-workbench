@@ -22,12 +22,12 @@ const TASKS_ROOT = 'D:\\DSHWorkspace'
 /** 典型现场：默认任务根 + 一个任务资料夹 + 用户真实项目目录。 */
 const items = [
   { workspaceId: 'ws-task-folder', path: `${TASKS_ROOT}\\工作台任务提醒接入微信（可选增量能力）` },
-  { workspaceId: 'ws-project', path: 'D:\\Code\\my-workspace' },
+  { workspaceId: 'ws-project', path: 'D:\\Code\\my-repo' },
   { workspaceId: 'ws-other', path: 'D:\\Code\\team-memory' },
 ]
 
 test('intakeWorkspace: 当前会话的 cwd 命中谁就用谁（不取列表第一个）', () => {
-  const verdict = pickIntakeWorkspace({ items, currentCwd: 'D:\\Code\\my-workspace', tasksRoot: TASKS_ROOT })
+  const verdict = pickIntakeWorkspace({ items, currentCwd: 'D:\\Code\\my-repo', tasksRoot: TASKS_ROOT })
   assert.deepEqual(verdict, { ok: true, workspaceId: 'ws-project', because: 'current-cwd' })
 })
 
@@ -54,7 +54,7 @@ test('intakeWorkspace: 有歧义时明确拒绝，并给出可读、可照做的
   assert.match(verdict.reason, /无法确定/)
   assert.match(verdict.reason, /快速录入/, '原因里要告诉用户去哪儿指定')
   // 候选路径用的是夹具里那个中性目录名（原先写的是本机真实仓库名，已改成示例路径）
-  assert.ok(verdict.reason.includes('my-workspace'), '原因里要列出候选路径，否则用户不知道有哪些')
+  assert.ok(verdict.reason.includes('my-repo'), '原因里要列出候选路径，否则用户不知道有哪些')
   assert.ok(verdict.reason.includes('不会随手取第一个工作区'))
 })
 
@@ -79,7 +79,7 @@ test('intakeWorkspace: 路径比较容错（大小写、斜杠方向、Windows�
   assert.ok(workspacePathKeys('D:\\Code\\Proj').includes('/mnt/d/Code/Proj'.toLowerCase()),
     'Windows 形态要同时给出 WSL 形态的键，覆盖"宿主在 WSL、设置里填 Windows 路径"的混写')
   assert.deepEqual(workspacePathKeys(''), [])
-  const verdict = pickIntakeWorkspace({ items, currentCwd: '/mnt/d/code/my-workspace', tasksRoot: TASKS_ROOT })
+  const verdict = pickIntakeWorkspace({ items, currentCwd: '/mnt/d/code/my-repo', tasksRoot: TASKS_ROOT })
   assert.equal(verdict.ok, true)
   assert.equal(verdict.workspaceId, 'ws-project', 'WSL 形态的 cwd 也要能命中 Windows 形态的工作区路径')
 })

@@ -56,8 +56,8 @@ pnpm test（全套）          → tests 878 / pass 877 / fail 1
 node scripts/check-verify-scripts.mjs
                           → 退出码 0；现役 8 / 待迁移 0 / 作废 3 / 本地脚本 150 / 嫌疑 22（动态统计）
 node scripts/dev-verify.mjs --url http://127.0.0.1:3080 --profile web \
-  --profile-dir "C:\Users\Administrator\.dsh\profiles\web" \
-  --db-path "C:\Users\Administrator\.dsh\workbench\verify-web.db"
+  --profile-dir "C:\Users\<user>\.dsh\profiles\web" \
+  --db-path "C:\Users\<user>\.dsh\workbench\verify-web.db"
                           → runId 20261001-003218-0a5956
                             阶段：preflight ✅ / version-before ✅ / build ✅ / install ✅ / profile-diff ✅ /
                                   dump-config ✅ / version-after ✅ / restart ✅ / health ✅ / token ✅ /
@@ -74,8 +74,8 @@ node scripts/dev-verify.mjs --url http://127.0.0.1:3080 --profile web \
 buildIdentity: 包 wb-34aff1a8a9994230 == health wb-34aff1a8a9994230 == 浏览器根属性 wb-34aff1a8a9994230
                clientMatched = true
 dbIsolation:   independent = true
-               target  = C:\Users\Administrator\.dsh\workbench\verify-web.db
-               current = C:\Users\Administrator\.dsh\workbench\workbench.db
+               target  = C:\Users\<user>\.dsh\workbench\verify-web.db
+               current = C:\Users\<user>\.dsh\workbench\workbench.db
 redaction:     secretsRegistered = 1；证据全树扫不到 token 原串
 sideEffects:   installed = true；restarted = true；dbWrites = 0；browsersOpened = 0；tempDirsRemoved = 1
 ```
@@ -113,7 +113,7 @@ sideEffects:   installed = true；restarted = true；dbWrites = 0；browsersOpen
 1. **AX-R07 的 M 层**：真实模型调用 `workbench_load_persona` 并返回角色正文。套件进程没有向
    DSH 宿主投递用户消息的能力（宿主没有对外的"新建会话并发送消息"HTTP 端点；会话记录是 zstd），
    所以只能记 `skip`。**解除条件**：用户在自己的正式实例上开一次带角色的 AI 会话，观察工具调用。
-2. **LS-Skills 九篇经 `personaExternalDir` 的浏览器可发现性**：本轮没有改用户设置（属运行环境变更）。
+2. **公司内部角色库 九篇经 `personaExternalDir` 的浏览器可发现性**：本轮没有改用户设置（属运行环境变更）。
    T3 已用只读探针证明九篇可解析。
 3. **桌面端（19387）装本轮构建后的体验**：不在本轮范围，是用户的上线判定。
 4. **POSIX 上的自锁与端口归属**：`findPortOwner` 在非 Windows 上一律拒绝，本轮只在 Windows 跑过。

@@ -219,7 +219,7 @@ export function SettingsModal(props: SettingsModalProps): ReactNode {
             <section>
               <h5>外部角色目录</h5>
               <div className="wb-field">
-                <span>可留空；例如 D:\Code\Linksight\LS-Skills\personas</span>
+                <span>可留空；例如 （外部角色目录）</span>
                 <input
                   value={settings.personaExternalDir}
                   onChange={(e) => onSettingsChange({ ...settings, personaExternalDir: e.target.value })}

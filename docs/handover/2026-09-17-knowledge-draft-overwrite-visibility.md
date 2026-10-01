@@ -7,7 +7,7 @@
 
 - 任务：`f4a3430f-3f81-42e8-b4e5-2bf3e67be3e1`（知识草稿静默覆盖：提示 + 文字说明）
 - 分支：`fix/knowledge-draft-overwrite-visibility`
-- 工作目录：`E:\Code\dsh-personal-workbench\dsh-personal-workbench`（**主工作区**）
+- 工作目录：`（独立 worktree）\dsh-personal-workbench`（**主工作区**）
 - 基线：`main` @ `03fcdb5`（与会话 A 同一个起点）
 - 提交：见本文档末尾「提交清单」
 
@@ -63,11 +63,11 @@ git worktree list
 ```powershell
 # 1) 各自先在自己工作区把改动提交干净（两边都别留未提交改动再切分支）
 # 2) 后完成的一方，先 rebase 到先合并后的 main：
-git -C E:\Code\dsh-personal-workbench\dsh-personal-workbench switch main
-git -C E:\Code\dsh-personal-workbench\dsh-personal-workbench merge --ff-only <先完成的分支>
+git -C （独立 worktree）\dsh-personal-workbench switch main
+git -C （独立 worktree）\dsh-personal-workbench merge --ff-only <先完成的分支>
 
-git -C E:\Code\dsh-personal-workbench\capacity-wt fetch            # 共享同一 .git，fetch 可省
-git -C E:\Code\dsh-personal-workbench\capacity-wt rebase main      # 或反向
+git -C （独立 worktree）\capacity-wt fetch            # 共享同一 .git，fetch 可省
+git -C （独立 worktree）\capacity-wt rebase main      # 或反向
 ```
 
 `tsconfig.build.json` 若报冲突：**保留两边的新增行**（合并结果里应同时含

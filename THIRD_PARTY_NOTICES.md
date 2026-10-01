@@ -5,7 +5,7 @@ This project contains code patterns adapted from the following open-source proje
 ## Bundled expert personas (`assets/personas/`)
 
 Nine of the built-in expert personas under `assets/personas/engineering/` and
-`assets/personas/testing/` come from the company-internal `LS-Skills` repository,
+`assets/personas/testing/` come from the company-internal `公司内部角色库` repository,
 which vendored and (for the RF batch) re-wrote material from two upstream MIT projects.
 Both upstreams permit redistribution and modification; the MIT condition
 — keep the copyright notice and the full license text in copies — is satisfied by this
@@ -68,9 +68,9 @@ bundled. `metrology-scientist` exceeded the cap even after compression, so it wa
 into two personas (uncertainty budget vs. traceability/calibration). No upstream code is
 shipped.
 
-### 3. LS-Skills (internal, the vendoring intermediary)
+### 3. 公司内部角色库 (internal, the vendoring intermediary)
 
-- The nine files above arrived here through the company-internal `LS-Skills` repository
+- The nine files above arrived here through the company-internal `公司内部角色库` repository
   (`personas/dotnet/`, `personas/rf/`), whose `vendor/UPSTREAM.md` is the authoritative
   provenance record for both upstreams. File names were **not** changed on import, so the
   per-persona sections above remain directly traceable; only the directory layout differs

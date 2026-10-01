@@ -282,7 +282,7 @@ test('开工前：会话开始时还没建立 task_sessions 关联 → 留一行
     installKnowledgeRecall(ctx, db, { log: (m) => logs.push(m) })
 
     // 真实时序：客户端先 prompt()、随后才 POST 关联；cwd 也不含任务 UUID
-    const agent = { session: { header: { id: 'sess-late', cwd: 'E:\\Code\\dsh-personal-workbench' }, snapshotEvents: () => realEvents({ question: '这个报错怎么查' }) } }
+    const agent = { session: { header: { id: 'sess-late', cwd: '（独立 worktree）' }, snapshotEvents: () => realEvents({ question: '这个报错怎么查' }) } }
     listeners.get('agent/session-start')({ agent, source: 'startup' })
     // 此刻还没有任务 → 开工前拿不到 query；装配期只能用当轮提问检索（这条提问库里没有）
     assert.equal(contextText(agent), '', '还没有可用的开工前 query → 不注入')
@@ -301,7 +301,7 @@ test('开工前：会话开始时还没建立 task_sessions 关联 → 留一行
     assert.deepEqual(triggers.sort(), ['session_start', 'turn'], '补做的开工前与本次回合各记一行')
 
     // 补做出的那一份在下一次装配时送达（同一回合内文本必须稳定，所以不回头改本回合）
-    const next = { session: { header: { id: 'sess-late', cwd: 'E:\\Code\\dsh-personal-workbench' }, snapshotEvents: () => realEvents({ turn: 6, question: '继续' }) } }
+    const next = { session: { header: { id: 'sess-late', cwd: '（独立 worktree）' }, snapshotEvents: () => realEvents({ turn: 6, question: '继续' }) } }
     assert.match(contextText(next), /【工作台知识库】/, '补做之后开工前的知识要真的注入')
   })
 })

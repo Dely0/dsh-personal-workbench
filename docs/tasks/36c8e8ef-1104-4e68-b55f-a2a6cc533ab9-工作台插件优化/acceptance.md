@@ -60,7 +60,7 @@
 | AX-R05 | H | 正文修改后hash不符拒绝旧绑定；源丢失明确报错不切其他源；资源工具先验绑定revision；重复load同revision一致 | personaBinding.test.mjs（新） |
 | AX-R06 | U/H | 资源合法相对路径成功；../绝对/UNC/盘符/大小写绕过/编码绕过/NUL/link/junction/二进制/坏UTF8/超128KiB或20k拒绝；不读根外文件、不执行脚本 | personaLibrary.test.mjs（新） |
 | AX-R07 | W/B | 10个mode均有同一角色选择路径，未选角色最终提示逐字不变；与技能栏不遮挡；正文不内联；实际load_persona工具被调用并返回所选内容 | personaWiring.test.mjs（新）、suites/persona.mjs（新） |
-| AX-R08 | H/B | 同role沿用旧会话；显式不同role/无role创建新会话并告知，旧binding不变；归档会话新建；包内六篇可发现，LS-Skills九篇本机只读兼容（无资产时明确未验证） | aiSessionReuse.test.mjs、packageManifest.test.mjs、suites/persona.mjs（新） |
+| AX-R08 | H/B | 同role沿用旧会话；显式不同role/无role创建新会话并告知，旧binding不变；归档会话新建；包内六篇可发现，公司内部角色库九篇本机只读兼容（无资产时明确未验证） | aiSessionReuse.test.mjs、packageManifest.test.mjs、suites/persona.mjs（新） |
 
 角色正文是提示材料，不应修改宿主工具权限；readonly角色不是数据库ACL。B层必须观察真实工具调用；模型/服务无法运行时标未验证，不能只测选中后声称人格已生效。
 

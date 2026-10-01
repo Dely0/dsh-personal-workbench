@@ -222,7 +222,7 @@ node scripts/repro/repro-task-estimate.mjs --token <token>
 详见 [`2026-09-17-parallel-session-handover.md`](./2026-09-17-parallel-session-handover.md)
 （含「五、合并结果」：合并命令、`--no-ff` 的理由、**唯一那处冲突**的解决方式、合并后重跑的门禁）。要点：
 
-- 本会话全程在**独立 git worktree** `E:\Code\dsh-personal-workbench\capacity-wt`，
+- 本会话全程在**独立 git worktree** `（独立 worktree）\capacity-wt`，
   分支 `feat/capacity-rules-transparency` —— 主工作区（另一个会话的知识草稿改动）**一行未碰**；
 - 文件级归属与共享文件的行级分工写在交接文档里；本会话新增的用例名统一带 `[容量]` 前缀便于区分；
 - **实测结果**：唯一冲突正是开工时预判的那处（`tsconfig.build.json` 的 include 白名单里

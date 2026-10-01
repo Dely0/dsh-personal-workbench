@@ -239,7 +239,7 @@ T2 已用 `git checkout` 回基线复现过同一现象；本项未删断言、�
 | AX-R05 正文改动后 hash 不符拒绝旧绑定；源丢失明确报错不切其他源；资源工具先验绑定 revision；重复 load 同 revision 一致 | `test/personaBinding.test.mjs`（含 CRLF/LF 同哈希、同名角色逐字相同但换来源、绑定记录损坏） | ✅ 实测通过 |
 | AX-R07 10 个 mode 同一选择路径；未选角色提示词逐字不变；与技能栏不遮挡；正文不内联 | `test/personaWiring.test.mjs`（纯函数 + 源码级接线断言）；**"实际 load_persona 被调用并返回所选内容"属 T6（真实模型调用）** | ⚠️ 除真实模型调用外均已实测 |
 | AX-R08 同 role 沿用旧会话；显式不同 role/无 role 新建会话并告知，旧 binding 不变 | `test/personaWiring.test.mjs`（决策表 10 条 + "未指定永不新建"底线）、`test/aiSessionReuse.test.mjs`（既有可用性判据未回归） | ✅ 实测通过（**"归档会话新建"沿用既有 `aiSessionUsable` 判据，本项未改**） |
-| AX-R08（包资产/LS-Skills 九篇） | T3 归属，本项未改 | — |
+| AX-R08（包资产/公司内部角色库 九篇） | T3 归属，本项未改 | — |
 | AX-G04 资源无法跨绑定根读取 | T3 的 `readPersonaResource` 边界 + 本项的"先验绑定再读"（越界/编码/盘符定向拒绝有断言；变异见 §5.2 第 1、4 行） | ✅ 实测通过（**"suite 不吞错误"属 T5/T6**） |
 
 **不属于 T4**：真实模型调用 `workbench_load_persona` 与 B 层浏览器判据 → T6。

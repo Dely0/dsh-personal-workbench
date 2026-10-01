@@ -18,7 +18,7 @@ import {
   PERSONA_BODY_MAX_CHARS, PERSONA_DESCRIPTION_MAX_CHARS, PERSONA_NAME_MAX_CHARS,
 } from '../lib/shared/persona.js'
 
-/** 合成 fixture：形态与公司 LS-Skills 的 9 篇一致（但内容自造，不含任何真实私人正文）。 */
+/** 合成 fixture：形态与公司 公司内部角色库 的 9 篇一致（但内容自造，不含任何真实私人正文）。 */
 function lsSkillsShaped(name = '合成测量专家', extra = {}) {
   const { title = name, quote2 = '> 建议 emoji：`📡`　建议简介（`description`，≤160 字符）：', desc = '天线与阵列的测量、判据与根因诊断：方向图、增益、极化、ECC、静区。', body = '## 身份\n\n你是资深工程师。\n' } = extra
   return `# ${title}\n\n> 自定义专家 · 分类 \`engineering\` · 工作模式：**只读诊断**（读资料、判数据、给结论）\n${quote2}\n> ${desc}\n\n---\n\n${body}`

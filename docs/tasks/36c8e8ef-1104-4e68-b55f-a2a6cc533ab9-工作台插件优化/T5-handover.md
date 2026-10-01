@@ -135,7 +135,7 @@ pnpm test（全套，含 build）      → tests 876 / pass 875 / fail 1
 ```text
 3080  → pid 19056（dsh web --port 3080 --no-open，profile web）—— **未重启、未 kill**
 19387 → pid 17564（桌面端，本会话所在）                        —— **未被触碰**
-正式库 C:\Users\Administrator\.dsh\workbench\workbench.db schema_version = 18 / tasks = 94 —— **未被迁移**
+正式库 C:\Users\<user>\.dsh\workbench\workbench.db schema_version = 18 / tasks = 94 —— **未被迁移**
 test-results/ 只有既有的 .last-run.json（dry-run 与测试都没往里写）
 ```
 
@@ -189,7 +189,7 @@ test-results/ 只有既有的 .last-run.json（dry-run 与测试都没往里写�
 ```text
 预检结论：refused（退出码 2），理由 DB_NOT_DECLARED
   目标 profile 的实际配置里没有 dbPath/dataDir
-  → 它会用 C:\Users\Administrator\.dsh\workbench\workbench.db（与桌面端**同一个文件**）
+  → 它会用 C:\Users\<user>\.dsh\workbench\workbench.db（与桌面端**同一个文件**）
 ```
 
 这不是脚本没写好，而是**规格要求的 fail-closed**：默认 DB 跨 profile 共用（`src/db/database.ts`），
@@ -205,7 +205,7 @@ test-results/ 只有既有的 .last-run.json（dry-run 与测试都没往里写�
 ```yaml
 - id: personal-workbench
   config:
-    dbPath: "C:/Users/Administrator/.dsh/workbench/verify-web.db"
+    dbPath: "C:/Users/<user>/.dsh/workbench/verify-web.db"
 ```
 
 （按 `dsh-safe-plugin-ops` 的门禁：先备份 `cordis.patch.yml` → 改 → 重启**测试实例** 3080 →

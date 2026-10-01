@@ -108,7 +108,7 @@
 
 | 项 | 实测 |
 |---|---|
-| 命令 | `node scripts/dev-verify.mjs --url http://127.0.0.1:3080 --profile web --profile-dir "C:\Users\Administrator\.dsh\profiles\web" --db-path "C:\Users\Administrator\.dsh\workbench\verify-web.db"` |
+| 命令 | `node scripts/dev-verify.mjs --url http://127.0.0.1:3080 --profile web --profile-dir "C:\Users\<user>\.dsh\profiles\web" --db-path "C:\Users\<user>\.dsh\workbench\verify-web.db"` |
 | **runId（正式证据）** | `20261001-003218-0a5956` |
 | 退出码 | **1** —— 因为 `persona` 的必需套件有 1 项 skipped（模型层未验证），这是**设计好的行为**：链宁可不绿，也不许把"没验到的那一层"写成通过 |
 | 证据 | `test-results/workbench-verify/20261001-003218-0a5956/`：`summary.json`、`summary.md`、`suite-*.json`、8 个 `suite-*/` 目录、**39 张截图** |
@@ -152,7 +152,7 @@
 | 项 | 状态 | 原因与解除条件 |
 |---|---|---|
 | AX-R07 的 **M 层**：真实模型调用 `workbench_load_persona` 并返回角色正文 | ⚠️ **未验证** | 验收链的目标实例是测试实例，套件进程**没有**向 DSH 宿主投递用户消息的能力（宿主没有对外的"新建会话并发送消息"HTTP 端点；会话记录是 zstd 压缩，无法按文本扫描）。绑定/加载语义已用真实 HTTP 证明。解除条件：用户在自己的正式实例上开一次带角色的 AI 会话，观察工具调用。 |
-| LS-Skills 九篇在公司外部根下、经 `personaExternalDir` 的**浏览器**可发现性 | ⚠️ **未验证** | 本轮没有改用户的设置（改设置属于运行环境变更，需用户确认）。T3 已用只读探针证明九篇可解析（4999–8145 字），但"配进设置后浏览器能选到"没跑。 |
+| 公司内部角色库 九篇在公司外部根下、经 `personaExternalDir` 的**浏览器**可发现性 | ⚠️ **未验证** | 本轮没有改用户的设置（改设置属于运行环境变更，需用户确认）。T3 已用只读探针证明九篇可解析（4999–8145 字），但"配进设置后浏览器能选到"没跑。 |
 | 桌面端（19387）装本轮构建后的实际体验 | ⛔ **不在本轮范围** | T6 只在**测试实例 3080** 上验收，正式实例的实测是用户的上线判定，本项不负责公开发布、不改公开版本号。 |
 | `pd`/POSIX 上的自锁与端口归属 | ⚠️ **未验证** | `findPortOwner` 非 Windows 一律拒绝（宁可拒绝不猜着杀进程）；本轮只在 Windows 上跑过。 |
 
@@ -211,7 +211,7 @@
 ### 6.3 运行环境变更（经用户明确授权，只动测试实例）
 
 `~/.dsh/profiles/web/cordis.patch.yml` 给 `personal-workbench` 加
-`config.dbPath = C:/Users/Administrator/.dsh/workbench/verify-web.db`。
+`config.dbPath = C:/Users/<user>/.dsh/workbench/verify-web.db`。
 备份：`cordis.patch.yml.bak-verifyiso-20260930-234851`（同一时间戳另备份了 `package.json` / `pnpm-lock.yaml`）。
 
 **桌面端 profile 与正式库一个字节都没动；19387 未重启（pid 17564，CreationDate 未变）。**

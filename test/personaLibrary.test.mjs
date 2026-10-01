@@ -48,7 +48,7 @@ function tempDir(label) {
   }
 }
 
-/** 与真实 LS-Skills 同形态的合成角色文档（**内容自造，不含任何公司私人正文**）。 */
+/** 与真实 公司内部角色库 同形态的合成角色文档（**内容自造，不含任何公司私人正文**）。 */
 function personaText({ title = '合成角色', category = 'engineering', mode = '只读诊断', emoji = '🧪', description = '一段合成简介。', body = '## 身份\n\n合成正文。\n' } = {}) {
   return `# ${title}\n\n> 自定义专家 · 分类 \`${category}\` · 工作模式：**${mode}**\n> 建议 emoji：\`${emoji}\`　建议简介（\`description\`，≤160 字符）：\n> ${description}\n\n---\n\n${body}`
 }
@@ -251,8 +251,14 @@ test('AX-R03 外部根不存在/无权限 → 只禁用该来源，其余来源�
 
 test('AX-R02 sourceKey：内置固定、用户/外部带规范根哈希且改根就换身份', () => {
   assert.equal(sourceKeyForRoot('builtin', 'C:\\whatever', 'win32'), 'builtin')
-  const a = sourceKeyForRoot('external', 'D:\\Code\\LS-Skills\\personas', 'win32')
-  const b = sourceKeyForRoot('external', 'd:\\code\\ls-skills\\personas', 'win32')
+  const a = sourceKeyForRoot('external', 'D:\\Code\\公司内部角色库\\personas', 'win32')
+  /**
+   * ⚠️ 这一行必须与上一行是**同一个路径的不同大小写写法**（判据就是"大小写不敏感"）。
+   * 2026-10-01 内网仓库名泛化时，只替换了 `a` 那一行的目录名、漏了下一行，
+   * 于是两行变成两个不同路径 → 断言"a === b"必然失败。**夹具与断言是一体两面**，
+   * 改名必须两处同时改（发布 skill 第 4 条的那个坑）。
+   */
+  const b = sourceKeyForRoot('external', 'd:\\code\\公司内部角色库\\personas', 'win32')
   const c = sourceKeyForRoot('external', 'D:\\Code\\Other\\personas', 'win32')
   assert.equal(a, b, 'Windows 上大小写不同但同一个根 → 同一个 sourceKey')
   assert.notEqual(a, c, '换根必须换 sourceKey（否则"改配置"会被当成"文件变了"）')
@@ -293,12 +299,12 @@ test('AX-R03 settings：三个角色字段缺省值、写读同形状、数组�
     assert.deepEqual(initial.body.settings.personaDisabledIds, [])
 
     const written = await request('POST', '/api/workbench/settings', {
-      personaExternalDir: 'D:\\Code\\LS-Skills\\personas',
+      personaExternalDir: 'D:\\Code\\公司内部角色库\\personas',
       personaFavorites: ['rf/甲', 'rf/甲', '  ', 'rf/乙', ''],
       personaDisabledIds: ['dotnet/丙', 'dotnet/丙'],
     })
     assert.equal(written.status, 200)
-    assert.equal(written.body.settings.personaExternalDir, 'D:\\Code\\LS-Skills\\personas')
+    assert.equal(written.body.settings.personaExternalDir, 'D:\\Code\\公司内部角色库\\personas')
     assert.deepEqual(written.body.settings.personaFavorites, ['rf/甲', 'rf/乙'], `去重后应保序：${JSON.stringify(written.body.settings.personaFavorites)}`)
     assert.deepEqual(written.body.settings.personaDisabledIds, ['dotnet/丙'])
 
@@ -309,7 +315,7 @@ test('AX-R03 settings：三个角色字段缺省值、写读同形状、数组�
 
     /** 不传就不动：整表回传时漏字段不许把用户的值冲掉。 */
     const kept = await request('POST', '/api/workbench/settings', { defaultWorkspace: 'D:\\Code\\x' })
-    assert.equal(kept.body.settings.personaExternalDir, 'D:\\Code\\LS-Skills\\personas')
+    assert.equal(kept.body.settings.personaExternalDir, 'D:\\Code\\公司内部角色库\\personas')
     assert.deepEqual(kept.body.settings.personaFavorites, ['rf/甲', 'rf/乙'])
 
     /** 整表替换语义：能把收藏删掉。 */

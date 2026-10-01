@@ -40,7 +40,7 @@ const ctx = {
 const manager = installKnowledgeRecall(ctx, db, { log: (m) => logs.push(m) })
 
 // ① 会话开始：**还没有** task_sessions 关联，cwd 也不是任务资料夹
-const agent = { session: { header: { id: 'sess-late', cwd: 'E:\\Code\\dsh-personal-workbench' }, snapshotEvents: () => [] } }
+const agent = { session: { header: { id: 'sess-late', cwd: '（独立 worktree）' }, snapshotEvents: () => [] } }
 listeners.get('agent/session-start')({ agent, source: 'startup' })
 
 let failed = false

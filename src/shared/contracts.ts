@@ -289,7 +289,7 @@ export interface WorkbenchSettings {
    */
   dailyCapacityIncludeOverdue: boolean
   /**
-   * 外部角色目录（D11/§6.3）：可配置的一等角色来源，如 `D:\Code\Linksight\LS-Skills\personas`。
+   * 外部角色目录（D11/§6.3）：可配置的一等角色来源，如 `（外部角色目录）`。
    *
    * 为什么是**字符串路径**而不是布尔开关：来源本身由用户决定放哪（不同机器克隆位置不同），
    * 工作台只读它、不复制不派生（权威源留在原处）。空串 = 未配置。

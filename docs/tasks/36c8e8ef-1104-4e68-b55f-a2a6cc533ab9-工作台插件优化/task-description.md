@@ -4,7 +4,7 @@
 
 ## 0. 下一位开发AI的阅读与执行入口
 
-工作区：`D:\Code\Linksight\dsh-workbench`。任务ID：`36c8e8ef-1104-4e68-b55f-a2a6cc533ab9`。
+工作区：`（内网仓库根）\dsh-workbench`。任务ID：`36c8e8ef-1104-4e68-b55f-a2a6cc533ab9`。
 
 任务资料夹：`docs/tasks/36c8e8ef-1104-4e68-b55f-a2a6cc533ab9-工作台插件优化/`。
 
@@ -34,7 +34,7 @@
 | [0002](docs/adr/0002-capacity-reads-daily-plan.md) | 容量读每日计划分钟快照；未排入完整可见 | 一键排入；AI/手动/账本共用候选；截断明确告知；结束/关闭不自动减已排 |
 | [0003](docs/adr/0003-ai-progress-cannot-complete.md) | AI进度0–99，100触发验收、不存100 | 严格校验非静默夹取；100要求summary且保留execute策略；用户完成和既有级联例外保留 |
 | [0004](docs/adr/0004-progress-is-explicit.md) | 进度显式，不从子任务/投入派生 | 不新增与自动完成冲突的父任务提示；阶段性主动报进度；驳回不回退 |
-| [0005](docs/adr/0005-persona-dir.md) | LS-Skills形态.md，三级本地库、工具加载 | 相对路径ID；用户>外部>内置；6篇内置；会话先绑定再prompt；资源防越界；agency实际接入后置 |
+| [0005](docs/adr/0005-persona-dir.md) | 公司内部角色库形态.md，三级本地库、工具加载 | 相对路径ID；用户>外部>内置；6篇内置；会话先绑定再prompt；资源防越界；agency实际接入后置 |
 | [0006](docs/adr/0006-dev-verify-chain.md) | 一条研发验收链，目标必须独立 | 不只隔离端口，profile目录与DB也须独立；环境未知拒绝；token脱敏；新旧套件均需证据 |
 | [0007](docs/adr/0007-daily-effort-is-not-task-completion.md) | 今日投入结束≠任务完成 | 用户本次选择；effortDone按日持久化，可继续投入，不改任务status/progress/due/estimate |
 
@@ -86,7 +86,7 @@
 
 ## 四、角色范围补充
 
-本轮原样读LS-Skills现有9篇，不复制不派生；权威源仍在LS-Skills。内置仅通用工作方式型。用户另一台机器的persona到货后再接入用户库。保留provider接口但agency实际服务/复制编辑角色/会话中切换后置；这些不再作为本轮隐含验收项。
+本轮原样读公司内部角色库现有9篇，不复制不派生；权威源仍在公司内部角色库。内置仅通用工作方式型。用户另一台机器的persona到货后再接入用户库。保留provider接口但agency实际服务/复制编辑角色/会话中切换后置；这些不再作为本轮隐含验收项。
 
 ## 五、#8遗留清单（保持原圈定）
 
