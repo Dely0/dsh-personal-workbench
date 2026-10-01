@@ -152,6 +152,20 @@ node scripts/dev-install.mjs --apply    # 真装：自动备份 + 零增量 diff
 
 ## 7. 判"发布成功"的判据（v1.16.1 的血泪版）
 
+**先跑一键门禁**（2026-10-02 起）：机械判据全部由脚本执行，不再靠人逐条记得 ——
+
+```powershell
+node scripts/release-preflight.mjs                                   # 发版前
+node scripts/release-preflight.mjs --phase post --version <version>  # 发布后
+```
+
+它覆盖：typecheck → 全量单测 → **全部变异探针（每步自动 `pnpm build`）** → PII 两面 → 版本号与文档就位；
+发布后覆盖：`dist-tags` → **tarball 200 + sha1 与 `dist.shasum` 对账** → 用户视角安装 →
+GitHub `releases/latest`。欠账（历史失败 / 已知盲点 / 良性 PII）**显式登记在脚本里**，
+名单外的红会 exit 1；**名单里已经不红的也会 exit 1**（还清了必须删名单）。
+
+下面是它执行的判据本身（也是手工复核时的顺序）：
+
 **退出码 0 不算、网页显示 "Published" 也不算。** 按这个顺序查：
 
 1. `GET https://registry.npmjs.org/-/package/<pkg>/dist-tags` → `latest` 指向新版本；

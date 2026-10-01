@@ -84,6 +84,7 @@ pnpm build && pnpm dev:install   # 装盘到本机 profile（装完重启 dsh we
 | [`.dsh/skills/dsh-plugin-change/`](.dsh/skills/dsh-plugin-change/SKILL.md) | **改代码前先读**：架构硬约束、本项目的编码规范与回归防线 |
 | [`.dsh/skills/dsh-release/`](.dsh/skills/dsh-release/SKILL.md) | **发版前先读**：公开发布的硬门禁与命令序列（范围表、变异探针、PII 两面、tag/npm/Release、**发布成功判据**） |
 | [`docs/release-checklist.md`](docs/release-checklist.md) | 发版前自检清单（可勾选版） |
+| [`scripts/release-preflight.mjs`](scripts/release-preflight.mjs) | **发布门禁一键跑**：typecheck → 单测 → 全探针（每步 build）→ PII 两面 → 版本/文档；`--phase post` 做 tarball 与 sha1 对账、用户视角安装、Release 复核 |
 | [`scripts/dev-verify.mjs`](scripts/dev-verify.mjs) | 研发版本验收链：构建 → 装盘 → 隔离实例重启 → 浏览器套件 → 证据包 |
 | [`docs/issues/`](docs/issues/) | 滚动维护的已知问题与待办 |
 | [`docs/adr/`](docs/adr/) | 已冻结的口径决策（容量、进度、角色、验收链、每日投入） |

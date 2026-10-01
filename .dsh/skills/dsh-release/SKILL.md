@@ -6,9 +6,17 @@ whenToUse: 本轮要动 public 版本号、要给仓库打 tag、要 `npm publis
 
 # DSH 插件公开发布（硬门禁）
 
-> 版本：**V1.2.0（2026-10-02）**。V1.0.0 的条目全部来自真实发布里**实际犯过的错**（一次发了
-> 1.15.2 / 1.15.3 / 1.15.4 三个版本）；V1.1.0 并入团队记忆里的发布教训；**V1.2.0 并入 v1.16.1 这一版
-> 的真实翻车**（见下）。
+> 版本：**V1.3.0（2026-10-02）**。V1.0.0 的条目全部来自真实发布里**实际犯过的错**（一次发了
+> 1.15.2 / 1.15.3 / 1.15.4 三个版本）；V1.1.0 并入团队记忆里的发布教训；V1.2.0 并入 v1.16.1 这一版
+> 的真实翻车；**V1.3.0 把门禁从"文档里的步骤"变成"一条可执行的命令"**（见下）。
+>
+> **V1.3.0 改了什么、为什么**：
+>
+> | 改动 | 触发它的真实事故 |
+> |---|---|
+> | §3/§7 的机械门禁改为**一条命令** `node scripts/release-preflight.mjs`（`--phase pre\|post`） | 门禁只写在文档里 ⇒ 靠人记得 ⇒ 发 v1.16.1 时**整条探针门禁被漏跑**。现在漏跑 = 直接没有那张绿灯 |
+> | 欠账处理统一为**显式名单 + 双向断言**（名单外的红阻塞；名单里已不红的也阻塞） | 防止"反正都列着"的橡皮图章；本次实测：preflight 第一次跑就把 capacity 探针失效判成**阻塞项** |
+> | 探针汇总**两种约定都认**，认不出按**不通过** | 第一次跑时 `probe-listview-mutations` 用的是 `变异探针：17/17 条变异都变红`，我的解析器只认 `✅ N/N 条变异都被断言抓到` ⇒ 把**绿的判成了红**；反过来也可能是把红的判成绿 |
 >
 > **V1.2.0 改了什么、为什么**：
 >
@@ -27,7 +35,8 @@ whenToUse: 本轮要动 public 版本号、要给仓库打 tag、要 `npm publis
 >
 > ⚠️ **本文件是「本项目生效的那一份」**：技能根目录按 rank 取值，
 > `<projectRoot>/.dsh/skills`（rank 100）**遮蔽** `$DSH_HOME/skills`（rank 400）。
-> 通用改动请同时回流到跨项目源仓库 `Dely0/dsh-private-toolkit`（本机克隆 `C:\Users\Administrator\dsh-private-toolkit`），
+> 通用改动请同时回流到跨项目源仓库 `Dely0/dsh-private-toolkit`（本机克隆在用户主目录下的同名目录，
+> 具体路径按机器不同，**别把真实路径写进仓库** —— `scripts/check-pii.mjs` 会命中），
 > 否则两边漂移，别的项目用的还是旧规矩。
 
 ## 触发条件
@@ -124,15 +133,13 @@ whenToUse: 本轮要动 public 版本号、要给仓库打 tag、要 `npm publis
 ## 第 3 条：标准发布序列（不可调换）
 
 ```powershell
-# 0) 前置自检（**发布命令单独执行，别和 git push 混在一条里 —— 见第 6 条**）
+# 0) 前置自检：**一条命令跑完所有机械门禁**（本仓库的 scripts/release-preflight.mjs）
+#    typecheck → 全量单测 → 全部变异探针（每个之间自动 pnpm build）→ PII 两面 → 版本号与文档就位
+#    欠账名单外的任何红都会 exit 1（见脚本头部说明：欠账必须显式登记，且还清了也会红）
+node scripts/release-preflight.mjs
+#    只想跑某一项时：--only typecheck|tests|probes|pii|version
+#    ⚠️ 发布命令**单独执行**，别和 git push 混在一条里 —— 见第 6 条
 Remove-Item Env:\HTTPS_PROXY,Env:\HTTP_PROXY,Env:\ALL_PROXY -ErrorAction SilentlyContinue
-pnpm typecheck                                              # 必须 0
-pnpm test                                                   # 必须 fail 0，且用例数**不少于上一版**
-# 变异探针（本项目在 scripts/repro/，不是 scripts/）：**每个探针之间必须 pnpm build**
-Get-ChildItem scripts\repro -Filter "probe-*-mutations.mjs" | Sort-Object Name | ForEach-Object {
-  pnpm build                                                # ← 探针只还原 src/，不重建 lib/
-  node $_.FullName
-}
 
 # 1) 范围表 + 版本号（只在这一步动 version）
 #    改 package.json 的 version；用 write/edit 工具或 [IO.File]::WriteAllText(..., UTF8Encoding($false))
@@ -142,8 +149,9 @@ Get-ChildItem scripts\repro -Filter "probe-*-mutations.mjs" | Sort-Object Name |
 #    README.md：版本历史加一行；若本版合入了外部贡献 → **致谢段（中英双段）**同时写
 #    THIRD_PARTY_NOTICES.md：登记外部作者代码（来源链接 + 许可证 + 逐项说明）
 #    docs/releases/v<version>.md：完整 Release Notes（含范围表）
+#    改完版本号与文档后**再跑一次** preflight（第 5 项就是查这三处）
 
-# 3) 发版前检查（见第 4 条：PII 分两个面扫）
+# 3) 发版前检查（PII 已由 preflight 第 4 项覆盖：两个面都扫）
 
 # 4) 提交 → 推送 → 打 tag → 推 tag
 git add -A; git commit -m "release: v<version>"
@@ -154,10 +162,11 @@ git push origin v<version>
 # 5) npm（凭据见第 5 条；**放在 tag 之后**，因为 npm 不可撤销，前面任何一步失败都还能改）
 pnpm publish --no-git-checks --access public
 
-# 6) GitHub Release（用脚本，别手搓 JSON）
-pwsh -File scripts/new-github-release.ps1 -Tag v<version> -BodyFile docs/releases/v<version>.md
+# 6) 发布后复核：**一条命令**（dist-tags → tarball 200 + sha1 对账 → 用户视角安装 → GitHub releases/latest）
+node scripts/release-preflight.mjs --phase post --version <version>
 
-# 7) 发布后复核（**见第 7 条：tarball 与 shasum 对账，别看退出码**）
+# 7) GitHub Release（用脚本，别手搓 JSON）；建完可再跑一次 --phase post 复核 latest
+pwsh -File scripts/new-github-release.ps1 -Tag v<version> -BodyFile docs/releases/v<version>.md
 ```
 
 > **顺序为什么是这样**：npm 不可撤销 ⇒ 排在最后；GitHub Release 可编辑 ⇒ 排在其后；
@@ -165,11 +174,17 @@ pwsh -File scripts/new-github-release.ps1 -Tag v<version> -BodyFile docs/release
 
 **变异探针这条门禁怎么用**（V1.2.0 修正）：
 
+- 本项目在 **`scripts/repro/probe-*-mutations.mjs`**（不是 `scripts/`），由 `release-preflight.mjs` 统一驱动，
+  **每个探针之间会自动 `pnpm build`** —— 探针只还原 `src/` 而**不重建 `lib/`**，
+  连着跑会把上一个变异体的构建产物留给下一个，跑出**假红**（实测：单跑 0/4，`pnpm build` 后 83/83）。
 - **红=判据有效，绿=该处行为没有测试守得住**。全绿 ≠ "测试全过"，而是**变异存活**。
 - 探针打印 `找不到替换片段（探针失效，需更新）` = **探针本身失效**（重构搬动了它锚的源码字符串）。
-  **失效的探针等于没有探针** —— 必须一起修，不能当成"本来就绿"。
+  **失效的探针等于没有探针** —— 会被 preflight 直接判为阻塞项，不能当成"本来就绿"。
+- 仓库里同时存在**两种汇总约定**（`✅ N/N 条变异都被断言抓到` 与 `变异探针：N/M 条变异都变红`），
+  preflight 两种都认；**认不出的格式按不通过处理**。
 - 红/绿衡量的是**判据能不能拦住未来回归**，不是"当前代码对不对"。
-  发现存活项**不必推迟发布**，但必须落 `docs/issues/` 待修清单并挂任务。
+  已知盲点要**显式登记**在 `scripts/release-preflight.mjs` 的 `KNOWN_PROBE_DEBT` 里（带理由 + issue）；
+  **还清了也必须从名单删掉**，否则 preflight 会红。
 
 ## 第 4 条：发版前必须扫"私人信息"，而且要**分两个面**扫
 
