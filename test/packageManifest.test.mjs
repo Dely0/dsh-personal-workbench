@@ -65,17 +65,47 @@ test('package.json 的 files 必须包含内置角色库目录（否则发布出
   assert.equal(covered, true, `files 里必须有 assets/personas，当前：${JSON.stringify(files)}`)
 })
 
-/** 六篇内置角色（D13-A 的精确定义，任务描述逐字固定）。 */
-const BUILTIN_EXPECTED = [
-  ['engineering/实现者', '实现者'],
-  ['engineering/只读审查者', '只读审查者'],
-  ['engineering/反向验证者', '反向验证者'],
-  ['engineering/调研者', '调研者'],
-  ['engineering/方案设计者', '方案设计者'],
-  ['quality/测试工程师', '测试工程师'],
+/**
+ * 内置角色分**两个来源区**，这个划分本身就是判据（2026-10-01）：
+ *
+ * | 区 | 内容 | 规则 |
+ * |---|---|---|
+ * | `generic/` | 本项目自写的**通用工作方式型**角色（6 篇） | 不许出现任何公司领域岗位名或上游素材关键词 |
+ * | `domain/` | 经 LS-Skills 转手的**公司领域岗位**角色（9 篇，上游 novotnyllc/dotnet-artisan + K-Dense-AI/scientific-agents，均 MIT） | 必须逐条登记在 `THIRD_PARTY_NOTICES.md` 里（署名义务） |
+ *
+ * ⚠️ 原先这两块是**禁止关系**：老判据写死"内置角色恰为六篇，且不含 `天线测量`/`VNA`/`K-Dense` 等词"，
+ * 用来保证"内置库只放通用内容"。2026-10-01 用户要求把 LS-Skills 的 9 篇领域角色也内置，
+ * 于是那条判据不能原样留着（它会和事实打架），也**不能直接删掉**（删掉就丢了"通用库不许被
+ * 公司素材污染"这条真实约束）。
+ *
+ * 改法是把它**一分为二**：按目录分区，各自施加对应的规则。
+ * `generic/` 的黑名单一字未动 —— 那仍然是"有没有混进公司素材"的证据。
+ */
+const GENERIC_EXPECTED = [
+  ['generic/engineering/实现者', '实现者'],
+  ['generic/engineering/只读审查者', '只读审查者'],
+  ['generic/engineering/反向验证者', '反向验证者'],
+  ['generic/engineering/调研者', '调研者'],
+  ['generic/engineering/方案设计者', '方案设计者'],
+  ['generic/quality/测试工程师', '测试工程师'],
 ]
 
-test('AX-R08 内置角色库恰为六篇，且随包可解析（H1 + 元信息块 + 1–20000 字符正文）', async () => {
+/** 领域角色：9 篇，逐条对齐 `THIRD_PARTY_NOTICES.md` §Bundled expert personas 的两张表。 */
+const DOMAIN_EXPECTED = [
+  ['domain/engineering/高级-dotnet-blazor-工程师', '高级 .NET / Blazor 工程师'],
+  ['domain/engineering/dotnet-代码审查官', '.NET 代码审查官'],
+  ['domain/engineering/dotnet-性能并发诊断师', '.NET 性能与并发诊断师'],
+  ['domain/engineering/rf-天线测量专家', '天线测量专家'],
+  ['domain/engineering/rf-电磁仿真与暗室测量', '电磁仿真与暗室测量专家'],
+  ['domain/engineering/rf-微波电路与vna测量', '微波电路与 VNA 测量专家'],
+  ['domain/engineering/rf-仪表回路与测量链', '仪表回路与测量链专家'],
+  ['domain/testing/rf-测量不确定度预算', '测量不确定度预算专家'],
+  ['domain/testing/rf-计量溯源与校准', '计量溯源与校准专家'],
+]
+
+const BUILTIN_EXPECTED = [...GENERIC_EXPECTED, ...DOMAIN_EXPECTED]
+
+test('AX-R08 内置角色库清单精确（6 通用 + 9 领域），且随包可解析（H1 + 元信息块 + 1–20000 字符正文）', async () => {
   const { readdirSync, readFileSync, statSync } = await import('node:fs')
   const { join } = await import('node:path')
   const { parsePersonaDocument } = await import('../lib/personas/parse.js')
@@ -109,14 +139,43 @@ test('AX-R08 内置角色库恰为六篇，且随包可解析（H1 + 元信息�
   }
 })
 
-test('AX-R08 内置角色是**自写通用内容**：不含公司 LS-Skills 的领域岗位名与私人素材', async () => {
+test('AX-R08 通用角色区（generic/）不许混入公司领域岗位名或上游素材', async () => {
   const { readFileSync } = await import('node:fs')
   /** 只做"不许出现"的黑名单扫描（不复制任何公司正文进 fixture，任务边界明写）。 */
   const forbidden = ['LS-Skills', '天线测量', '计量溯源', '不确定度预算', 'VNA', 'Blazor', 'K-Dense', 'scientific-agents']
-  for (const [id] of BUILTIN_EXPECTED) {
+  /**
+   * ⚠️ 这个黑名单**只对 generic/ 生效**，不是对整棵 assets/personas 生效。
+   * 2026-10-01 起 domain/ 下就**应该**出现这些词（那正是领域角色的本体）；
+   * 把黑名单放在 generic/ 上，检查的是同一件事、而且是更精确的那件事：
+   * "我们自写的通用角色有没有被公司素材污染"。
+   */
+  for (const [id] of GENERIC_EXPECTED) {
     const raw = readFileSync(new URL(`../assets/personas/${id}.md`, import.meta.url), 'utf8')
     for (const word of forbidden) {
-      assert.equal(raw.includes(word), false, `${id} 里出现了公司领域岗位/上游素材关键词「${word}」——内置库只放通用工作方式型角色`)
+      assert.equal(raw.includes(word), false, `${id} 里出现了公司领域岗位/上游素材关键词「${word}」——generic/ 只放通用工作方式型角色`)
     }
+  }
+})
+
+test('AX-R08 领域角色区（domain/）必须逐条登记在 THIRD_PARTY_NOTICES.md（MIT 署名义务）', async () => {
+  const { readFileSync } = await import('node:fs')
+  /**
+   * MIT 允许再分发与修改，条件是**在副本中保留版权声明与许可全文**。
+   * 插件会把 assets/personas 与两个 LICENSE-* 一起发到 npm，所以判据要能失败：
+   * 少一条登记、或少了许可全文，就是署名义务破了 —— 那必须是一条红灯，不是口头约定。
+   */
+  const notices = readFileSync(new URL('../THIRD_PARTY_NOTICES.md', import.meta.url), 'utf8')
+  for (const [id] of DOMAIN_EXPECTED) {
+    const rel = id.slice('domain/'.length)
+    assert.equal(notices.includes(`assets/personas/${rel}.md`), true,
+      `THIRD_PARTY_NOTICES.md 里没有登记 ${rel}.md —— 加了角色就要同步登记（MIT 署名义务）`)
+  }
+  for (const upstream of ['novotnyllc/dotnet-artisan', 'K-Dense-AI/scientific-agents']) {
+    assert.equal(notices.includes(upstream), true, `THIRD_PARTY_NOTICES.md 缺少上游 ${upstream}`)
+  }
+  // 许可全文必须随包（files 里要有），否则 MIT 的第二个条件不成立
+  const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
+  for (const license of ['LICENSE-novotnyllc-dotnet-artisan', 'LICENSE-K-Dense-scientific-agents']) {
+    assert.equal(pkg.files.includes(license), true, `package.json 的 files 里必须有 ${license}（MIT 要求副本保留许可全文）`)
   }
 })

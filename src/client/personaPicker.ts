@@ -23,7 +23,7 @@
  * 与既有绑定不同 → **每次都新建会话**，既有复用彻底失效。所以默认值是
  * `{ mode: 'inherit' }`（不指定、沿用该会话原有角色），而"无角色"是一次显式选择。
  */
-import { dedupeByPersonaKey, defaultPersonaPlatform, personaCompareKey, type PersonaSummary } from '../shared/persona.js'
+import { dedupeByPersonaKey, defaultPersonaPlatform, personaCompareKey, personaGroupLabel, personaGroupRank, type PersonaSummary } from '../shared/persona.js'
 
 /** 入口处的角色选择（三态）。 */
 export type PersonaSelection =
@@ -160,19 +160,27 @@ export function personaMoreList(personas: readonly PersonaSummary[], query: stri
     || persona.mode.toLowerCase().includes(keyword))
 }
 
-/** 分组（按逻辑 ID 首层目录 / frontmatter group），保序。 */
-export function groupPersonas(personas: readonly PersonaSummary[]): Array<{ group: string; items: PersonaSummary[] }> {
-  const order: string[] = []
+/**
+ * 分组（按逻辑 ID 首层目录 / frontmatter group）。
+ *
+ * ⚠️ 返回的 `label` 是**显示名**，`group` 仍是原始分组键（目录名 / frontmatter 值）——
+ * 组件一律渲染 `label`，而收藏/停用/绑定仍然按 `group` 的原始值走。
+ * 这么分是因为 2026-10-01 内置角色分成 `generic/` 与 `domain/` 两个来源区之后，
+ * 目录名直接当标题会变成"domain 9 个角色"这种内部术语。
+ *
+ * 排序走 `personaGroupRank()`（通用在前、领域在后），不再依赖对象/数组的插入顺序 ——
+ * 服务端返回列表的顺序一变，界面分组顺序就不该跟着乱。
+ */
+export function groupPersonas(personas: readonly PersonaSummary[]): Array<{ group: string; label: string; items: PersonaSummary[] }> {
   const byGroup = new Map<string, PersonaSummary[]>()
   for (const persona of personas) {
     const group = persona.group === '' ? '其他' : persona.group
-    if (byGroup.has(group) === false) {
-      byGroup.set(group, [])
-      order.push(group)
-    }
+    if (byGroup.has(group) === false) byGroup.set(group, [])
     byGroup.get(group)!.push(persona)
   }
-  return order.map((group) => ({ group, items: byGroup.get(group)! }))
+  return [...byGroup.keys()]
+    .sort((a, b) => (personaGroupRank(a) - personaGroupRank(b)) || a.localeCompare(b, 'zh-Hans-CN'))
+    .map((group) => ({ group, label: personaGroupLabel(group), items: byGroup.get(group)! }))
 }
 
 /** 加入/移除一个 id（按平台口径去重、保序、保原值）。 */

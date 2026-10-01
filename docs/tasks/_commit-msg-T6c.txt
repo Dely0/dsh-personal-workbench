@@ -1,0 +1,65 @@
+feat(personas): 内置角色扩到 15 篇 —— 并入 LS-Skills 的 9 篇领域角色（含 MIT 署名链）
+
+用户要求把 LS-Skills 的领域角色 persona 加载进工作台插件。已确认范围（9 篇全搬）与
+署名处理（按 MIT 要求带过去）。版本号不变、不打包、不发布。
+
+## 一、新增 9 篇领域角色（正文零改动）
+
+从 LS-Skills/personas 复制，逐文件 SHA-256 与源一致：
+
+| 落位 | 篇数 | 内容 |
+|---|---|---|
+| assets/personas/domain/engineering/ | 7 | .NET/Blazor 工程师、.NET 代码审查官、.NET 性能与并发诊断师、天线测量、电磁仿真与暗室测量、微波电路与 VNA、仪表回路与测量链 |
+| assets/personas/domain/testing/ | 2 | 测量不确定度预算、计量溯源与校准 |
+
+src/personas/parse.ts 的格式本就与该目录对齐（文件头写明"零改动可读"），所以正文一字未改。
+分区从 LS-Skills 的 dotnet/ + rf/ 调整为 engineering/ + testing/（对齐每篇元信息块里的 分类）。
+
+## 二、内置库分成两个来源区（判据重构，不是删判据）
+
+原判据写死"内置角色是自写通用内容，不含 天线测量/VNA/K-Dense 等领域岗位关键词"，
+用来证明"内置库没有被公司素材污染"。这次要的正是搬入这些内容，所以该判据
+既不能原样留着（与事实打架）、也不能直接删（会丢掉那条真实约束），改为一分为二：
+
+- generic/（6 篇，原 engineering/ + quality/ 纯重命名，R100）：黑名单一字未改，仍然查；
+- domain/（9 篇）：新增署名判据 —— 每篇必须逐条登记在 THIRD_PARTY_NOTICES.md、
+  两个上游名必须出现、两份 MIT 全文必须在 package.json 的 files 里。
+
+## 三、MIT 署名链（随包分发就受 MIT 约束）
+
+两个上游均为 MIT，允许再分发与修改，条件是在副本中保留版权声明与许可全文：
+
+- 新增 LICENSE-novotnyllc-dotnet-artisan（Copyright (c) 2026 Claire Novotny LLC）
+- 新增 LICENSE-K-Dense-scientific-agents（Copyright (c) 2026 K-Dense, Inc.）
+- package.json 的 files 加入这两份全文（否则发了也等于没带）
+- THIRD_PARTY_NOTICES.md 新增 Bundled expert personas 一节：逐篇登记路径、上游仓库、commit、
+  版权人与"我们改了什么"（dotnet 3 篇 = 合并改写；rf 6 篇 = 中文重写，metrology-scientist 拆两位）
+- 新判据 test/packageManifest.test.mjs：少一条登记或少了许可全文就红灯
+
+## 四、顺带修掉两个真实问题
+
+1. 分组名泄漏内部术语：界面显示 domain 9 个角色 / generic 6 个。
+   shared/persona.ts 新增 personaGroupLabel()（→ 通用工作方式 / 领域岗位）与
+   personaGroupRank()（通用在前），groupPersonas() 输出 label。
+   注意：只改显示 —— 目录名、角色 id、group 键一律不动，它们同时是收藏/停用/会话绑定
+   记录里的持久键，为了好看去改就会让既有记录全部失配。表外分组名原样返回、排最后。
+
+2. 验收链假红（本会话第二次）：progress 套件整链跑时 8 条红、单独跑 13/13 全过。
+   根因：侧栏「工作台」入口是开关，多个套件写成"点一下 → 断言 data-open=1"，
+   前一套件把面板留在开态时这一下反而把它关掉。
+   修法：_harness.mjs 新增幂等辅助 ensureWorkbenchPanel()（先读状态、必要时才点、
+   点完等它真的开、开不了返回状态让调用方显式失败），接线 progress / daily-effort /
+   persona / legacy-duplicate-task 四处。
+
+## 验证
+
+- pnpm typecheck 0；pnpm test 900 条 / 899 通过
+  （唯一失败 = test/db.test.mjs 清理期 EPERM，Windows 预存问题，非本次引入）
+- 验收链实跑：102 passed / 0 failed / 1 skipped（persona 模型层按规格记未验证），
+  clientMatched true
+- 真机实测（隔离实例 3080）：接口返回内置角色 15 篇；设置页与选择器分组均为
+  通用工作方式 6 个角色 → 领域岗位 9 个角色；rowCount=15
+
+## 未做
+
+不改版本号、不打包、不发 npm、不打 tag、不推远端；未装到桌面端 19387。

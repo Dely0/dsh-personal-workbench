@@ -130,7 +130,7 @@ export function PersonaAdmin({ saving }: { saving: boolean }): JSX.Element {
         {!loading && groups.map((group) => (
           <div className="wb-persona-group" key={group.group}>
             <div className="wb-persona-group-name">
-              {group.group}
+              {group.label}
               <span className="wb-persona-group-count">{group.items.length} 个角色</span>
             </div>
             {group.items.map((persona) => (

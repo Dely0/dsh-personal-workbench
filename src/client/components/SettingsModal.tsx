@@ -231,7 +231,7 @@ export function SettingsModal(props: SettingsModalProps): ReactNode {
                 <summary>使用说明（角色是什么 / 来源优先级 / 停用会怎样）</summary>
                 <div className="wb-notes-body">
                   <p><b>角色 = 一份 .md</b>（`# 名称` + 引用块元信息 + 正文），工具按名称逐字使用。</p>
-                  <p><b>三级来源，前者优先：</b>用户库（~/.dsh/workbench/personas）&gt; 外部角色目录 &gt; 内置六篇。列表里每行右侧标出它来自哪一级。</p>
+                  <p><b>三级来源，前者优先：</b>用户库（~/.dsh/workbench/personas）&gt; 外部角色目录 &gt; 内置 15 篇（6 篇通用工作方式 + 9 篇领域岗位）。列表里每行右侧标出它来自哪一级。</p>
                   <p><b>工作台只读角色来源</b>，从不写入、不复制、不修改你的 .md 文件。</p>
                   <p><b>停用</b>的角色仍会列在下表里（否则启用不回来），只是不能在选择器中选中。</p>
                   <p><b>收藏</b>只影响选择器里的「只看收藏」筛选，不改变角色本身的可用性。</p>

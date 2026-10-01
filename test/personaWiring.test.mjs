@@ -18,6 +18,7 @@ import {
   personaIdToBind, personaMoreList, personaPickerList, personaSelectionFor, personaSelectionLabel, personaSourceLabel,
 } from '../lib/client/personaPicker.js'
 import { buildSkillPromptBlock, withSkillPromptBlock } from '../lib/client/skillPrompt.js'
+import { personaGroupLabel } from '../lib/shared/persona.js'
 
 /** ⚠️ 行尾归一化：Windows 检出是 CRLF，下面所有片段都按 `\n` 写。 */
 const read = (path) => readFileSync(path, 'utf8').replace(/\r\n/g, '\n')
@@ -279,7 +280,7 @@ test('设置页承接收藏/停用：唯一写入口径仍是 personaFlagPatch�
   assert.match(beforePatch, /api\/workbench\/settings'\)/, '改动前先读服务端现值（不许拿本地副本算 patch）')
 })
 
-test('分组 / 标签：分组保序、来源标签可读', () => {
+test('分组 / 标签：分组按展示顺序排、显示名是中文、来源标签可读', () => {
   const personas = [summary({ id: 'rf/a', group: 'rf' }), summary({ id: 'rf/b', group: 'rf' }), summary({ id: 'dn/c', group: 'dotnet' })]
   const groups = groupPersonas(personas)
   assert.deepEqual(groups.map((group) => group.group), ['rf', 'dotnet'])
@@ -290,6 +291,30 @@ test('分组 / 标签：分组保序、来源标签可读', () => {
   assert.equal(personaSelectionLabel(NO_PERSONA), '无角色')
   assert.equal(personaSelectionLabel(personaSelectionFor('rf/a', 'builtin'), [summary({ id: 'rf/a', name: '甲', emoji: '📡' })]), '📡 甲')
   assert.match(personaSelectionLabel(personaSelectionFor('gone/x', 'builtin'), []), /已不在角色库里/)
+})
+
+test('内置角色分两个来源区：显示名是中文（不泄漏目录名），顺序通用在前、领域在后', () => {
+  /**
+   * 2026-10-01：内置角色分 `generic/`（自写通用）与 `domain/`（领域岗位）两个来源区。
+   * 目录名是**仓库内部的组织方式**，不该原样出现在中文界面上（用户看到"domain 9 个角色"
+   * 既不像中文也不知道那是什么），而纯字典序又会把领域排在通用之前。
+   *
+   * 判据盯三件事：① 显示名是中文；② 通用在前；③ **原始分组键不许被改**
+   * （它是收藏/停用/会话绑定记录里的持久键，为了好看改它会让既有记录全部失配）。
+   */
+  const personas = [
+    summary({ id: 'domain/rf-天线测量专家', group: 'domain' }),
+    summary({ id: 'generic/engineering/实现者', group: 'generic' }),
+  ]
+  const groups = groupPersonas(personas)
+  assert.deepEqual(groups.map((g) => g.label), ['通用工作方式', '领域岗位'], '显示名必须是中文且通用在前')
+  assert.deepEqual(groups.map((g) => g.group), ['generic', 'domain'], '原始分组键一个都不许改（持久键）')
+  // 表外的分组名原样返回（用户自己的用户库/外部目录可以有任意分组名，不许被吞掉或改写成"其他"）
+  assert.equal(personaGroupLabel('我的私有分组'), '我的私有分组')
+  assert.equal(groupPersonas([summary({ id: 'x/y', group: '我的私有分组' })])[0].label, '我的私有分组')
+  // 表外组名排在表内之后
+  const mixed = groupPersonas([summary({ id: 'z/z', group: 'zzz' }), summary({ id: 'g/x', group: 'generic' })])
+  assert.deepEqual(mixed.map((g) => g.group), ['generic', 'zzz'], '表外的组名排最后')
 })
 
 // ---------------------------------------------------------------------------

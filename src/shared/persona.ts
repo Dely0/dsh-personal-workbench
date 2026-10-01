@@ -162,6 +162,48 @@ export interface PersonaDocument {
   body: string
 }
 
+/**
+ * 分组名的**显示名**（2026-10-01）。
+ *
+ * ## 为什么需要它
+ *
+ * 内置角色分成两个来源区之后，目录名（也是缺省分组名）是 `generic` / `domain` ——
+ * 那是**仓库内部的组织方式**，不该原样出现在中文界面上（用户看到的是
+ * "domain 9 个角色"，既不像中文也不知道那是什么）。
+ *
+ * ⚠️ 这里**只改显示**：目录名、角色 id、`group` 字段一律不动 ——
+ * id 是收藏/停用/会话绑定记录里的**持久键**，为了好看去改它就会让既有记录全部失配。
+ * 映射表找不到的组名原样返回（用户的用户库/外部目录可以有任意分组名）。
+ */
+const PERSONA_GROUP_LABELS: Record<string, string> = {
+  generic: '通用工作方式',
+  domain: '领域岗位',
+  testing: '测试',
+  engineering: '工程',
+  quality: '质量',
+  rf: '射频与计量',
+  dotnet: 'dotnet',
+}
+
+/** 分组显示名（映射表里没有就原样返回，绝不吞掉用户自己的分组名）。 */
+export function personaGroupLabel(group: string): string {
+  return PERSONA_GROUP_LABELS[group] ?? group
+}
+
+/**
+ * 分组**展示顺序**（列表按它稳定排序，不靠字典序碰运气）。
+ *
+ * 通用工作方式排前面：它们是"任何任务都能用的行为约束"，领域岗位是"这件事该由谁来判断"，
+ * 先通用再专用更符合选角色的思路。表外的组名按字母序排在最后。
+ */
+const PERSONA_GROUP_ORDER: readonly string[] = ['generic', 'domain', 'engineering', 'testing', 'quality', 'rf', 'dotnet']
+
+/** 分组排序键（小 → 前；表外的组名按字典序排在表内之后）。 */
+export function personaGroupRank(group: string): number {
+  const index = PERSONA_GROUP_ORDER.indexOf(group)
+  return index === -1 ? PERSONA_GROUP_ORDER.length : index
+}
+
 export interface PersonaParseResult {
   ok: boolean
   document?: PersonaDocument

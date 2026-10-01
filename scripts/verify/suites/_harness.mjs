@@ -81,6 +81,42 @@ export function originOf(url) {
   return new URL(url).origin
 }
 
+/**
+ * **幂等**地确保工作台面板已打开（2026-10-01）。
+ *
+ * ## 为什么必须有它（真实假红，两次）
+ *
+ * 侧栏那个入口是**开关**：面板开着时点一下是**关**。而多个套件原来都写成
+ * "点一次入口 → 断言 data-open=1"：
+ *
+ * - `legacy-acceptance` 的「点返回对话」偶发点空（第一次假红）；
+ * - `progress` 紧跟别的套件跑时，面板被前一套件留在开态 → 这一下把它**关掉**，
+ *   于是 `data-open=null`，后续 7 条全部因前置缺失连锁红（第二次假红）。
+ *
+ * 两次都表现为"单独重跑全过、整套跑偶发红"，排查成本很高。
+ * 修法是让"打开"这句话在任何初始状态下都成立：先读状态，只有确实没开才点，
+ * 点完等它真的开；最多两轮，仍开不了就返回状态让调用方**显式失败**（不猜）。
+ *
+ * @returns 最终 `data-open` 值（`'1'` = 已打开；`null` = 面板壳还没渲染）
+ */
+export async function ensureWorkbenchPanel(browser, options = {}) {
+  const { attempts = 2, timeoutMs = 15000 } = options
+  const readOpen = () => browser.evaluate(
+    `const h = document.querySelector('.wb-panel-host'); return h === null ? null : h.getAttribute('data-open');`,
+  )
+  for (let round = 0; round < attempts; round += 1) {
+    if ((await readOpen()) === '1') return '1'
+    const entry = await browser.clickByText('工作台', 'button')
+    if (entry === null) return await readOpen()
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline) {
+      if ((await readOpen()) === '1') return '1'
+      await new Promise((resolve) => setTimeout(resolve, 250))
+    }
+  }
+  return await readOpen()
+}
+
 // ── 结果记录 ────────────────────────────────────────────────────────────────
 
 export const CHECK_LAYERS = new Set(['U', 'H', 'W', 'B', 'N'])

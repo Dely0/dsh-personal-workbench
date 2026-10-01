@@ -159,7 +159,7 @@ export function PersonaPicker({ value, onChange, disabled = false, onError }: Pe
         {!loading && groups.map((group) => (
           <div className="wb-persona-group" key={group.group}>
             <div className="wb-persona-group-name">
-              {group.group}
+              {group.label}
               <span className="wb-persona-group-count">{group.items.length} 个</span>
             </div>
             {group.items.map((persona) => (

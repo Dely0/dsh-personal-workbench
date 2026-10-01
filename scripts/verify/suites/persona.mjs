@@ -10,14 +10,14 @@
  *
  * | 层 | 覆盖 | 说明 |
  * |---|---|---|
- * | H（真实 HTTP） | 绑定语义、库发现、包内六篇、settings 形状、摘要不外发路径/正文 | 真实服务端、真实 SQLite |
+ * | H（真实 HTTP） | 绑定语义、库发现、包内 15 篇内置角色、settings 形状、摘要不外发路径/正文 | 真实服务端、真实 SQLite |
  * | B（真实浏览器） | 选择器在各入口存在、能选中、能撤销；未选角色时提示词块**不出现** | 真实鼠标 + 重读 DOM |
  * | M（模型） | 真的让模型调用 `workbench_load_persona` 并用到角色正文 | **需要真实模型链路**；本机不可用时如实记 `skip` + 原因，由链判"必需套件有 skipped = 不通过" |
  *
  * 最后一层是本套件与"只测下拉选中"的分界线：拿不到真实模型调用就 `skip`（不 `pass`），
  * 链会把 required+skipped 判成失败 —— 这正是我们要的"不许假装通过"。
  */
-import { startSuite, createApi, launchSuiteBrowser, parseSuiteArgs, sleep, waitFor, safeJson } from './_harness.mjs'
+import { startSuite, createApi, launchSuiteBrowser, parseSuiteArgs, sleep, waitFor, safeJson, ensureWorkbenchPanel } from './_harness.mjs'
 import { discoverBrowser } from '../browser.mjs'
 
 const options = parseSuiteArgs()
@@ -39,7 +39,7 @@ try {
   report.database = health.body?.db ?? null
   suite.note(`目标库 schema=${health.body?.db?.schemaVersion} 任务数=${health.body?.db?.taskCount}`)
 
-  // ── H：角色库发现（AX-R08 的"包内六篇可发现"）──────────────────────────
+  // ── H：角色库发现（AX-R08 的"包内 15 篇内置角色可发现"）──────────────────────────
   const list = await api.get('/api/workbench/personas')
   const personas = list.body?.personas ?? []
   report.personas = { count: personas.length, ids: personas.map((entry) => entry.id), sources: [...new Set(personas.map((entry) => entry.source))], diagnostics: list.body?.diagnostics ?? [] }
@@ -147,7 +147,7 @@ try {
   await browser.goto(api.pageUrl())
   await waitFor(async () => (await browser.evaluate(`return document.querySelector('[class*="sidebarCol"]') !== null;`)) === true, { timeoutMs: 30000, description: '宿主侧栏渲染' }).catch(() => undefined)
   await sleep(1500)
-  const entry = await browser.clickByText('工作台', 'button')
+  const entry = await ensureWorkbenchPanel(browser)
   if (entry === null) suite.require({ id: '打开工作台面板', axId: 'AX-R07', layer: 'B', detail: '找不到侧栏工作台入口' })
   await waitFor(async () => (await browser.evaluate(`const h=document.querySelector('.wb-panel-host'); return h !== null && h.getAttribute('data-open') === '1';`)) === true, { timeoutMs: 15000, description: '面板 data-open=1' }).catch(() => undefined)
   await sleep(1500)

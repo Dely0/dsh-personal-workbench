@@ -10,7 +10,7 @@
  *
  * 合成资产全部带 runId，收尾只归档本次登记过的任务 id（不按标题批量匹配别人的数据）。
  */
-import { startSuite, createApi, createSyntheticAssets, launchSuiteBrowser, parseSuiteArgs, sleep, waitFor, safeJson, repoRootFromSuite } from './_harness.mjs'
+import { startSuite, createApi, createSyntheticAssets, launchSuiteBrowser, parseSuiteArgs, sleep, waitFor, safeJson, repoRootFromSuite, ensureWorkbenchPanel } from './_harness.mjs'
 import { discoverBrowser } from '../browser.mjs'
 
 const options = parseSuiteArgs()
@@ -122,7 +122,7 @@ try {
   await waitFor(async () => (await browser.evaluate(`return document.querySelector('[class*="sidebarCol"]') !== null;`)) === true, { timeoutMs: 30000, description: '宿主侧栏渲染' }).catch(() => undefined)
   await sleep(1500)
 
-  const openedPanel = await browser.clickByText('工作台', 'button')
+  const openedPanel = await ensureWorkbenchPanel(browser)
   if (openedPanel === null) suite.require({ id: '打开工作台面板', axId: 'AX-P07', layer: 'B', detail: '找不到侧栏工作台入口' })
   await waitFor(async () => (await browser.evaluate(`const h=document.querySelector('.wb-panel-host'); return h !== null && h.getAttribute('data-open') === '1';`)) === true, { timeoutMs: 15000, description: '面板 data-open=1' }).catch(() => undefined)
   const panelOpen = await browser.evaluate(`const h=document.querySelector('.wb-panel-host'); return h === null ? null : h.getAttribute('data-open');`)

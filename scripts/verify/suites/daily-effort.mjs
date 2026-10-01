@@ -8,7 +8,7 @@
  * 写入只对隔离测试库（本套件自己再核对一次 health 的 taskCount/schema 并记进证据）。
  * 合成资产带 runId；收尾归档本次登记过的任务 id 与本次用到的计划日期。
  */
-import { startSuite, createApi, createSyntheticAssets, launchSuiteBrowser, parseSuiteArgs, sleep, waitFor, safeJson } from './_harness.mjs'
+import { startSuite, createApi, createSyntheticAssets, launchSuiteBrowser, parseSuiteArgs, sleep, waitFor, safeJson, ensureWorkbenchPanel } from './_harness.mjs'
 import { discoverBrowser } from '../browser.mjs'
 
 const options = parseSuiteArgs()
@@ -128,7 +128,7 @@ try {
   await browser.goto(api.pageUrl())
   await waitFor(async () => (await browser.evaluate(`return document.querySelector('[class*="sidebarCol"]') !== null;`)) === true, { timeoutMs: 30000, description: '宿主侧栏渲染' }).catch(() => undefined)
   await sleep(1500)
-  const entry = await browser.clickByText('工作台', 'button')
+  const entry = await ensureWorkbenchPanel(browser)
   if (entry === null) suite.require({ id: '打开工作台面板', axId: 'AX-D07', layer: 'B', detail: '找不到侧栏工作台入口' })
   await waitFor(async () => (await browser.evaluate(`const h=document.querySelector('.wb-panel-host'); return h !== null && h.getAttribute('data-open') === '1';`)) === true, { timeoutMs: 15000, description: '面板 data-open=1' }).catch(() => undefined)
   await sleep(1000)
@@ -218,7 +218,7 @@ try {
   // ── AX-D09 刷新后仍 true；点「继续投入」回到 false ───────────────────────
   await browser.goto(api.pageUrl())
   await sleep(3500)
-  await browser.clickByText('工作台', 'button')
+  await ensureWorkbenchPanel(browser)
   await sleep(1500)
   await browser.clickByText('今日', '.wb-seg')
   await sleep(2000)
@@ -273,7 +273,7 @@ try {
   const setMinutes = await api.patch(`/api/workbench/plans/${today}/items/${long.id}`, { minutes: 60 })
   await browser.goto(api.pageUrl())
   await sleep(3000)
-  await browser.clickByText('工作台', 'button')
+  await ensureWorkbenchPanel(browser)
   await sleep(1500)
   await browser.clickByText('今日', '.wb-seg')
   await sleep(2500)

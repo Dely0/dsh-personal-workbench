@@ -1051,13 +1051,23 @@ test('[角色] 设置里的脏 JSON 不让接口 500（手改 meta / 旧版本�
   }
 })
 
-test('[角色] 默认（未配置外部根、无收藏）就能看到随包的六篇内置角色', async () => {
+test('[角色] 默认（未配置外部根、无收藏）就能看到随包的全部 15 篇内置角色（6 通用 + 9 领域）', async () => {
   await withServer(async ({ request }) => {
     const list = await request('GET', '/api/workbench/personas')
     assert.equal(list.status, 200)
     const names = list.body.personas.filter((persona) => persona.source === 'builtin').map((persona) => persona.name).sort()
-    assert.deepEqual(names, ['实现者', '只读审查者', '反向验证者', '调研者', '方案设计者', '测试工程师'].sort(),
-      `内置六篇必须开箱可读，实际：${names.join(', ')}`)
+    /**
+     * 2026-10-01：随包内置角色从 6 篇扩到 15 篇（新增 9 篇公司领域角色，
+     * 来源与署名见 `THIRD_PARTY_NOTICES.md` §Bundled expert personas）。
+     * 这条判据的**意图**没变 —— "开箱即可读到随包角色库"，只是规模变了。
+     * 逐字列全 15 个名字是刻意的：少一篇或多一篇都要当场红，而不是静默通过。
+     */
+    assert.deepEqual(names, [
+      '实现者', '只读审查者', '反向验证者', '调研者', '方案设计者', '测试工程师',
+      '高级 .NET / Blazor 工程师', '.NET 代码审查官', '.NET 性能与并发诊断师',
+      '天线测量专家', '电磁仿真与暗室测量专家', '微波电路与 VNA 测量专家', '仪表回路与测量链专家',
+      '测量不确定度预算专家', '计量溯源与校准专家',
+    ].sort(), `内置 15 篇必须开箱可读，实际：${names.join(', ')}`)
     for (const persona of list.body.personas) {
       assert.equal(persona.enabled, true, '未禁用时默认启用')
       assert.equal(persona.favorite, false)

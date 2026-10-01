@@ -19,7 +19,7 @@
  * 4. `finally` 清理里若抛错，原脚本会把它记成 check 失败 —— 这本身是对的（不能吞），
  *    迁移后保留该语义（LEG-D11）。
  */
-import { startSuite, createApi, createSyntheticAssets, launchSuiteBrowser, parseSuiteArgs, sleep, waitFor, safeJson, readPackageVersion, readBuiltBuildId } from './_harness.mjs'
+import { startSuite, createApi, createSyntheticAssets, launchSuiteBrowser, parseSuiteArgs, sleep, waitFor, safeJson, readPackageVersion, readBuiltBuildId, ensureWorkbenchPanel } from './_harness.mjs'
 import { discoverBrowser } from '../browser.mjs'
 
 const options = parseSuiteArgs()
@@ -149,7 +149,7 @@ try {
   `)) >= 1, { timeoutMs: 45000, description: '侧栏露出可见的工作台入口' }).then(() => true).catch(() => false)
   if (!entryReady) suite.note('等待 45s 仍无可见入口 —— 下面按 LEG 文档逐条记 fail（不跳过）')
   await sleep(800)
-  const clicked = await browser.clickByText('工作台', 'button')
+  const clicked = await ensureWorkbenchPanel(browser)
   suite.note(`点击侧栏工作台入口：${clicked === null ? '(没找到按钮)' : '已点'}`)
   await waitFor(async () => {
     const snap = await browser.evaluate(`const h = document.querySelector('.wb-panel-host'); return h !== null && h.getAttribute('data-open') === '1';`)
