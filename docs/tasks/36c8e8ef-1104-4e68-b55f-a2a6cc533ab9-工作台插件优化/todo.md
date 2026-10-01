@@ -67,7 +67,7 @@
 - [x] 发布收口：**v1.16.1 已发布**（`package.json` / tag / npm `latest` / GitHub Release 四者一致，包哈希 `46d61b7b…`）
 - [x] 发布门禁一键化：`scripts/release-preflight.mjs`（typecheck→单测→全探针→PII 两面→版本文档；`--phase post` 做 tarball/sha1 对账）
 - [x] `dsh-release` skill **落盘为项目级** `.dsh/skills/dsh-release/SKILL.md`（V1.3.0）
-- [ ] **#3 模型选择失效**：只留复现记录 + 上报决策，**不改** `profiles/node_modules`（**未做**）
+- [x] **#3 模型选择失效**：**已复测未复现**（2026-10-02，四条判据全绿，脚本 `scripts/repro/repro-model-picker-lock.mjs`）—— 留档 [`docs/issues/2026-10-02-model-picker-retest-record.md`](../../issues/2026-10-02-model-picker-retest-record.md)，**不改** `profiles/node_modules`
 - [ ] **dev-verify 验收链未在批次2 之后重跑**：链里现役 **10 套**（批次2 新增 `workspace-picker` / `day-panel`），
       上次端到端跑是 2026-10-01 00:32（批次2 之前）⇒ 需要跑一次并出证据包
 - [ ] **变异探针欠账**（本轮自留，不在原范围）：capacity 5 条真盲点（M11–M14、M19）+ 19 条探针重锚 ——
