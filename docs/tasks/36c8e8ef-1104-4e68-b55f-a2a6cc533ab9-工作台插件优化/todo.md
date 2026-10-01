@@ -64,8 +64,25 @@
 - [x] W01 工作区候选判定纯函数 + `components/WorkspacePicker.tsx`（AX-W01；`test/workspacePicker.test.mjs` 8 条）
 - [x] W02 快速录入 / 新建 / 编辑三入口接线（AX-W02；**B 层已跑通** `suites/workspace-picker.mjs` 8/8）
 - [x] W03 `LocalDocModal` 增加 `mode: 'dir'`，复用 `localDirRoute`（AX-W03；含"从对话框里打开会被盖住"的真实缺陷修复）
-- [ ] H01 构建期类型源对齐（`devDependencies` → 声明覆盖的核心线，AX-H02）
+- [x] H01 构建期类型源对齐（`devDependencies` 整族 → `0.2.0-rc.2` / cordis `^4.0.4` / timer `1.1.6`；peer 不动，AX-H02 四条判据）
 - [ ] #3 模型选择失效：只留复现记录 + 上报决策，**不改** `profiles/node_modules`
+- [ ] D17 WorkbenchApp 拆分（**评估：12–20 小时，建议新会话做**；度量见本节末尾）
+
+### D17 的度量（2026-10-01 实测，供新会话开工）
+
+| 指标 | 数值 |
+|---|---|
+| `src/client/index.tsx` | **5697 行**（D15 后已降 46 行） |
+| `WorkbenchApp` 本体 | **约 4170 行**（276 → 4445），目标 ≤600 |
+| `useState` | **117 处** |
+| `useEffect` / `useMemo` / `useCallback` | 24 / 19 / 9 |
+| 五个视图块 | today 3205（97 行）、calendar 3302（55）、knowledge 3357（44）、ideas 3401（97）、list 3498 |
+| 最大单块 | **右侧任务详情区**（详情/编辑表单/子任务/会话/记忆/复盘/关联知识） |
+
+**风险**：不在搬 JSX，而在 117 个 state 的依赖关系（`selected` / `refresh` / 各 `*RefreshKey` 被大量共享）。
+历史先例：本项目有过一次**未完成的拆分**，文件从 1958 行涨到 2491 行后被取消（规范 §12 有记录）。
+**开工前必须先重写 `docs/design/2026-09-09-client-split-backlog.md`**（现状 5697 行、Windows 原生构建、
+`DayPanel` 已是新边界；照旧行号地图拆等于拆两遍）。
 
 ## 批次3（未开工）
 
