@@ -68,8 +68,10 @@
 - [x] 发布门禁一键化：`scripts/release-preflight.mjs`（typecheck→单测→全探针→PII 两面→版本文档；`--phase post` 做 tarball/sha1 对账）
 - [x] `dsh-release` skill **落盘为项目级** `.dsh/skills/dsh-release/SKILL.md`（V1.3.0）
 - [x] **#3 模型选择失效**：**已复测未复现**（2026-10-02，四条判据全绿，脚本 `scripts/repro/repro-model-picker-lock.mjs`）—— 留档 [`docs/issues/2026-10-02-model-picker-retest-record.md`](../../issues/2026-10-02-model-picker-retest-record.md)，**不改** `profiles/node_modules`
-- [ ] **dev-verify 验收链未在批次2 之后重跑**：链里现役 **10 套**（批次2 新增 `workspace-picker` / `day-panel`），
-      上次端到端跑是 2026-10-01 00:32（批次2 之前）⇒ 需要跑一次并出证据包
+- [x] **dev-verify 验收链重跑（批次2 之后）→ 全绿**：`20261002-022125-e7ec68`，
+      **10 套件 / 119 条断言（118 通过 / 0 失败 / 1 条已登记跳过）**，构建标识三方一致（`wb-35f69ad83939f2a7`），退出码 0。
+      过程中修掉 4 个测试基建缺陷（点击事件可能"根本没到达页面"→ 验证 + DOM 兜底；等入口渲染再点；
+      不许吞超时；套件收尾还原侧栏）+ 必需套件跳过改显式名单（persona 的模型链路跳过不再让链永远红）
 - [ ] **变异探针欠账**（本轮自留，不在原范围）：capacity 5 条真盲点（M11–M14、M19）+ 19 条探针重锚 ——
       清单与复现在 [`docs/issues/2026-10-01-mutation-probe-maintenance.md`](../../issues/2026-10-01-mutation-probe-maintenance.md)；
       `KNOWN_PROBE_DEBT` 未清空前 `release-preflight` 的探针门禁会一直红（这是刻意的）
