@@ -9,6 +9,7 @@ import type {
   ReminderBotOption, ReminderChannelStatus, ReminderOptionsView, ReminderPolicyView, WorkbenchSettings,
 } from '../../shared/contracts.js'
 import { Modal } from './Modal.js'
+import { PersonaAdmin } from './PersonaAdmin.js'
 import { notificationStateText, type NotificationState } from '../notificationCapability.js'
 
 export interface DictionaryLike {
@@ -21,7 +22,7 @@ export interface DictionaryLike {
   sortOrder?: number
 }
 
-type Section = 'general' | 'notify' | 'recall' | 'wechat' | 'dict'
+type Section = 'general' | 'persona' | 'notify' | 'recall' | 'wechat' | 'dict'
 /**
  * 可管理的字典种类。
  *
@@ -43,6 +44,19 @@ const DRAFT_NOTIFY_OPTIONS: Array<{ code: string; label: string }> = [
 
 const SECTIONS: Array<{ key: Section; label: string }> = [
   { key: 'general', label: '通用' },
+  /**
+   * ⚠️ 「角色库」是**独立页签**（2026-10-01 用户要求）。
+   *
+   * 原先它挤在「通用」里，位置在"AI 会话工作区"和"今日容量"之间 —— 三件事概念上无关，
+   * 却共享一列 500px 宽的窄栏：角色列表（每组标题 + 每行名称/描述/来源 + 两个按钮）
+   * 在那样的宽度里必然"全挤在一起"。用户原话："设置页面的角色库是否应该是单独的一个页面，
+   * 而不是挤在通用页面里面"。
+   *
+   * 拆成独立页签的收益不只是宽度：**这一页的写入口径与其它页不同** ——
+   * 收藏/停用是**立即生效、立即重读服务端**的（见 PersonaAdmin 文件头），
+   * 而其它字段是"改了要按保存设置"。分开之后这个差别可以就地讲清，不再和草稿字段混在一页。
+   */
+  { key: 'persona', label: '角色库' },
   { key: 'notify', label: '通知' },
   { key: 'recall', label: '知识库召回' },
   { key: 'wechat', label: '微信提醒' },
@@ -187,6 +201,46 @@ export function SettingsModal(props: SettingsModalProps): ReactNode {
                   <span className="wb-switch-desc">关闭后所有任务共用默认工作区；父任务设了工作区时，未单独设置子任务会跟随父任务。</span>
                 </span>
               </label>
+            </section>
+          )}
+
+          {/**
+            * 角色库（D13-B / §6.3）—— 2026-10-01 从「通用」拆成独立页签。
+            *
+            * 外部角色目录是"一等来源"，必须能配；**收藏 / 停用也是这里的配置**
+            * （2026-10-01 上一轮从角色选择器搬过来）：它们是对角色库的**配置**，
+            * 混在"这次会话用哪个角色"的选择器里会让选择器越长越像设置页。
+            * 写入口径与选择器共用 `personaFlagPatch`（唯一实现）。
+            *
+            * 解释性段落按用户要求**收进一个默认折叠的「使用说明」**：
+            * 页面默认只留可操作的控件，要看"角色是什么、来源优先级、停用会怎样"再点开。
+            */}
+          {section === 'persona' && (
+            <section>
+              <h5>外部角色目录</h5>
+              <div className="wb-field">
+                <span>可留空；例如 D:\Code\Linksight\LS-Skills\personas</span>
+                <input
+                  value={settings.personaExternalDir}
+                  onChange={(e) => onSettingsChange({ ...settings, personaExternalDir: e.target.value })}
+                  placeholder="留空 = 只用内置角色库与用户库"
+                />
+              </div>
+
+              <details className="wb-notes">
+                <summary>使用说明（角色是什么 / 来源优先级 / 停用会怎样）</summary>
+                <div className="wb-notes-body">
+                  <p><b>角色 = 一份 .md</b>（`# 名称` + 引用块元信息 + 正文），工具按名称逐字使用。</p>
+                  <p><b>三级来源，前者优先：</b>用户库（~/.dsh/workbench/personas）&gt; 外部角色目录 &gt; 内置六篇。列表里每行右侧标出它来自哪一级。</p>
+                  <p><b>工作台只读角色来源</b>，从不写入、不复制、不修改你的 .md 文件。</p>
+                  <p><b>停用</b>的角色仍会列在下表里（否则启用不回来），只是不能在选择器中选中。</p>
+                  <p><b>收藏</b>只影响选择器里的「只看收藏」筛选，不改变角色本身的可用性。</p>
+                  <p>角色正文与资源由 <code>workbench_load_persona</code> / <code>workbench_read_persona_resource</code> 按需读取，<b>不预先塞进提示词</b>。</p>
+                  <p className="wb-notes-warn">本页的收藏 / 停用是<b>点一下立刻生效</b>（不等「保存设置」）；上面的外部目录属于设置草稿，要按「保存设置」才生效。</p>
+                </div>
+              </details>
+
+              <PersonaAdmin saving={saving} />
             </section>
           )}
 

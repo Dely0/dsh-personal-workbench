@@ -22,11 +22,13 @@ import {
   type TaskTreeNode,
 } from './taskFilterSort.js'
 import { isWslStylePath, joinPath, normalizeWindowsPathToWsl } from './workspacePath.js'
-import { DEFAULT_ESTIMATE_MINUTES, MAX_ESTIMATE_MINUTES, capacityTodayKey, computeTodayCapacity } from './capacity.js'
+import { DEFAULT_ESTIMATE_MINUTES, MAX_ESTIMATE_MINUTES, capacityTodayKey, computeTodayCapacity, todayPlanCandidates } from './capacity.js'
+import { buildPlanPrompt } from './dailyPlanPrompt.js'
 import { WORKBENCH_CSS } from './styles.js'
 import { ACTIVE_ATTR, OFFICIAL_ATTR, PANEL_NAME, PENDING_ATTR, VIEW_ATTR } from './constants.js'
 import { HOST_SIDEBAR_COLLAPSED_ATTR, HOST_SIDEBAR_WIDTH_VAR, HOST_TITLEBAR_HEIGHT_VAR, HOST_WINDOWS_TITLEBAR_ATTR } from './hostShellMarkers.js'
 import { panelDataOpen, shouldShowPanel } from './panelState.js'
+import { WORKBENCH_BUILD_ID } from './buildId.js'
 import { isAiSessionReusable } from './aiSessionReuse.js'
 import { checkHostCapabilities, refuseToStart, type SlotsProbe } from './capabilities.js'
 import {
@@ -39,8 +41,17 @@ import { MarkdownText } from './components/MarkdownText.js'
 import { ToastHost, useToasts } from './components/Toast.js'
 import { api } from './api.js'
 import { withSkillPromptBlock } from './skillPrompt.js'
+import { withPersonaPromptBlock } from './personaPrompt.js'
+import {
+  INHERIT_PERSONA, decidePersonaReuse, personaIdToBind,
+  type PersonaBindingView, type PersonaSelection,
+} from './personaPicker.js'
+import { PersonaPicker } from './components/PersonaPicker.js'
+import { SkillPicker } from './components/SkillPicker.js'
 import type {
   DraftView,
+  PendingCompletionView,
+  PendingCompletionsResponse,
   ReminderChannelStatus as ReminderChannelView,
   ReminderOptionsView,
   ReminderPolicyView,
@@ -49,7 +60,10 @@ import type {
   WorkbenchSettings,
 } from '../shared/contracts.js'
 import { Icon } from './components/Icon.js'
+import { ModelPicker, readQuickModelSelection, reportModelDirectoryUnavailable, resolveModelDirectoryOutcomeFor, writeQuickModelSelection } from './components/ModelPicker.js'
 import { Badge, MultiSelectDropdown, TaskTreeRows, countTaskTree } from './components/TaskList.js'
+import { TaskProgress } from './components/TaskProgress.js'
+import { pendingCompletionMap, taskProgressView } from './taskProgressView.js'
 import { ALL, buildTabs, TabBar, toggleTab } from './components/TabBar.js'
 import { LocalDocModal, type LocalDirListing } from './components/LocalDocModal.js'
 import { KnowledgeList, KnowledgePager, KnowledgeToolbar, EMPTY_KNOWLEDGE_FILTERS, kindTabs, reconcileKnowledgeKinds, selectedKind, type KnowledgeFilters } from './components/KnowledgeList.js'
@@ -78,7 +92,7 @@ import {
 } from './taskFolder.js'
 import { pickIntakeWorkspace, readCreatedWorkspaceId } from './intakeWorkspace.js'
 import { acquireSession, openSessionInMainView, type SessionReference } from './sessionRef.js'
-import { readCurrentSessionId } from './currentSession.js'
+import { currentSessionIdOf, getPluginCtx, optionalService, safeService, setPluginCtx } from './runtimeServices.js'
 import { decideSidebarWidth, decideTopInset, pickFrameCandidate } from './panelGeometry.js'
 import {
   decideQuickWorkspaceDefault, quickFollowFolderDefault, quickWorkspaceSourceLabel, shouldRememberQuickWorkspace,
@@ -103,24 +117,6 @@ import {
 } from './popoverPlacement.js'
 
 const CSS = WORKBENCH_CSS
-
-/** 快速录入模型选择的 localStorage 键（本仓自己的前缀，不与 fork 混用）。 */
-const QUICK_MODEL_STORAGE_KEY = 'dsh-personal-workbench.quickModelSelection'
-
-/**
- * 模型浮层的期望宽度 —— 与 `.wb-model-menu` 的 CSS 保持一致。
- *
- * 为什么是常量而不是量出来的：浮层宽度由我们定、内容自适应；拿 `offsetWidth` 当输入
- * 会读到"上一次摆放写进去的宽度"，那是把**投影当权威源**（本项目第 1 条规矩禁止）。
- * 视口比它还窄时由 `placePopover()` 收窄。
- */
-const MODEL_MENU_WIDTH = 320
-
-/** 浮层高度兜底（`placePopover()` 还没量出来时用），与 CSS 里的 `max-height` 同值。 */
-const MODEL_MENU_FALLBACK_HEIGHT = 360
-
-/** 目录还没加载出来时的空快照（`useSyncExternalStore` 的服务端/初始值）。 */
-const EMPTY_MODEL_DIRECTORY_STATE: ModelDirectoryState = { current: null, groups: [], failures: [], status: 'idle', error: null }
 
 /**
  * 生成一个任务 id。
@@ -227,63 +223,8 @@ function writeKnowledgeFilters(filters: KnowledgeFilters): void {
   } catch { /* localStorage 不可用时静默降级：状态只在本次会话内有效 */ }
 }
 
-/** 读回上次选的模型（脏值一律当"没选过"，不让一个坏字符串把快速录入打挂）。 */
-function readQuickModelSelection(): QuickModelSelection | null {
-  try {
-    const raw = localStorage.getItem(QUICK_MODEL_STORAGE_KEY)
-    if (raw === null) return null
-    const value = JSON.parse(raw) as Partial<QuickModelSelection>
-    if (typeof value.provider !== 'string' || value.provider === '') return null
-    if (typeof value.model !== 'string' || value.model === '') return null
-    return {
-      provider: value.provider,
-      model: value.model,
-      label: typeof value.label === 'string' && value.label !== '' ? value.label : `${value.provider}/${value.model}`,
-      ...(typeof value.reasoningEffort === 'string' && value.reasoningEffort !== '' ? { reasoningEffort: value.reasoningEffort } : {}),
-      ...(typeof value.effortLabel === 'string' && value.effortLabel !== '' ? { effortLabel: value.effortLabel } : {}),
-    }
-  } catch { return null }
-}
 
-function writeQuickModelSelection(selection: QuickModelSelection | null): void {
-  try {
-    if (selection === null) localStorage.removeItem(QUICK_MODEL_STORAGE_KEY)
-    else localStorage.setItem(QUICK_MODEL_STORAGE_KEY, JSON.stringify(selection))
-  } catch { /* localStorage 不可用（隐私模式）时静默降级：选择只在本次会话内有效 */ }
-}
 
-/**
- * 取某个会话的模型目录 —— **判定全部委托给纯函数** `resolveModelDirectoryOutcome`。
- *
- * ⚠️ `modelDirectories` 走 **`ctx.get` 软探测**（见 `viewTypes.ts` 里那段决策说明），
- * 绝不写进 `inject`：它是另一个客户端插件提供的可选增强，缺了只是少一个下拉框，
- * 写进 `inject` 会让那种机器上**整个工作台面板 pending**。
- *
- * ⚠️ **不许退回 `try { … } catch { return undefined }`**（2026-09-28 死锁事故）：
- * 那样会把"服务不在场"与"这个会话取不到目录（宿主 `directoryFor` 抛 no binding）"
- * 压成同一个 `undefined`，于是界面上把后者说成"当前 DSH 未提供模型选择接口" ——
- * 而本机该 provider 明明是装着的，报错文案把排查方向整个带偏。
- * 本函数只做"读服务"这一件事，分类与措辞都在纯模块里，并由测试钉住。
- */
-function resolveModelDirectoryOutcomeFor(runtime: WorkbenchRuntime, sessionId: string): ModelDirectoryOutcome {
-  return resolveModelDirectoryOutcome(
-    () => optionalService<{ directoryFor?: (id: string) => ModelDirectoryRuntime }>(pluginCtx, 'modelDirectories')
-      ?? (() => { try { return runtime.modelDirectories } catch { return undefined } })(),
-    sessionId,
-  )
-}
-
-/**
- * 目录拿不到时的可读原因 **+ 控制台留痕**（"失败必须可观测"，本项目规范第 4 条）。
- *
- * 为什么两处（界面 + 控制台）都要：用户截图看不到 console，而排查时
- * `[workbench] …` 这一行能直接定位到是服务缺失还是会话没 retain。
- */
-function reportModelDirectoryUnavailable(outcome: ModelDirectoryOutcome): string {
-  const reason = modelDirectoryUnavailableReason(outcome)
-  if (outcome.ok === false) console.warn(`[workbench] 模型目录不可用（${outcome.code}）：${outcome.detail}`)
-  return reason
-}
 
 /** 拉一次"模型 → 输入能力"对照表；失败返回空表（不拦，交给宿主原生兜底）。 */
 async function loadModelModalityTable(): Promise<ReadonlyMap<string, readonly string[] | null>> {
@@ -319,459 +260,22 @@ async function quickImageToPromptPart(image: QuickImageDraft): Promise<PromptCon
     ...(image.file.name === '' ? {} : { name: image.file.name }),
   }
 }
-
 /**
- * 快速录入的模型选择器（v1.15.1；v1.15.2 修「浮层被遮挡」）。
+ * 工作台主组件（面板里的全部 UI）。
  *
- * ## 设计要点
- *
- * 1. **列表与选中来自同一个 authority**：列表读 `modelDirectories.directoryFor(会话)` 的
- *    快照，选中也走**同一个** directory 的 `select()`；
- * 2. 选中值存 localStorage 时带 **reasoning effort**（取 `model.reasoning.defaultEffort`）；
- * 3. 目录里**没有** `inputModalities`，所以"这个模型收不收图"由 `modalityTable`
- *    （宿主 `/model-modalities`）标注出来 —— 用户的痛点正是"选到不收图的模型，图片白传"；
- * 4. **浮层 portal 到 `document.body` + `fixed` + `placePopover()` 摆放**（v1.15.2）：
- *    原来那份是 `position: absolute; bottom: calc(100% + 4px)`，挂在触发按钮的
- *    `position: relative` 包装盒里，而包装盒在 `.wb-dialog-body { overflow: auto }`
- *    **里面** —— 于是浮层只会朝上开、不看还有多少可用空间，多出来的部分被滚动容器裁掉
- *    （2026-09-15 用户截图；实测常见窗口下只有 48% 可见，
- *    「跟随 DSH 默认模型」与前几个模型正好在被裁掉的那一段，窗口小一点时甚至画到视口外）。
- *    z-index/层叠上下文**不是**成因，光调 `bottom`/`max-height` 也治不了根：
- *    只要还挂在滚动容器里，容器就会继续裁它、滚动时浮层还会跟内容错位。
- *    事故说明与判定表见 `popoverPlacement.ts` 顶部，回归见 `test/popoverPlacement.test.mjs`。
- *
- * ⚠️ 目录服务缺失时**不静默降级**：按钮照常显示，点击给出可读原因
- * （"当前 DSH 未提供模型选择接口"），而不是变成一个点了没反应的控件。
+ * 这一行原本被一次误删切掉了（2026-10-01 抽 `ModelPicker` 时按"出现两次的标记"切片切错了位置），
+ * 表现为函数体变成裸语句 + `pnpm typecheck` 报 "Declaration or statement expected"。
+ * 教训与规矩见本仓 skill §14：**切片/替换必须用唯一标记**，别用在文件里出现两次的字符串。
  */
-function QuickModelPicker({ runtime, value, onChange, modalityTable, disabled, onError, onLoaded }: {
-  runtime: WorkbenchRuntime
-  value: QuickModelSelection | null
-  onChange: (selection: QuickModelSelection | null) => void
-  modalityTable: ReadonlyMap<string, readonly string[] | null>
-  disabled?: boolean
-  onError: (message: string) => void
-  onLoaded: () => void
-}): JSX.Element {
-  const [open, setOpen] = useState(false)
-  const [loading, setLoading] = useState(false)
-  /**
-   * 浮层摆放结果。`null` = 还没量到（首帧先 `visibility: hidden` 渲染，量完再显示，
-   * 免得先画在视口左上角再跳过去）。
-   */
-  const [placement, setPlacement] = useState<PopoverPlacement | null>(null)
-  const triggerRef = useRef<HTMLButtonElement | null>(null)
-  const menuRef = useRef<HTMLDivElement | null>(null)
-  /** 用方向键打开时，等选项挂上 DOM 之后要把焦点交给第一项 / 最后一项。 */
-  const pendingFocusRef = useRef<'first' | 'last' | null>(null)
-  const sessionsState = safeService<WorkbenchRuntime['sessions']>(runtime, 'sessions')?.list?.getSnapshot?.()
-  /**
-   * 「当前会话」按唯一入口读（`currentSession.ts`）—— 0.1.7-rc.2 起列表快照里没有 `current`。
-   * 读不到时才退到 `ids[0]`：那只是"模型目录得有个会话可问"的兜底，
-   * 绝不能拿它去推断工作区（那是猜，会把文件建进别人的项目目录）。
-   */
-  const currentSessionId = currentSessionIdOf(runtime)
-  const directorySessionId = currentSessionId !== '' ? currentSessionId : (sessionsState?.ids?.[0] ?? '')
-  /**
-   * 这次解析的结果（拿到目录 / 为什么没拿到）—— 门禁、菜单、提示**共用这一份**。
-   *
-   * ⚠️ **必须只有一处判定**：如果门禁自己再判一遍，就会出现"说的是 A、拦的是 B"
-   * （本项目最大的 bug 类别：同一个语义被独立计算多次）。
-   *
-   * ⚠️ 关于 `useMemo([runtime, directorySessionId])`：这条依赖里**没有**服务的就绪状态，
-   * 所以如果宿主的 `modelDirectories` 注册晚于本组件首次渲染，这里会一直缓存住那次失败
-   * （2026-09-28 提出的第 ② 条假设：**时机问题**）。
-   * 无法确认时机，就不敢只靠依赖变化 —— 所以这里补一条**显式重试入口**
-   * （`recomputeDirectory`，挂在用户点击上）：会话/服务就绪后点一下即可重新解析，
-   * 失败也不再是永久性的。原来的"不可用就永久不可用"因此消失。
-   */
-  const [directoryOutcome, setDirectoryOutcome] = useState<ModelDirectoryOutcome>(
-    () => resolveModelDirectoryOutcomeFor(runtime, directorySessionId),
-  )
-  const recomputeDirectory = useCallback((): ModelDirectoryOutcome => {
-    const next = resolveModelDirectoryOutcomeFor(runtime, directorySessionId)
-    setDirectoryOutcome(next)
-    return next
-  }, [runtime, directorySessionId])
-  useEffect(() => {
-    // 会话换人（或面板重挂）时重新解析一次 —— 依赖变化就是"该重算了"的信号。
-    setDirectoryOutcome(resolveModelDirectoryOutcomeFor(runtime, directorySessionId))
-  }, [runtime, directorySessionId])
-  const directory = directoryOutcome.ok ? directoryOutcome.directory : undefined
-  /**
-   * 目录拿不到时的可读**成因**（唯一来源：`modelDirectoryUnavailableReason`）。
-   * 门禁、菜单、提交路径都读它，禁止任何一处自己再拼一句（2026-09-28 审查 F1）。
-   */
-  const unavailableReason = directoryOutcome.ok
-    ? ''
-    : reportModelDirectoryUnavailable(directoryOutcome)
-  /**
-   * ⚠️ **不许用 `open ? resolveModelDirectory(...) : undefined` 做惰性解析**（v1.15.2 修的真 bug）。
-   *
-   * `openPicker()` 用 `directory === undefined` 判定"宿主没提供这个服务"，
-   * 而它**同时**负责把 `open` 置真 —— 于是第一次点击时 `open` 还是 `false`、
-   * `directory` 必然是 `undefined`，**必然**走进"未提供模型选择接口"分支：
-   * 一个自我实现的假失败，宿主有没有这个服务都一样。
-   *
-   * 教训（写进规矩）：**可用性判定不许依赖它自己要控制的状态**。
-   * 这里也**不需要**惰性：`directoryFor()` 只是宿主内部 Map 的一次查询，
-   * 且本组件只存在于「快速录入」弹窗里（弹窗关闭时根本不渲染）。
-   */
-  /**
-   * 菜单要列什么：整份目录，还是"只留一个清空出口"。
-   *
-   * 有残留选择时**菜单必须开得起来**（`clear-only`）——
-   * 事故里用户就是被"菜单打不开"锁死的：唯一的写入口只在菜单里。
-   *
-   * ⚠️ 这也是"清空出口可达性"的**唯一判据**：门禁不再自己看 `hasSelection`，
-   * 而是接收这里算好的 `recoverable`（2026-09-28 审查 F2：同一语义不许两处实现）。
-   */
-  const menuDecision = modelMenuMode({
-    directory,
-    hasSelection: value !== null,
-    unavailableReason,
-  })
-  const subscribe = useCallback(
-    (listener: () => void) => (directory === undefined ? () => undefined : directory.store.subscribe(listener)),
-    [directory],
-  )
-  const getSnapshot = useCallback(
-    () => (directory === undefined ? EMPTY_MODEL_DIRECTORY_STATE : directory.store.getSnapshot()),
-    [directory],
-  )
-  const state = useSyncExternalStore(subscribe, getSnapshot, () => EMPTY_MODEL_DIRECTORY_STATE)
-  const selectedLabel = useMemo(() => {
-    if (value === null) return CLEAR_SELECTION_LABEL
-    for (const group of state.groups) {
-      if (group.id !== value.provider) continue
-      const model = group.models.find((item) => item.id === value.model)
-      if (model !== undefined) {
-        const effort = model.reasoning?.efforts.find((item) => item.id === value.reasoningEffort)
-        return effort === undefined ? model.name : `${model.name} · ${effort.name}`
-      }
-    }
-    return value.effortLabel === undefined ? value.label : `${value.label} · ${value.effortLabel}`
-  }, [state.groups, value])
-  /**
-   * 关掉浮层，并把焦点还给触发按钮。
-   *
-   * 验收标准里的「关闭后焦点归还到触发元素」就落在这一处 ——
-   * 选完一项、点浮层外面、按 Esc、按 Tab 都走它（键盘用户不会迷失位置）。
-   */
-  const closePicker = useCallback((refocus = true): void => {
-    setOpen(false)
-    setPlacement(null)
-    if (refocus) triggerRef.current?.focus()
-  }, [])
-
-  const openPicker = (): void => {
-    /**
-     * 每次点击**重新解析一次**目录：宿主服务/会话可能是在本组件挂载之后才就绪的，
-     * 而 `directoryOutcome` 的依赖里没有"服务已注册"这件事（见上面的注释）。
-     * 重新解析是幂等的（`directoryFor()` 只是宿主内部 Map 的一次查询），
-     * 于是"点一下就能恢复"取代了原来的"一次失败即永久不可用"。
-     */
-    const outcome = recomputeDirectory()
-    /**
-     * 门禁的成因与出口可达性都**从上面算好的那一份**读，绝不在这里再判一次：
-     * 旧写法（`gateModelPicker({ hasDirectory })`）只能拿一句写死的"未提供接口"，
-     * 于是"服务在场、只是这个会话取不到目录"被说成"接口没提供"（审查 F1）。
-     *
-     * ⚠️ 用**本次刚解析的** `outcome` 而不是渲染期那份 state：点击的那一刻状态可能还没落地。
-     * 纯运算、无副作用（重算出的字符串与 `unavailableReason` 同源同值），幂等。
-     */
-    const reason = outcome.ok ? '' : modelDirectoryUnavailableReason(outcome)
-    const gate = gateModelPicker({
-      hasDirectory: outcome.ok,
-      sessionId: directorySessionId,
-      unavailableReason: reason,
-      recoverable: modelMenuMode({
-        directory: outcome.ok ? outcome.directory : undefined,
-        hasSelection: value !== null,
-        unavailableReason: reason,
-      }).mode === 'clear-only',
-    })
-    if (!gate.ok) {
-      const message = `${gate.reason}；本次会话将跟随 DSH 默认模型。`
-      // 控制台也留一条（用户截图看不到 console，但排查时这一步能直接定位）
-      console.warn(`[workbench] 模型选择器不可用：${message}`)
-      onError(message)
-      // 方向键路径会先记下"打开后焦点给谁"；这里没打开，就得把意图清掉，
-      // 否则下一次（比如鼠标）打开时焦点会莫名跳到第一项
-      pendingFocusRef.current = null
-      return
-    }
-    /**
-     * ⚠️ **拿不到目录但有残留选择**时：不是关掉控件，而是开一份"只给清空出口"的菜单。
-     *
-     * 事故形态：唯一的写入口在菜单里，而菜单被门禁挡死 ⇒ 用户被永久锁在
-     * 那条改不掉的 localStorage 选择上（只能手改浏览器存储）。
-     * 出口必须**不依赖任何模型目录**：清空只是 `onChange(null)` + `removeItem`。
-     *
-     * 注意这里**不往 state 里塞原因** —— 菜单里显示的原因是渲染期由
-     * `modelMenuMode()` 算出来的 `menuDecision.reason`，那才是有读者的那一份。
-     * （2026-09-28 审查 F2：曾经多存了一个只写不读的 state，现在删掉了。）
-     */
-    if (outcome.ok === false) {
-      pendingFocusRef.current = null
-      setOpen(true)
-      return
-    }
-    setOpen(true)
-    setLoading(true)
-    void outcome.directory.load()
-      .then(() => { onLoaded() })
-      .catch((error: unknown) => onError(error instanceof Error ? error.message : String(error)))
-      .finally(() => setLoading(false))
-  }
-
-  /** 触发按钮是**开关**：开着再点是关（关闭路径统一走 closePicker，焦点才会还回去）。 */
-  const togglePicker = (): void => {
-    if (open) { closePicker(); return }
-    openPicker()
-  }
-
-  /** 方向键在选项间移动焦点（选项本身就是 button，Enter/Space 原生可用）。 */
-  const focusOption = useCallback((delta: number): void => {
-    const menu = menuRef.current
-    if (menu === null) return
-    const options = Array.from(menu.querySelectorAll<HTMLElement>('[role="option"]'))
-    const target = options[stepIndex(options.indexOf(document.activeElement as HTMLElement), delta, options.length)]
-    target?.focus()
-  }, [])
-
-  /**
-   * 摆放浮层：portal 到 body 之后，位置只能**量**（触发按钮 vs 视口），
-   * 所以放在 layout effect 里，并在滚动 / 改尺寸时重算。
-   *
-   * ⚠️ `scroll` 事件不冒泡，但**捕获阶段**会经过 window —— 必须传 `true` 才收得到
-   * `.wb-dialog-body` 的滚动。这一条正对应验收标准里的「弹窗滚动时不遮挡」：
-   * 弹窗内部一滚，触发按钮就动了，浮层必须跟着走，不能停在原地。
-   * ⚠️ `setPlacement` 里做相等判断：否则"量 → 写状态 → 再渲染 → 再量"会自激
-   * （本项目第 6 条规矩：写入相同值也会让回路不收敛）。
-   */
-  useLayoutEffect(() => {
-    if (!open) return
-    const update = (): void => {
-      const trigger = triggerRef.current
-      const menu = menuRef.current
-      if (trigger === null || menu === null) return
-      const anchor = trigger.getBoundingClientRect()
-      /**
-       * 自然高度 = `scrollHeight`（内容 + padding）**加回边框**：
-       * `placePopover()` 返回的 `max-height` 是"整块菜单的高度"，
-       * 而 `.wb-model-menu` 是 `box-sizing: border-box` —— 漏掉这 2px 边框
-       * 就会让菜单比可用空间高出 2px，在矮窗口里正好表现为"又被裁了一点"。
-       */
-      const border = window.getComputedStyle(menu)
-      const borderY = (Number.parseFloat(border.borderTopWidth) || 0) + (Number.parseFloat(border.borderBottomWidth) || 0)
-      const next = placePopover({
-        anchor: { top: anchor.top, bottom: anchor.bottom, left: anchor.left, right: anchor.right },
-        menu: { width: MODEL_MENU_WIDTH, height: menu.scrollHeight + borderY },
-        viewport: { width: window.innerWidth, height: window.innerHeight },
-      })
-      setPlacement((previous) => (previous !== null && samePlacement(previous, next) ? previous : next))
-    }
-    update()
-    /**
-     * 菜单内容会**自己长高**（目录是异步 `load()` 的：先渲染"正在读取模型列表…"，
-     * 模型表到了以后可能多出若干行 + "不支持图片输入"标注）。只在打开那一帧量一次，
-     * 浮层就会停在旧高度上（表现为"多出滚动条、最后几项被裁"）—— 这里补一个观察器，
-     * 内容一变就重算。
-     *
-     * ⚠️ 之所以敢观察"自己即将改尺寸的元素"：`update()` 里做了相等判断，
-     * 尺寸没实质变化就不写状态，所以"改尺寸 → 观察器回调 → 再改尺寸"不会自激。
-     */
-    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(update)
-    if (observer !== null && menuRef.current !== null) observer.observe(menuRef.current)
-    window.addEventListener('scroll', update, true)
-    window.addEventListener('resize', update)
-    return () => {
-      observer?.disconnect()
-      window.removeEventListener('scroll', update, true)
-      window.removeEventListener('resize', update)
-    }
-  }, [open, focusOption])
-
-  /**
-   * 落实"用方向键打开浮层时，把焦点交给第一项 / 最后一项"。
-   *
-   * ⚠️ 必须等 `placement` 生效之后再点，**不能**顺手写在"量并写 placement"的那一次里：
-   * 首帧菜单是 `visibility: hidden`（免得先画在视口左上角再跳过去），而**隐藏元素不可聚焦** ——
-   * `.focus()` 既不报错也不生效，于是"按 ↓ 打开后焦点在第一项"变成静默失效
-   * （用户得再按一次 ↓）。这一条由 `test/quickIntakeClient.test.mjs` 的源码扫描守着。
-   */
-  useEffect(() => {
-    if (!open || placement === null) return
-    const pending = pendingFocusRef.current
-    if (pending === null) return
-    pendingFocusRef.current = null
-    focusOption(pending === 'first' ? 1 : -1)
-  }, [open, placement, focusOption])
-
-  /**
-   * Esc **只关浮层**，不关整个「快速录入」弹窗。
-   *
-   * 为什么挂在 `window` 的**捕获**阶段：`Modal` 也监听 Esc（挂在 `document` 捕获上），
-   * 同一目标、同一阶段按**注册顺序**执行 —— 后注册的我们永远抢不到，于是按 Esc
-   * 会把整个弹窗连同已输入的内容一起关掉。window 在捕获路径上早于 document，
-   * 在这里 `stopPropagation()` 就能把这次 Esc 收在自己手里。
-   */
-  useEffect(() => {
-    if (!open) return
-    const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key !== 'Escape') return
-      event.stopPropagation()
-      event.preventDefault()
-      closePicker()
-    }
-    window.addEventListener('keydown', onKeyDown, true)
-    return () => window.removeEventListener('keydown', onKeyDown, true)
-  }, [open, closePicker])
-
-  const onTriggerKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>): void => {
-    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
-    event.preventDefault()
-    if (!open) {
-      // 选项要等这一帧渲染完才存在，所以只记意图，由上面的 layout effect 落实焦点
-      pendingFocusRef.current = event.key === 'ArrowDown' ? 'first' : 'last'
-      openPicker()
-      return
-    }
-    focusOption(event.key === 'ArrowDown' ? 1 : -1)
-  }
-
-  const onMenuKeyDown = (event: React.KeyboardEvent<HTMLDivElement>): void => {
-    if (event.key === 'ArrowDown') {
-      event.preventDefault(); focusOption(1)
-    } else if (event.key === 'ArrowUp') {
-      event.preventDefault(); focusOption(-1)
-    } else if (event.key === 'Tab') {
-      // Tab 不该被困在浮层里：先把焦点还给触发按钮，再让浏览器从它继续往后走
-      closePicker()
-    }
-  }
-  const choose = (group: ModelProviderGroup, model: ModelProviderGroup['models'][number]): void => {
-    const effortId = model.reasoning?.defaultEffort
-    const effort = model.reasoning?.efforts.find((item) => item.id === effortId)
-    onChange({
-      provider: group.id,
-      model: model.id,
-      label: model.name,
-      ...(effortId === undefined || effortId === '' ? {} : { reasoningEffort: effortId }),
-      ...(effort === undefined ? {} : { effortLabel: effort.name }),
-    })
-    closePicker()
-  }
-  /** 该模型是否收图（`undefined` = 对照表里没有，不做判断）。 */
-  const imageSupport = (provider: string, model: string): boolean | undefined => {
-    const key = `${provider}/${model}`
-    if (!modalityTable.has(key)) return undefined
-    const modalities = modalityTable.get(key) ?? null
-    return modalities === null ? undefined : modalities.includes('image')
-  }
-  return (
-    <div style={{ display: 'flex' }}>
-      <button
-        ref={triggerRef}
-        type="button"
-        className="wb-btn"
-        disabled={disabled === true}
-        onClick={togglePicker}
-        onKeyDown={onTriggerKeyDown}
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        title="选择本次澄清会话使用的模型"
-      >
-        <Icon name="model" />{selectedLabel}<span style={{ flex: 'none' }}>{open ? '▲' : '▼'}</span>
-      </button>
-      {/*
-        浮层 **portal 到 document.body**（不是就地渲染）：
-        `.wb-dialog` 有 `overflow: hidden`、`.wb-dialog-body` 有 `overflow: auto`、
-        `.wb-overlay` 有 `backdrop-filter`（会变成 fixed 后代的包含块）——
-        留在原地就一定被裁。它与触发按钮的祖先关系因此断开了，
-        所以"跟着按钮走"必须靠 `placePopover()` 在滚动/改尺寸时重算。
-      */}
-      {open && createPortal(
-        <>
-          <div className="wb-model-scrim" onClick={() => closePicker()} />
-          <div
-            ref={menuRef}
-            className="wb-model-menu"
-            role="listbox"
-            aria-label="选择模型"
-            style={{
-              left: placement === null ? 0 : placement.left,
-              top: placement === null ? 0 : placement.top,
-              width: placement === null ? MODEL_MENU_WIDTH : placement.width,
-              maxHeight: placement === null ? MODEL_MENU_FALLBACK_HEIGHT : placement.maxHeight,
-              // 还没量出来就别给人看见（否则会先闪一下左上角）
-              visibility: placement === null ? 'hidden' : 'visible',
-            }}
-            onKeyDown={onMenuKeyDown}
-          >
-            <button
-              type="button"
-              role="option"
-              aria-selected={value === null}
-              className={`wb-model-option${value === null ? ' selected' : ''}`}
-              onClick={() => { onChange(clearQuickModelSelection(value)); closePicker() }}
-            >
-              <span className="wb-model-option-main">{CLEAR_SELECTION_LABEL}</span>
-              {value === null && <Icon name="check" size={14} />}
-            </button>
-            {/*
-              降级态（拿不到目录但有残留选择）：只给上面这一个出口 + 一条可读原因。
-              不渲染模型行 —— 没有目录就没有可信的模型列表，绝不摆一份假的给人点。
-              原因行就摆在出口**下面**，用户点进来第一眼就能看到为什么。
-            */}
-            {menuDecision.mode === 'clear-only' && (
-              <div className="wb-model-menu-error">{menuDecision.reason}</div>
-            )}
-            {menuDecision.mode === 'full' && (loading || state.status === 'loading') && <div className="wb-model-menu-empty">正在读取模型列表…</div>}
-            {menuDecision.mode === 'full' && state.error !== null && <div className="wb-model-menu-error">{state.error}</div>}
-            {menuDecision.mode === 'full' && state.groups.map((group) => (
-              <div key={group.id}>
-                <div className="wb-model-group-title">{group.name}</div>
-                {group.models.map((model) => {
-                  const isSelected = value?.provider === group.id && value.model === model.id
-                  const effort = model.reasoning?.efforts.find((item) => item.id === model.reasoning?.defaultEffort)
-                  const supportsImage = imageSupport(group.id, model.id)
-                  return (
-                    <button key={model.id} type="button" role="option" aria-selected={isSelected} className={`wb-model-option${isSelected ? ' selected' : ''}`} onClick={() => choose(group, model)}>
-                      <span className="wb-model-option-main">
-                        <span className="wb-model-option-name">{model.name}</span>
-                        {(effort !== undefined || supportsImage === false) && (
-                          <span className={`wb-model-option-note${supportsImage === false ? ' warn' : ''}`}>
-                            {effort === undefined ? '' : effort.name}
-                            {supportsImage === false ? `${effort === undefined ? '' : ' · '}不支持图片输入` : ''}
-                          </span>
-                        )}
-                      </span>
-                      {isSelected && <Icon name="check" size={14} />}
-                    </button>
-                  )
-                })}
-              </div>
-            ))}
-            {menuDecision.mode === 'full' && state.groups.length === 0 && !loading && state.status !== 'loading' && state.error === null && (
-              <div className="wb-model-menu-empty">暂无可用模型</div>
-            )}
-            {menuDecision.mode === 'full' && state.failures.length > 0 && (
-              <div className="wb-model-menu-empty">{state.failures.length} 个模型来源读取失败（其余仍可选）</div>
-            )}
-          </div>
-        </>,
-        document.body,
-      )}
-    </div>
-  )
-}
-
-
 function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; closePanel: () => void }): JSX.Element {
   const [view, setView] = useState<'today' | 'calendar' | 'list' | 'knowledge' | 'ideas'>('today')
   const [bootstrap, setBootstrap] = useState<Bootstrap | null>(null)
   const [tasks, setTasks] = useState<Task[]>([])
+  /**
+   * 待验收投影（T1/D04）：来自 `GET /api/workbench/tasks/pending-completions` 的**一次**查询。
+   * `null` = 服务端不支持这份投影（不显示徽标，不推测）。
+   */
+  const [pendingCompletions, setPendingCompletions] = useState<PendingCompletionView | null>(null)
   const [selected, setSelected] = useState<TaskDetail | null>(null)
   const [showForm, setShowForm] = useState(false)
   const [subtaskParent, setSubtaskParent] = useState<Task | null>(null)
@@ -913,7 +417,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
     /** 本次已经建出来的那条（"就删掉这条新建的"用得上）。 */
     newTaskId: string
   } | null>(null)
-  const [settings, setSettings] = useState<WorkbenchSettings>({ defaultWorkspace: '', autoCreateTypeFolders: true, desktopNotify: true, dailyCapacityMinutes: 390, quickWorkspaceRecent: [], autoKnowledgeRecall: true, defaultEstimateMinutes: DEFAULT_ESTIMATE_MINUTES, dailyCapacityIncludeOverdue: false })
+  const [settings, setSettings] = useState<WorkbenchSettings>({ defaultWorkspace: '', autoCreateTypeFolders: true, desktopNotify: true, dailyCapacityMinutes: 390, quickWorkspaceRecent: [], autoKnowledgeRecall: true, defaultEstimateMinutes: DEFAULT_ESTIMATE_MINUTES, dailyCapacityIncludeOverdue: false, personaExternalDir: '', personaFavorites: [], personaDisabledIds: [] })
   /** 今日容量里「可投入时长」的行内编辑态（null = 只读展示） */
   const [capacityEdit, setCapacityEdit] = useState<string | null>(null)
   /** 「规则与账本」面板是否展开（纯展示态，不影响任何计算）。 */
@@ -986,7 +490,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   const [todayPlanSession, setTodayPlanSession] = useState<{ sessionId: string } | null>(null)
   const [busy, setBusy] = useState(false)
   const [promptModal, setPromptModal] = useState<{ title: string; value: string } | null>(null)
-  const promptResolveRef = useRef<((value: { text: string; skills: string[] } | null) => void) | null>(null)
+  const promptResolveRef = useRef<((value: { text: string; skills: string[]; persona: PersonaSelection } | null) => void) | null>(null)
   // AI 会话前的 Skill 选择器：列表来自宿主 skills 注册表（未安装时 available=false，选择器隐藏）
   const [skillCatalog, setSkillCatalog] = useState<SkillSummary[]>([])
   const [skillsAvailable, setSkillsAvailable] = useState(false)
@@ -1011,14 +515,69 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   const [skillProblem, setSkillProblem] = useState('')
   const [skillQuery, setSkillQuery] = useState('')
   const [selectedSkills, setSelectedSkills] = useState<string[]>([])
+  /**
+   * 角色选择（D13-B / §6.3）：三个状态位分开存，**语义不同不能合并**。
+   *
+   * - 共享提示词弹窗（9 个 mode）与快速录入弹窗（clarify）各有一份；
+   * - 默认值都是 `INHERIT_PERSONA`（未指定）= **不改变既有行为**；
+   * - 复用型会话拿到既有绑定后再由 `decidePersonaReuse()` 判"沿用还是新建会话"。
+   */
+  const [promptPersona, setPromptPersona] = useState<PersonaSelection>(INHERIT_PERSONA)
+  const [quickPersona, setQuickPersona] = useState<PersonaSelection>(INHERIT_PERSONA)
+  /**
+   * 共享提示词弹窗里的模型选择（2026-10-01）。
+   *
+   * 与快速录入**同一份持久化**（`writeQuickModelSelection` → 同一个 localStorage 键）：
+   * "我这次用哪个模型"是同一件事，存两处必然出现"这个入口选完、那个入口还是旧的"。
+   * 所以在两个弹窗之间它是同一份状态读写，只有 UI 挂载点不同。
+   */
+  const [promptModelSelection, setPromptModelSelectionState] = useState<QuickModelSelection | null>(() => readQuickModelSelection())
+  const setPromptModelSelection = (selection: QuickModelSelection | null): void => {
+    setPromptModelSelectionState(selection)
+    writeQuickModelSelection(selection)
+  }
   const selectedRef = useRef<string | null>(null)
 
   const dicts = useMemo(() => bootstrap?.dictionaries ?? [], [bootstrap])
   const dictOf = useCallback((kind: string) => dicts.filter((d) => d.kind === kind), [dicts])
 
+  /**
+   * 待验收投影（T1/D04）：一次查询 → 一份 Map → 全列表共用。
+   *
+   * `pendingCompletionMap()` 在"服务端不支持"时返回 `null`，与"确实没人待验收"（空 Map）
+   * 是**两件不同的事**；这个区分一路传到 `taskProgressView()`，界面据此决定要不要显示徽标。
+   */
+  const pendingMap = useMemo(() => pendingCompletionMap(pendingCompletions), [pendingCompletions])
+
+  /**
+   * 直接子任务索引（旁证口径：只算直接子任务，不递归 —— ADR 0004）。
+   *
+   * 一次遍历建索引，**不是**每条任务 filter 一遍 tasks（那是 O(n²)）。
+   */
+  const childrenIndex = useMemo(() => {
+    const index = new Map<string, Task[]>()
+    for (const task of tasks) {
+      if (task.parentId === null) continue
+      const bucket = index.get(task.parentId)
+      if (bucket === undefined) index.set(task.parentId, [task])
+      else bucket.push(task)
+    }
+    return index
+  }, [tasks])
+  const childrenOf = useCallback((taskId: string) => childrenIndex.get(taskId), [childrenIndex])
+
   const refresh = useCallback(async () => {
-    const [boot, list] = await Promise.all([api<Bootstrap>('/api/workbench/bootstrap'), api<{ tasks: Task[] }>('/api/workbench/tasks')])
-    setBootstrap(boot); setTasks(list.tasks)
+    const [boot, list, pending] = await Promise.all([
+      api<Bootstrap>('/api/workbench/bootstrap'),
+      api<{ tasks: Task[] }>('/api/workbench/tasks'),
+      /**
+       * 待验收投影：**列表刷新共用一次**查询（requirements §3.2 明令不做 N+1）。
+       * 拿不到（旧服务端没有这个端点）时置 `null` → 界面**不显示任何待验收徽标**，
+       * 而不是把每一条都当成"没有待验收"。
+       */
+      api<PendingCompletionsResponse>('/api/workbench/tasks/pending-completions').then((res) => res.pending).catch(() => null),
+    ])
+    setBootstrap(boot); setTasks(list.tasks); setPendingCompletions(pending)
     if (selectedRef.current !== null) {
       try {
         const [detail, ev, rv] = await Promise.all([
@@ -1279,22 +838,23 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
     const res = await api<{ entries: KnowledgeEntry[] }>(`/api/workbench/knowledge?source_task_id=${encodeURIComponent(taskId)}`)
     setTaskKnowledge(res.entries)
   }
-  const openTask = (task: Task): void => {
-    selectedRef.current = task.id
-    setDetailTab('desc')
-    setEventsExpanded(false)
-    void Promise.all([
-      api<TaskDetail>(`/api/workbench/tasks/${task.id}`),
-      api<{ events: Array<Record<string, unknown>> }>(`/api/workbench/tasks/${task.id}/events`).catch(() => ({ events: [] })),
-      api<{ reviews: Array<Record<string, unknown>> }>(`/api/workbench/tasks/${task.id}/reviews`).catch(() => ({ reviews: [] })),
-      loadTaskKnowledge(task.id).catch(() => setTaskKnowledge([])),
-    ]).then(([detail, ev, rv]) => setSelected({ ...detail, events: ev.events, reviews: rv.reviews })).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
-  }
-  const openTaskById = (taskId: string): void => {
-    setView('list')
+  /**
+   * 只**刷新详情数据**，不碰视图、不碰页签。
+   *
+   * ## 为什么必须与"打开任务"分开（2026-10-01 用户报的 BUG）
+   *
+   * 用户现象："在任何页面修改任务的进度，工作台都会被弹回任务页。"
+   * 根因是刷新详情走的是 `openTaskById`，而那个函数第一句就是 `setView('list')`
+   * —— 于是一个纯数据刷新带了"切视图 + 重置页签 + 收起事件"三个副作用：
+   * 你在日历/今日页改一下进度，就被扔回任务列表，正在看的详情页签也丢了。
+   *
+   * 约定（写在这里免得下一个人又合回去）：
+   * - **导航**（切视图、重置页签）只在"用户明确要打开某个任务"时发生 → `openTask`
+   *   / `openTaskById`；
+   * - **刷新**（保存进度、完成任务之后重新读一遍）只看数据 → 本函数。
+   */
+  const loadTaskDetail = (taskId: string): void => {
     selectedRef.current = taskId
-    setDetailTab('desc')
-    setEventsExpanded(false)
     void Promise.all([
       api<TaskDetail>(`/api/workbench/tasks/${taskId}`),
       api<{ events: Array<Record<string, unknown>> }>(`/api/workbench/tasks/${taskId}/events`).catch(() => ({ events: [] })),
@@ -1302,12 +862,64 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
       loadTaskKnowledge(taskId).catch(() => setTaskKnowledge([])),
     ]).then(([detail, ev, rv]) => setSelected({ ...detail, events: ev.events, reviews: rv.reviews })).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
   }
+  /** 打开任务（**会导航**）：重置详情页签与事件折叠，并刷新数据。 */
+  const openTask = (task: Task): void => {
+    setDetailTab('desc')
+    setEventsExpanded(false)
+    loadTaskDetail(task.id)
+  }
+  /** 按 id 打开任务（**会导航到任务页**）：只给"从别处跳到这个任务"的入口用。 */
+  const openTaskById = (taskId: string): void => {
+    setView('list')
+    setDetailTab('desc')
+    setEventsExpanded(false)
+    loadTaskDetail(taskId)
+  }
   const patchTask = async (id: string, patch: Record<string, unknown>): Promise<void> => {
     await api(`/api/workbench/tasks/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) })
     await refresh()
   }
   const completePlanTask = async (taskId: string): Promise<void> => {
     await patchTask(taskId, { statusCode: 'done' })
+  }
+  /**
+   * 保存显式进度（0–99），T1/D04。
+   *
+   * 只走 `PATCH progressPercent` —— 100 **不在这里**（服务端也会拒绝 100）：
+   * 界面上选 100 是「完成任务」动作，见 `completeTaskFromProgress`。
+   * 刷新后重新拉一次详情，保证详情卡里的进度/徽标与服务端一致（不靠本地乐观值）。
+   *
+   * 刻意不用 `useCallback`：它们读 `tasks` / `selected` / `childrenIndex` 这些每渲染都变的快照，
+   * 写依赖数组只会得到一个"看起来优化了、实际依赖不全"的假象；调用点在事件处理器里，
+   * 每次渲染重建一个闭包的成本可以忽略。
+   */
+  const saveProgress = async (taskId: string, percent: number): Promise<void> => {
+    await patchTask(taskId, { progressPercent: percent })
+    /**
+     * 刷新详情但**不动视图**（⑤ 的修复点）。
+     * 旧写法是 `openTaskById(taskId)` —— 它内部 `setView('list')`，
+     * 于是用户在任何别处（日历/今日页）改进度都会被弹回任务列表。
+     */
+    if (selectedRef.current === taskId) loadTaskDetail(taskId)
+  }
+  /**
+   * 「完成任务」动作（进度档位里的 100）。
+   *
+   * 与界面既有的完成操作走**同一条** PATCH `statusCode: 'done'` 路径（服务端会在同一事务内
+   * 级联完成未完成子节点并向上聚合），所以提示语也照抄既有语义：
+   * 有子任务时必须说清"未完成子任务会级联完成"，让用户先确认再点。
+   */
+  const completeTaskFromProgress = async (taskId: string): Promise<void> => {
+    const task = tasks.find((t) => t.id === taskId) ?? (selectedRef.current === taskId ? selected?.task : undefined)
+    const childCount = childrenIndex.get(taskId)?.length ?? 0
+    const question = childCount > 0
+      ? `完成任务「${task?.title ?? taskId}」？它有 ${childCount} 个直接子任务，未完成的会被一并级联完成。`
+      : `把任务「${task?.title ?? taskId}」标记为已完成？`
+    if (!window.confirm(question)) return
+    await patchTask(taskId, { statusCode: 'done' })
+    setNotice('任务已完成（未完成子任务已按既有规则级联完成）')
+    /** 同上：完成任务后只刷新详情，不把用户从当前页面弹走。 */
+    if (selectedRef.current === taskId) loadTaskDetail(taskId)
   }
   const deferPlanTask = async (taskId: string): Promise<void> => {
     const task = tasks.find((t) => t.id === taskId)
@@ -1368,11 +980,19 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
     }
   }
 
-  const askUserPrompt = (title: string): Promise<{ text: string; skills: string[] } | null> => new Promise((resolve) => {
+  /**
+   * 共享提示词弹窗（9 个 mode 的**同一入口**）。
+   *
+   * 返回值里带上用户选的角色（`persona`）：默认 `INHERIT_PERSONA`（未指定），
+   * 于是"没动选择器"与"明确选了无角色"在**类型上**就是两件事 ——
+   * 复用分流（`decidePersonaReuse`）与"是否新建会话"全靠这个区分（AX-R08）。
+   */
+  const askUserPrompt = (title: string): Promise<{ text: string; skills: string[]; persona: PersonaSelection } | null> => new Promise((resolve) => {
     promptResolveRef.current = resolve
     setPromptModal({ title, value: '' })
     setSkillQuery('')
     setSelectedSkills([])
+    setPromptPersona(INHERIT_PERSONA)
     void loadSkills()
   })
   const confirmPrompt = (): void => {
@@ -1380,8 +1000,9 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
     promptResolveRef.current = null
     const value = promptModal?.value ?? ''
     const skills = [...selectedSkills]
+    const persona = promptPersona
     setPromptModal(null)
-    resolve?.({ text: value, skills })
+    resolve?.({ text: value, skills, persona })
   }
   const cancelPrompt = (): void => {
     const resolve = promptResolveRef.current
@@ -1433,14 +1054,34 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
    * 图片/文档附件，以及"用户选了目录、还勾了建任务资料夹"这一种组合 ——
    * 资料夹名由 `startAISession` 用**预留的任务 ID** 现算（调用方拿不到那个 ID）。
    */
-  const startAISession = async (mode: 'clarify' | 'consult' | 'breakdown' | 'execute' | 'review' | 'plan' | 'report' | 'idea_association' | 'idea_brainstorm' | 'knowledge_doc', task: Task | null, text: string, previousSessions: Array<Record<string, unknown>> = [], docContext?: { fileLink: string; content: string; name?: string; truncated?: boolean }, workspaceOverride?: string, clarifyOptions: { attachments?: readonly QuickAttachmentDraft[]; followFolder?: boolean } = {}): Promise<void> => {
+  const startAISession = async (mode: 'clarify' | 'consult' | 'breakdown' | 'execute' | 'review' | 'plan' | 'report' | 'idea_association' | 'idea_brainstorm' | 'knowledge_doc', task: Task | null, text: string, previousSessions: Array<Record<string, unknown>> = [], docContext?: { fileLink: string; content: string; name?: string; truncated?: boolean }, workspaceOverride?: string, clarifyOptions: { attachments?: readonly QuickAttachmentDraft[]; followFolder?: boolean; persona?: PersonaSelection } = {}): Promise<void> => {
     const attachments = clarifyOptions.attachments ?? []
     if (mode === 'clarify' && text.trim() === '' && attachments.length === 0) return
-    // 澄清会话由自然语言快速录入直接触发，不弹提示词弹窗，也不参与技能选择（保持原流程）。
-    const promptInput = mode === 'clarify' ? { text: '', skills: [] as string[] } : await askUserPrompt(AI_PROMPT_LABELS[mode] ?? 'AI 会话')
+    /**
+     * 澄清会话由自然语言快速录入直接触发，不弹提示词弹窗；但**角色选择照旧有**：
+     * 快速录入弹窗里有同一个 `PersonaPicker`，选择经 `clarifyOptions.persona` 传进来
+     * （需求 §6.3：快速录入与共享提示词弹窗同一选择逻辑；AX-R07：10 个 mode 都有角色入口）。
+     */
+    /**
+     * 澄清（快速录入）走本地对象，其余 mode 都走共享提示词弹窗。
+     *
+     * ⚠️ **`skills` 必须是用户真选的那个数组**（2026-10-01 修）。旧写法在这里硬编码
+     * `skills: []`，而 `skillNames = promptInput.skills` 是唯一喂给
+     * `withSkillPromptBlock()` 的输入 —— 于是快速录入**即使加了技能选择器也永远不生效**
+     * （选了等于没选）。用户反馈"快速录入无法选择 Skill"其实是两层：UI 没有 + 这里恒空。
+     *
+     * 技能目录由 `askUserPrompt` 与快速录入弹窗各自在打开时 `loadSkills()` 加载，
+     * 但**选择结果 `selectedSkills` 是同一份 state** —— 所以这里直接读它。
+     */
+    const promptInput = mode === 'clarify'
+      ? { text: '', skills: [...selectedSkills], persona: clarifyOptions.persona ?? INHERIT_PERSONA }
+      : await askUserPrompt(AI_PROMPT_LABELS[mode] ?? 'AI 会话')
     if (promptInput === null) return
     const customPrompt = promptInput.text
     const skillNames = promptInput.skills
+    const personaChoice = promptInput.persona ?? INHERIT_PERSONA
+    /** 本次新建会话要绑定的角色 id（`''` = 不绑定）。提前算出来：会话标题也要带上它。 */
+    const personaId = personaIdToBind(personaChoice)
     const planAnchor = mode === 'plan' ? (/^\d{4}-\d{2}-\d{2}$/.test(text) ? text : localDateString()) : ''
     setBusy(true); setError(null)
     /**
@@ -1453,16 +1094,26 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
     try {
       // 复用型会话：计划/报告/点子关联/点子头脑风暴，每个 scope+anchor 只有一个会话。
       /**
-       * 复用判定已抽成 `reuseAiSessionId`（见本组件下方那个函数）：
-       * 命中已有会话 → 立刻 return；返回 '' → 落到下面的新建流程。
+       * 复用判定已抽成 `reuseAiSessionId`（见本组件下方那个函数）：命中已有会话 → 立刻 return；
+       * 返回 `kind:'new'` → 落到下面的新建流程。
+       *
+       * ⚠️ **角色选择参与这个判定**（AX-R08）：用户明确选了与既有绑定不同的角色时，
+       * 这里必须**不复用**而是新建会话 —— 旧实现无条件早退，会把用户的选择整个吞掉。
        * 复用路径**不 acquire 会话引用**（复用的是已存在的会话，不新建 scope）。
        */
-      const reusableSessionId = await reuseAiSessionId(mode, text, planAnchor)
-      if (reusableSessionId !== '') {
+      const reuse = await reuseAiSessionId(mode, text, planAnchor, personaChoice)
+      if (reuse.kind === 'reuse') {
         // 先开会话再关面板（关面板会卸载本面板的 React 树，顺序反了就"点了没反应"）
-        openSessionInPanel(reusableSessionId)
+        openSessionInPanel(reuse.sessionId)
         return
       }
+      /**
+       * "换了角色 → 新建会话"必须**显式告知**（需求 §6.3）。
+       *
+       * ⚠️ 不能用 toast：这条路径结尾会 `openSessionInPanel()` 收掉面板，toast 随面板一起不可见。
+       * 所以告知走两个**用户真的看得到**的地方：控制台一条 warn + 新会话标题里的角色后缀。
+       */
+      if (reuse.notice !== '') console.warn(`[workbench] ${reuse.notice}`)
       const ws = safeService<WorkbenchRuntime['workspaces']>(runtime, 'workspaces')?.list?.getSnapshot?.() ?? { items: [] }
       /**
        * ⚠️ 与 `detectWslHost` 同一个坑（v1.14.50 一起修）：
@@ -1639,22 +1290,27 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
        */
       sessionRef = await acquireSession(sessions, id)
       /**
-       * 澄清会话先把用户选的模型应用上去（**必须在 prompt 之前**）：
-       * `select()` 走宿主持久投影，下一次请求就是它。
+       * 把用户选的模型应用上去（**必须在 prompt 之前**）：`select()` 走宿主持久投影，
+       * 下一次请求就是它。
        *
        * ## 口径（2026-09-28 死锁事故后修订，用户已确认 A + B）
        *
        * - **拿到目录** → 照旧应用用户选的模型。应用失败仍然**不静默吞掉**：
        *   `directory.select()` 抛出的可读原因原样上抛（既有设计意图保留）。
-       * - **拿不到目录** → **不中断**整条快速录入：忽略那条残留选择、按
+       * - **拿不到目录** → **不中断**这条流程：忽略那条残留选择、按
        *   「跟随 DSH 默认模型」跑完，并给一条明确说"本次未切换模型"的提示。
        *
        * ⚠️ 旧实现在这里**直接 `throw`**，于是一个可选增强（另一个客户端插件提供的
-       * 下拉框）把整条快速录入拖死 —— 用户看到的是"选过模型之后快速录入整个不可用"。
+       * 下拉框）把整条流程拖死 —— 用户看到的是"选过模型之后快速录入整个不可用"。
        * 判定收敛到纯函数 `selectionToApply()`，本处只负责"照判定做事 + 留痕"。
+       *
+       * ⚠️ **`mode === 'clarify'` 的门禁已拆（2026-10-01）**：原先只有澄清会应用模型选择，
+       * 于是给 9 个走共享提示词弹窗的 mode 补上模型选择器也**不会生效**（选了被静默忽略，
+       * 比"没有下拉框"更糟）。现在所有 mode 都走同一条应用路径。
        */
+      const modelSelection = mode === 'clarify' ? quickModelSelection : promptModelSelection
       let selectionApplication: SelectionApplication = { kind: 'follow-default', notice: '' }
-      if (mode === 'clarify') {
+      {
         const outcome = resolveModelDirectoryOutcomeFor(runtime, id)
         /**
          * ⚠️ 提交时的 `clearExitReachable` **按"出口本身是否依赖目录"来判**，不是按当时菜单的开合：
@@ -1662,8 +1318,8 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
          * 所以只要用户手里还有一条残留选择，提示里就可以让他去点那个出口。
          * 没有残留选择时不必提（那时也没有东西可清）。
          */
-        selectionApplication = selectionToApply(quickModelSelection, outcome, {
-          clearExitReachable: quickModelSelection !== null,
+        selectionApplication = selectionToApply(modelSelection, outcome, {
+          clearExitReachable: modelSelection !== null,
         })
         if (selectionApplication.kind === 'apply') {
           if (outcome.ok) {
@@ -1671,7 +1327,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
             await outcome.directory.select(selectionApplication.selection)
           }
         } else if (selectionApplication.notice !== '') {
-          console.warn(`[workbench] 快速录入降级为默认模型：${selectionApplication.notice}`)
+          console.warn(`[workbench] 未切换模型（降级为默认）：${selectionApplication.notice}`)
           setError(selectionApplication.notice)
         }
       }
@@ -1703,24 +1359,36 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
       const imageParts: PromptContentPart[] = mode === 'clarify' && imageDrafts.length > 0
         ? await Promise.all(imageDrafts.map(quickImageToPromptPart))
         : []
-      await sessionRef.session.rename(mode === 'idea_association' ? '点子关联' : mode === 'idea_brainstorm' ? '点子头脑风暴' : mode === 'knowledge_doc' ? `知识总结：${docContext?.name ?? '本地文档'}` : mode === 'report' ? `${text.startsWith('week:') ? '周报' : '日报'}：${text.split(':')[1] ?? ''}` : mode === 'plan' ? `AI 计划：${planAnchor.slice(5)}` : mode === 'clarify' ? `澄清：${clarifyText === '' ? '附件任务' : clarifyText.slice(0, 24)}` : mode === 'consult' ? `协助：${task?.title.slice(0, 24)}` : mode === 'breakdown' ? `拆解：${task?.title.slice(0, 24)}` : mode === 'review' ? `复盘：${task?.title.slice(0, 24)}` : `执行：${task?.title.slice(0, 24)}`).catch(() => undefined)
+      /**
+       * 会话标题里带上角色（用户**看得到**的告知）。
+       *
+       * 为什么不用 toast：这条路径末尾会收掉面板，toast 随面板一起不可见；
+       * 而"换了角色 → 已新建会话、旧会话绑定不变"这件事必须让用户看得见（需求 §6.3）。
+       *
+       * 标题里写的是**逻辑 ID**（`rf/rf-天线测量专家`）而不是显示名：这里拿不到角色库
+       * （列表只在选择器里读过），而 `personaSelectionLabel` 在没有列表时会给出
+       * "（已不在角色库里）"这种**会误导人的**文案 —— 宁可用 id，也不要一句假话。
+       */
+      const baseTitle = mode === 'idea_association' ? '点子关联' : mode === 'idea_brainstorm' ? '点子头脑风暴' : mode === 'knowledge_doc' ? `知识总结：${docContext?.name ?? '本地文档'}` : mode === 'report' ? `${text.startsWith('week:') ? '周报' : '日报'}：${text.split(':')[1] ?? ''}` : mode === 'plan' ? `AI 计划：${planAnchor.slice(5)}` : mode === 'clarify' ? `澄清：${clarifyText === '' ? '附件任务' : clarifyText.slice(0, 24)}` : mode === 'consult' ? `协助：${task?.title.slice(0, 24)}` : mode === 'breakdown' ? `拆解：${task?.title.slice(0, 24)}` : mode === 'review' ? `复盘：${task?.title.slice(0, 24)}` : `执行：${task?.title.slice(0, 24)}`
+      const sessionTitle = personaId === '' ? baseTitle : `${baseTitle} · 角色 ${personaId}`
+      await sessionRef.session.rename(sessionTitle).catch(() => undefined)
       let reportContextText = ''
       if (mode === 'report') {
         const [periodCode, periodStart] = text.split(':')
         const contextRes = await api<{ context: Record<string, unknown> }>(`/api/workbench/reports/context?period_code=${encodeURIComponent(periodCode)}&period_start=${encodeURIComponent(periodStart)}`)
         reportContextText = JSON.stringify(contextRes.context, null, 2)
       }
-      const planDayStart = new Date(`${planAnchor}T00:00:00`)
-      const planDayEnd = new Date(planDayStart)
-      planDayEnd.setDate(planDayEnd.getDate() + 1)
-      const planCandidates = tasks
-        .filter((t) => t.statusCode !== 'done' && t.statusCode !== 'cancelled')
-        .filter((t) => t.recurrenceCode === null || t.recurrenceCode === 'none')
-        .filter((t) => (t.effectiveDueAt !== null && Date.parse(t.effectiveDueAt) < planDayEnd.getTime()) || (planAnchor === localDateString() && t.effectiveDueAt === null))
-        .slice(0, 30)
-      const planTaskLines = planCandidates
-        .map((t, i) => `${i + 1}. [${t.id}] ${t.title} | 优先级 ${t.priorityCode} | 状态 ${t.statusCode} | 截止 ${t.effectiveDueAt ?? '无'} | 预计耗时 ${t.estimatedMinutes ?? '未知'} 分钟 | 父任务 ${t.parentId ?? '无'}`)
-        .join('\n')
+      /**
+       * 当日候选：**唯一实现**在 `shared/dailyPlanPolicy.ts#planCandidates()`（经
+       * `client/capacity.ts#todayPlanCandidates` 接线，见下面的 `planCandidateInfo` memo）。
+       *
+       * 旧实现内联了一份 filter + `.slice(0, 30)`：它只看"有效截止 < 当日 24:00"，
+       * 于是**截止在几天后的长任务压根进不了候选**，AI 看不到就排不出来（用户实测的
+       * "排不出来"根因），而且超出 30 条时静默截断、提示词里也不说还有多少条。
+       * 现在两条都在纯函数里收口：未来截止的 doing/blocked 进候选、31 条时提示词与
+       * 发起窗口都写"另有 N 条未列出"。
+       */
+      const planPromptPayload = planCandidateInfo.promptFor(planAnchor)
       // 任务/子树共享记忆：父任务会话会加载整棵子树上下文，子任务会话也能看到同树记忆。
       let memoryContext = ''
       if (task !== null && (mode === 'execute' || mode === 'consult' || mode === 'breakdown' || mode === 'review')) {
@@ -1754,7 +1422,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
         if (docContext === undefined) throw new Error('知识总结需要文档内容')
         docPrompt = `你是“个人工作台”的知识库总结助手。请阅读下面的本地文档内容，提炼出值得沉淀的知识条目，并调用 workbench_submit_knowledge 提交 pending 草稿。\n\n本地文件：${docContext.fileLink}\n文件名：${docContext.name ?? ''}\n文档内容（${docContext.truncated === true ? '已截断' : '全文'}）：\n"""\n${docContext.content}\n"""\n\n要求：\n- 总结为可检索、可复用的知识条目：背景/结论/可复用做法；正文使用 Markdown\n- title 简洁；kind_code 根据内容选择 note/lesson/decision/snippet；tags 给出 3-5 个关键词\n- file_link 必须填 "${docContext.fileLink}"（或同值的 file:// URL），用于追溯本地文件\n- 只提交知识草稿，不要直接创建知识条目。`
       }
-      const planPrompt = `你是“个人工作台”的 AI 计划助手。请为 ${planAnchor}（${'日一二三四五六'[new Date(`${planAnchor}T00:00:00`).getDay()]}）安排执行顺序。\n\n今天：${localDateString()}；当前时间：${new Date().toISOString()}\n\n候选任务（该日期及之前到期、仍未完成的任务${planAnchor === localDateString() ? '；今天额外包含无截止时间的进行中任务' : ''}，最多 30 条）：\n${planTaskLines || '（无候选任务）'}\n\n请综合考虑：优先级（p0 紧急 > p1 高 > p2 普通 > p3 低）、是否已逾期、截止时间、状态（doing/blocked 优先推进）、预计耗时、父子关系与可能的依赖。如果信息不足，可以先问用户 1-2 个关键问题（例如：当天可投入多少小时、哪些必须当天完成）。\n\n然后调用 workbench_propose_daily_plan：\n- plan_date="${planAnchor}"\n- summary：1-3 句排序思路\n- items：扁平顺序数组（1 号最重要），每项 {task_id, order, note}；note 写清为什么排这里或建议时间块\n- 同一父子链上不要同时出现父任务和它下面的子任务；如需排子任务，只排可执行的叶子，并在 note 中说明属于哪个父任务\n- 只提交计划草稿，不要修改任何任务字段，不要执行任务。`
+      const planPrompt = `你是“个人工作台”的 AI 计划助手。请为 ${planAnchor}（${'日一二三四五六'[new Date(`${planAnchor}T00:00:00`).getDay()]}）安排执行顺序。\n\n今天：${localDateString()}；当前时间：${new Date().toISOString()}\n\n${planPromptPayload.text}\n\n请综合考虑：优先级（p0 紧急 > p1 高 > p2 普通 > p3 低）、是否已逾期、截止时间、状态（doing/blocked 优先推进）、预计耗时、父子关系与可能的依赖。如果信息不足，可以先问用户 1-2 个关键问题（例如：当天可投入多少小时、哪些必须当天完成）。\n\n然后调用 workbench_propose_daily_plan：\n- plan_date="${planAnchor}"\n- summary：1-3 句排序思路\n- items：扁平顺序数组（1 号最重要），每项 {task_id, order, note, minutes}；note 写清为什么排这里或建议时间块；minutes 是“今天在这条上计划投入多少分钟”（1–1440，不是任务总耗时）\n- 同一父子链上不要同时出现父任务和它下面的子任务；如需排子任务，只排可执行的叶子，并在 note 中说明属于哪个父任务\n- 不要传 effortDone（今日投入是否结束只能由用户操作）\n- 只提交计划草稿，不要修改任何任务字段，不要执行任务。`
       const prompt = mode === 'idea_association' || mode === 'idea_brainstorm'
         ? ideaPrompt
         : mode === 'knowledge_doc'
@@ -1777,7 +1445,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
            * 本次会话模型那一行必须与**真的生效的那个**一致：
            * 降级时不能把上次选的模型名写进提示词（那会让 AI 与用户都以为换了模型）。
            */
-          modelLabel: effectiveModelLabel(selectionApplication, quickModelSelection),
+          modelLabel: effectiveModelLabel(selectionApplication, mode === 'clarify' ? quickModelSelection : promptModelSelection),
         })
         : mode === 'consult'
           ? `你是“个人工作台”的任务协助助手。请针对下面这个任务提供咨询、拆解或复盘建议（咨询模式不执行）。\n\n任务 id：${task?.id}\n任务标题：${task?.title}\n任务描述：${task?.description || '（无）'}\n类型：${task?.typeCode} 优先级：${task?.priorityCode} 状态：${task?.statusCode}\n截止：${task?.effectiveDueAt ?? task?.dueAt ?? '无'}\n${memoryContext !== '' ? `\n任务共享记忆（同一任务/子树）：\n${memoryContext}` : ''}\n\n请先理解任务，再给出建议；如果信息不足，可以一次问一个问题。\n\n重要：如果用户要求把结论/补充信息保存回任务，请调用 workbench_update_task(task_id="${task?.id ?? ''}", description="...") 更新原任务；绝对不要调用 workbench_submit_task 新建任务。`
@@ -1785,7 +1453,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
             ? `你是“个人工作台”的任务拆解助手。请分析下面这个任务，并调用 workbench_propose_subtasks 提交子任务提案。\n\n父任务 id：${task?.id}\n任务标题：${task?.title}\n任务描述：${task?.description || '（无）'}\n类型：${task?.typeCode} 优先级：${task?.priorityCode} 截止：${task?.effectiveDueAt ?? task?.dueAt ?? '无'}\n${memoryContext !== '' ? `\n任务共享记忆（同一任务/子树）：\n${memoryContext}` : ''}\n\n粒度规则：每层 2-6 个、最大深度 3 层、叶子 15-240 分钟且有可验证完成标准；子任务的 type_code/priority_code 默认继承父任务；若任务太小，设置 no_breakdown_needed=true。只提交提案，不要执行。如果用户对提案提出修改意见，请带上上一次工具返回的 draft_id 再次调用 workbench_propose_subtasks 更新同一份提案。`
             : mode === 'review'
               ? `你是“个人工作台”的任务复盘助手。请对下面这个已完成任务做复盘：\n\n任务 id：${task?.id}\n任务标题：${task?.title}\n任务描述：${task?.description || '（无）'}\n类型：${task?.typeCode} 优先级：${task?.priorityCode}\n${memoryContext !== '' ? `\n任务共享记忆（同一任务/子树）：\n${memoryContext}` : ''}\n\n请从“做得好 / 做得不好 / 下次改进”三个角度输出 Markdown，并调用 workbench_submit_review(task_id="${task?.id ?? ''}", summary_md="...", lessons=[{"title":"...","content":"..."}])。`
-              : `你是“个人工作台”的任务执行助手。请直接完成下面这个任务，不要反复确认已知信息。\n\n任务 id：${task?.id}\n任务标题：${task?.title}\n任务描述：${task?.description || '（无）'}\n类型：${task?.typeCode} 优先级：${task?.priorityCode}\n截止：${task?.effectiveDueAt ?? task?.dueAt ?? '无'}\n${memoryContext !== '' ? `\n任务共享记忆（同一任务/子树，父任务会话会看到整棵子树上下文）：\n${memoryContext}` : ''}\n${previousSessions.length > 0 ? `\n该任务此前已有执行会话：${previousSessions.map((s) => String(s.session_id ?? '')).filter((x) => x !== '').join('、')}\n若这些会话有未完成上下文，请先向用户索取上一会话的总结/未完成事项再继续，不要重复已完成工作。` : ''}\n\n执行过程中请遵守：\n- 如果有关键上下文、阶段性结论、决策或未完成事项，请调用 workbench_save_task_memory(task_id="${task?.id ?? ''}", content="...", kind="note|decision|summary") 写入任务共享记忆，便于后续会话续作。\n- 若当前任务是父任务，且你直接完成父任务，验收通过后系统会级联完成所有未完成子任务。\n- 完成后调用 workbench_request_completion(task_id="${task?.id ?? ''}", summary="2-4句完成总结")，等待用户在个人工作台验收；在用户验收通过前，任务不算完成，不要声称已经完成。若任务无法完成，如实说明原因，不要提交验收。`
+              : `你是“个人工作台”的任务执行助手。请直接完成下面这个任务，不要反复确认已知信息。\n\n任务 id：${task?.id}\n任务标题：${task?.title}\n任务描述：${task?.description || '（无）'}\n类型：${task?.typeCode} 优先级：${task?.priorityCode}\n截止：${task?.effectiveDueAt ?? task?.dueAt ?? '无'}\n${memoryContext !== '' ? `\n任务共享记忆（同一任务/子树，父任务会话会看到整棵子树上下文）：\n${memoryContext}` : ''}\n${previousSessions.length > 0 ? `\n该任务此前已有执行会话：${previousSessions.map((s) => String(s.session_id ?? '')).filter((x) => x !== '').join('、')}\n若这些会话有未完成上下文，请先向用户索取上一会话的总结/未完成事项再继续，不要重复已完成工作。` : ''}\n\n执行过程中请遵守：\n- **阶段性推进后主动报一次进度**：调用 workbench_update_progress(task_id="${task?.id ?? ''}", progress=<0-99 的整数>, note="这一步做了什么")。进度是显式值，直接生效、不需要用户确认；不要替用户推算，也不要从子任务比例派生。\n- 如果有关键上下文、阶段性结论、决策或未完成事项，请调用 workbench_save_task_memory(task_id="${task?.id ?? ''}", content="...", kind="note|decision|summary") 写入任务共享记忆，便于后续会话续作。\n- 若当前任务是父任务，且你直接完成父任务，验收通过后系统会级联完成所有未完成子任务。\n- 全部做完时调用 workbench_update_progress(task_id="${task?.id ?? ''}", progress=100, summary="2-4句完成总结")（等价于 workbench_request_completion）提交完成验收；**100 不是进度值**，它表示提交验收，库里不会写入 100。等用户在个人工作台验收；在用户验收通过前，任务不算完成，不要声称已经完成。若任务无法完成，如实说明原因，不要提交验收。`
       if (mode === 'execute') {
         if (task === null) throw new Error('执行模式需要选择一个任务')
         if (task.statusCode === 'done' || task.statusCode === 'cancelled') throw new Error('该任务已完成或已取消，不能再次执行')
@@ -1793,8 +1461,35 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
       }
       if (mode === 'clarify') setShowQuick(false)
       const basePrompt = customPrompt.trim() === '' ? prompt : `${prompt}\n\n用户补充要求：\n${customPrompt.trim()}`
-      // 选中的技能以"加载指令"形式前置（不内联技能正文）；未选技能时逐字等于原提示词。
-      const finalPrompt = withSkillPromptBlock(basePrompt, skillNames)
+      /**
+       * ============================================================
+       * 角色绑定（AX-R04：**必须在首次 prompt 之前**）
+       * ============================================================
+       *
+       * - 未指定 / 无角色 → `personaIdToBind()` 返回 `''` → **不写绑定、不改提示词**，
+       *   于是"默认无角色时的最终提示词逐字等于原流程"（AX-R07）；
+       * - 明确选了角色 → 先把 `{sessionId, personaId}` 打到 `/personas/bind`（服务端解析校验、
+       *   幂等/409 都由 `personas/binding.ts` 一处判定），**绑定失败就抛错、不发送 prompt** ——
+       *   否则用户会以为"选了角色"，实际这一轮根本没有角色可用。
+       */
+      if (personaId !== '') {
+        const bound = await api<{ ok: boolean; binding: { personaId: string; revision: string } }>('/api/workbench/personas/bind', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ sessionId: id, personaId }),
+        })
+        if (bound?.binding?.personaId !== personaId) {
+          throw new Error(`角色「${personaId}」绑定未生效（服务端返回的不是这个角色），本次没有发送 prompt。请重新选择角色。`)
+        }
+      }
+      /**
+       * 提示词拼装顺序（需求 §6.4）：**角色块 → 技能块 → 正文**。
+       *
+       * ⚠️ 两个函数都是"往前面拼"，所以嵌套顺序与最终顺序**相反**：
+       * 先拼技能块（它贴到正文前），再拼角色块（它贴到最前面）。
+       * 两个块都只是"加载指令"，都不内联正文；都为空时提示词逐字不变。
+       */
+      const finalPrompt = withPersonaPromptBlock(withSkillPromptBlock(basePrompt, skillNames), personaId)
       /**
        * 图片**前置**在文本之前（与宿主 `PromptContentPart` 的惯例一致），
        * 走的是宿主原生多模态管线；未声明 image 的模型已在上面拦下并给出可读原因。
@@ -1831,17 +1526,23 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   /**
    * 复用型会话：计划/报告/点子关联/点子头脑风暴 —— 每个 scope+anchor 只有一个会话。
    *
-   * 命中返回可复用的 sessionId，**没命中返回 ''**（"该走新建流程"，而不是抛错）。
+   * 命中返回 `{kind:'reuse', sessionId}`，**没命中返回 `{kind:'new'}`**（"该走新建流程"，
+   * 而不是抛错）；`notice` 只在"因为换了角色而不复用"时非空（要显式告知用户）。
    *
-   * ## 两条判据都在这里（原先是内联在 `startAISession` 里的一大段）
+   * ## 三条判据都在这里（原先是内联在 `startAISession` 里的一大段）
    *
-   * 1. **登记行**（`ai_sessions` 表）：登记行 ≠ "会话还在" —— 用户把那个对话归档以后，
+   * 1. **登记行**（`ai_session_registry` 表）：登记行 ≠ "会话还在" —— 用户把那个对话归档以后，
    *    宿主只把 id 收进归档集、连文件都不删，`sessions.open()` 照样"成功"，
    *    随后宿主清掉选中，用户看到的是"点了没反应"。所以登记行必须过
    *    `aiSessionUsable`；判据不成立时**落回新建流程**（登记接口是 upsert，会覆盖陈旧那行）。
    *    计划还额外要求"确有当日计划或待确认草稿"，否则同样当没命中。
    * 2. **报告行自己的 sessionId**：报告落库后再点同一天，登记那条路已被判据拦住，
    *    这里若不判就会裸切一个已归档 / 已删除的会话（用户实测：点了没反应）。
+   * 3. **角色选择**（AX-R08，v1.15.9 新增）：会话还能用**不等于**可以沿用 ——
+   *    如果用户这次明确选了一个与既有绑定不同的角色，必须新建会话（旧会话绑定不变）。
+   *    判据是纯函数 `decidePersonaReuse()`（三态 × 有无绑定，表驱动单测）；
+   *    这里只负责"取既有绑定 → 问判据 → 照做"。**旧实现在这里无条件早退**，
+   *    把用户的选择整个吞掉 —— 那正是 AX-R08 点名要防的。
    *
    * 抽出来只有一个目的：让 `startAISession` 里的复用分支瘦成"命中就早退"，
    * 于是新建路径（要 acquire 会话引用那条）**不必被包进任何 if 块**，
@@ -1851,13 +1552,16 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
     mode: 'clarify' | 'consult' | 'breakdown' | 'execute' | 'review' | 'plan' | 'report' | 'idea_association' | 'idea_brainstorm' | 'knowledge_doc',
     text: string,
     planAnchor: string,
-  ): Promise<string> => {
-    if (mode !== 'plan' && mode !== 'report' && mode !== 'idea_association' && mode !== 'idea_brainstorm') return ''
+    persona: PersonaSelection,
+  ): Promise<{ kind: 'reuse'; sessionId: string } | { kind: 'new'; notice: string }> => {
+    const fresh = { kind: 'new' as const, notice: '' }
+    if (mode !== 'plan' && mode !== 'report' && mode !== 'idea_association' && mode !== 'idea_brainstorm') return fresh
     const [scopeCode, anchor] = mode === 'plan'
       ? ['daily_plan', planAnchor]
       : mode === 'idea_association' ? ['idea_association', text]
         : mode === 'idea_brainstorm' ? ['idea_brainstorm', text]
           : text.startsWith('week:') ? ['week_report', text.slice(5)] : ['day_report', text.slice(4)]
+    let candidate = ''
     const existing = await api<{ session: { sessionId: string } | null }>(`/api/workbench/ai-sessions?scope_code=${scopeCode}&anchor=${anchor}`)
     if (existing.session !== null && aiSessionUsable(runtime, existing.session.sessionId)) {
       let shouldReuse = true
@@ -1868,15 +1572,27 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
         const hasPendingPlanDraft = pendingDraft !== null && pendingDraft.kindCode === 'daily_plan' && String(pendingDraft.payload.planDate ?? '') === planAnchor
         shouldReuse = hasPlan || hasPendingPlanDraft
       }
-      if (shouldReuse) return existing.session.sessionId
+      if (shouldReuse) candidate = existing.session.sessionId
     }
-    if (mode === 'report') {
+    if (candidate === '' && mode === 'report') {
       // 旧版本生成的报告可能还没有登记会话：直接复用报告里的 session_id。
       const periodCode = text.startsWith('week:') ? 'week' : 'day'
       const rep = await api<{ report: { sessionId?: string | null } | null }>(`/api/workbench/reports/${periodCode}/${anchor}`)
-      if (typeof rep.report?.sessionId === 'string' && rep.report.sessionId !== '' && aiSessionUsable(runtime, rep.report.sessionId)) return rep.report.sessionId
+      if (typeof rep.report?.sessionId === 'string' && rep.report.sessionId !== '' && aiSessionUsable(runtime, rep.report.sessionId)) candidate = rep.report.sessionId
     }
-    return ''
+    if (candidate === '') return fresh
+    /**
+     * 已有的角色绑定（没绑过 / 绑定记录坏了都按 `null` 处理：坏绑定在加载工具那条路会被
+     * 明确拒绝，这里**不**为了"判复用"去猜它绑的是什么）。
+     */
+    let binding: PersonaBindingView | null = null
+    try {
+      const res = await api<{ binding: PersonaBindingView | null }>(`/api/workbench/personas/bind?session_id=${encodeURIComponent(candidate)}`)
+      binding = res.binding ?? null
+    } catch { binding = null }
+    const decision = decidePersonaReuse(persona, binding)
+    if (decision.action === 'reuse') return { kind: 'reuse', sessionId: candidate }
+    return { kind: 'new', notice: decision.notice }
   }
 
   const summarizeLocalDoc = async (pathOverride?: string): Promise<void> => {
@@ -2082,6 +1798,38 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
     }
   }
 
+  /**
+   * 归档当前选中的任务（2026-10-01 从详情页动作行的内联箭头函数提出来）。
+   *
+   * 为什么要提出来：用户要求把「归档」移到详情页**右上角**，与下面那排 AI 动作按钮分开——
+   * 那排按钮的 onClick 都是一行巨型内联表达式，把这段 200 多字符的逻辑塞进
+   * `title` + 按钮里会完全不可读。行为一个字没改（含"任务已不存在"的自愈分支）。
+   */
+  const archiveSelectedTask = (): void => {
+    if (selected === null) return
+    if (!window.confirm('归档后任务会从工作台列表隐藏（其子任务也会一并从列表隐藏），可在列表页“查看归档”中恢复。确认归档？')) return
+    const id = selected.task.id
+    setTasks((list) => list.filter((t) => t.id !== id))
+    void api(`/api/workbench/tasks/${id}/archive`, { method: 'POST' })
+      .then(() => {
+        setSelected(null)
+        selectedRef.current = null
+        setNotice('任务已归档，可在列表页“查看归档”恢复。')
+        void refresh()
+      })
+      .catch((e: unknown) => {
+        const msg = e instanceof Error ? e.message : String(e)
+        // 任务已被别处删掉时不要把用户卡在"点了没反应"：清掉选中并明确告知。
+        if (msg.includes('not found')) {
+          setSelected(null)
+          selectedRef.current = null
+          void refresh()
+          setNotice('该任务已不存在，已从当前视图移除')
+        }
+        setError(msg)
+      })
+  }
+
   /** 保存任务编辑（详情页编辑弹窗）。 */
   const saveEditDraft = async (): Promise<void> => {
     if (editDraft === null || selected === null) return
@@ -2182,15 +1930,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   const collapseAll = (): void => { setExpanded(new Set()); setTodayExpanded(new Set()); setCalendarExpanded(new Set()) }
 
   const priorityWeights = useMemo(() => new Map(dictOf('priority').map((d) => [d.code, Number(d.config.weight ?? 99)])), [dicts])
-  // 技能选择器：按名称/描述/适用场景过滤（大小写不敏感）
-  const visibleSkills = useMemo(() => {
-    const query = skillQuery.trim().toLowerCase()
-    if (query === '') return skillCatalog
-    return skillCatalog.filter((skill) =>
-      skill.name.toLowerCase().includes(query) ||
-      skill.description.toLowerCase().includes(query) ||
-      (skill.whenToUse ?? '').toLowerCase().includes(query))
-  }, [skillCatalog, skillQuery])
+  // 技能过滤已收进 `SkillPicker` 组件内部（两个弹窗共用同一份，不再各写一份）
   const taskSorter = useMemo(() => createTaskSorter(taskSortKey, taskSortDir, priorityWeights), [taskSortKey, taskSortDir, priorityWeights])
   const visibleTaskTree = useMemo(() => {
     const source = archivedMode ? archivedTasks : tasks
@@ -2264,6 +2004,95 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   const openTasks = tasks.filter((t) => !['done', 'cancelled'].includes(t.statusCode))
   const openTree = useMemo(() => buildTaskTree(openTasks), [tasks])
   const todayPlan = bootstrap?.todayPlan ?? null
+  /**
+   * 日历选中日（`picked` / `pickedAnchor`）在**这里**声明，而不是紧跟下面的日历状态块：
+   * `planCandidateInfo` 要用它决定"当日候选吃哪一份计划"，而 memo 必须在同一处收口
+   * （组件里同样的量声明两遍就是下一个 bug）。
+   */
+  const [picked, setPicked] = useState<Date>(todayStart)
+  const pickedAnchor = localDateString(picked)
+  /**
+   * 当日候选快照（唯一实现见 `shared/dailyPlanPolicy.ts#planCandidates`）。
+   *
+   * 为什么在**渲染期**算而不是在 `startAISession` 里算：
+   * 1. 发起窗口必须能显示"另有 N 条未列出"，而那句话与提示词里的候选必须**同一次判定**
+   *    （两处各算一遍正是本项目最大的 bug 类别）；
+   * 2. `startAISession` 是事件处理器，渲染期算出来的快照直接可用，不必再存一份 state。
+   *
+   * 口径：候选只吃"全量任务 + 该日计划 + 逾期开关"。重复任务的**模板行**被排除
+   * （模板不是今天要做的事；实例由 createTask 生成时不带 recurrenceCode，照常可排）。
+   */
+  const planCandidateInfo = useMemo(() => {
+    const todayKey = capacityTodayKey(now)
+    const pinnedKey = pickedAnchor
+    const planOf = (date: string): DailyPlanView | null => (date === todayKey ? todayPlan : (date === pinnedKey ? pickedPlan : null))
+    const candidatesFor = (date: string) => todayPlanCandidates({
+      // 排除重复任务的**模板**行（模板不是今天要做的事；实例由 createTask 生成时
+      // 不带 recurrenceCode，因此照常可排）。
+      tasks: tasks.filter((t) => t.recurrenceCode === null || t.recurrenceCode === 'none'),
+      plan: planOf(date),
+      includeOverdue: settings.dailyCapacityIncludeOverdue,
+      defaultEstimateMinutes: settings.defaultEstimateMinutes,
+      now,
+    })
+    return {
+      /**
+       * 为指定日期拼提示词。候选与"另有 N 条未列出"的提示**同一次判定**产出，
+       * 发起窗口与提示词不许各算一遍（需求 §5.1）。
+       */
+      promptFor: (planDate: string) => {
+        const result = candidatesFor(planDate)
+        return buildPlanPrompt({
+          planDate,
+          candidates: result.candidates,
+          diagnostics: result.diagnostics,
+          existingPlanCount: planOf(planDate)?.items.length ?? 0,
+        })
+      },
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- now 用日键代替（见 capacity 的同样注释）
+  }, [tasks, todayPlan, pickedPlan, pickedAnchor, settings.dailyCapacityIncludeOverdue, settings.defaultEstimateMinutes, capacityTodayKey(now)])
+
+  /**
+   * 今日候选的截断提示（**同一次判定**的产物，不再算一遍）。
+   *
+   * 只有"另有 N 条未列出"这一件事：候选满 31 条时发起窗口必须显式告知，
+   * 否则用户会以为这 30 条就是全部（需求 §5.1、AX-C02）。
+   */
+  const todayPromptInfo = useMemo(() => {
+    const payload = planCandidateInfo.promptFor(capacityTodayKey(now))
+    return { truncated: payload.truncated, notice: payload.notice, omitted: payload.omitted, total: payload.total }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- now 用日键代替
+  }, [planCandidateInfo, capacityTodayKey(now)])
+
+  /** 今日手动"添加任务"的候选行（**同一份** `planCandidates` 输出，不另写过滤）。 */
+  const todayPlanCandidateRows = useMemo(() => todayPlanCandidates({
+    tasks: tasks.filter((t) => t.recurrenceCode === null || t.recurrenceCode === 'none'),
+    plan: todayPlan,
+    includeOverdue: settings.dailyCapacityIncludeOverdue,
+    defaultEstimateMinutes: settings.defaultEstimateMinutes,
+    now,
+  }).candidates.map((candidate) => ({ id: candidate.taskId, title: candidate.title })),
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- now 用日键代替
+  [tasks, todayPlan, settings.dailyCapacityIncludeOverdue, settings.defaultEstimateMinutes, capacityTodayKey(now)])
+
+  /** 日历选中日的同一份提示（切到该日时显示"另有 N 条未列出"）。 */
+  const pickedPromptInfo = useMemo(() => {
+    const payload = planCandidateInfo.promptFor(pickedAnchor)
+    return { truncated: payload.truncated, notice: payload.notice, omitted: payload.omitted, total: payload.total }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- now 用日键代替
+  }, [planCandidateInfo, pickedAnchor, capacityTodayKey(now)])
+
+  /** 日历选中日手动"添加任务"的候选行（同上，同一份候选函数）。 */
+  const pickedPlanCandidateRows = useMemo(() => todayPlanCandidates({
+    tasks: tasks.filter((t) => t.recurrenceCode === null || t.recurrenceCode === 'none'),
+    plan: pickedPlan,
+    includeOverdue: settings.dailyCapacityIncludeOverdue,
+    defaultEstimateMinutes: settings.defaultEstimateMinutes,
+    now,
+  }).candidates.map((candidate) => ({ id: candidate.taskId, title: candidate.title })),
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- now 用日键代替
+  [tasks, pickedPlan, settings.dailyCapacityIncludeOverdue, settings.defaultEstimateMinutes, capacityTodayKey(now)])
   const todayTree = useMemo(() => {
     if (todayPlan === null || todayPlan.items.length === 0) return openTree
     const order = new Map(todayPlan.items.map((item) => [item.taskId, item.order]))
@@ -2382,13 +2211,65 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   const capacity = useMemo(
     () => computeTodayCapacity({
       tasks: [...tasks, ...archivedTasks],
+      plan: todayPlan === null ? null : { ...todayPlan, readable: todayPlan.readable !== false },
       dailyCapacityMinutes: settings.dailyCapacityMinutes,
       defaultEstimateMinutes: settings.defaultEstimateMinutes,
       includeOverdue: settings.dailyCapacityIncludeOverdue,
       now,
     }),
-    [tasks, archivedTasks, settings.dailyCapacityMinutes, settings.defaultEstimateMinutes, settings.dailyCapacityIncludeOverdue, capacityTodayKey(now)],
+    [tasks, archivedTasks, todayPlan, settings.dailyCapacityMinutes, settings.defaultEstimateMinutes, settings.dailyCapacityIncludeOverdue, capacityTodayKey(now)],
   )
+
+  /**
+   * 「一键排入」——**唯一入口**是 `POST /plans/:date/items`（服务端原子追加）。
+   *
+   * 为什么不能像旧代码那样"把本地列表拼一拼再 PUT 整份计划"：
+   * PUT 是全量替换，会把别的窗口/并发追加刚加进去的成员**覆盖掉**（真实丢件）。
+   * 所以这里只发一条 taskId（+ 可选 minutes），服务端在事务里读最新计划后追加。
+   * 失败保持原显示并给出中文原因，绝不假成功。
+   */
+  const [addingPlanTaskId, setAddingPlanTaskId] = useState<string | null>(null)
+  const addTaskToPlan = async (taskId: string, minutes?: number): Promise<void> => {
+    setAddingPlanTaskId(taskId)
+    try {
+      const res = await api<{ plan: DailyPlanView | null; added: boolean }>(`/api/workbench/plans/${localDateString()}/items`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(minutes === undefined ? { taskId } : { taskId, minutes }),
+      })
+      await refresh()
+      setPlanRefreshKey((v) => v + 1)
+      setNotice(res.added ? '已排入今日计划' : '这条任务已经在今日计划里了（未改动原有投入与结束状态）')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setAddingPlanTaskId(null)
+    }
+  }
+
+  /**
+   * 项级更新（今日投入结束 / 继续投入 / 改计划投入）——走
+   * `PATCH /plans/:date/items/:taskId`，**只动目标项**，不用本地缓存的整份计划覆盖。
+   *
+   * 失败必须可读且不假成功：`refresh()` 不会在失败时被调用，界面保持原值并显示中文错误。
+   */
+  const patchPlanItem = async (date: string, taskId: string, patch: { minutes?: number; effortDone?: boolean }): Promise<void> => {
+    try {
+      await api(`/api/workbench/plans/${date}/items/${encodeURIComponent(taskId)}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(patch),
+      })
+      await refresh()
+      setPlanRefreshKey((v) => v + 1)
+      if (patch.effortDone === true) setNotice('今日投入已结束（任务状态、进度、截止与估时都没变）')
+      else if (patch.effortDone === false) setNotice('已继续投入')
+      else setNotice('计划投入已更新')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+      throw e
+    }
+  }
 
   /**
    * 逾期口径开关（「今日容量 → 规则」面板与设置页**写同一个 settings 键**）。
@@ -2433,9 +2314,26 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
     }
   }
 
-  const savePlan = async (date: string, items: Array<{ taskId: string; note: string }>): Promise<void> => {
+  /**
+   * 全量保存（手动编辑顺序/备注/计划投入）。
+   *
+   * `minutes` **只在用户显式填了才发**（`undefined` = 省略）：服务端按 taskId 合并
+   * 服务端最新值，所以"只改备注"不会抹掉既有 minutes 与今日结束状态（AX-D03）。
+   */
+  const savePlan = async (date: string, items: Array<{ taskId: string; note: string; minutes?: number }>): Promise<void> => {
     try {
-      await api(`/api/workbench/plans/${date}`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ items: items.map((item, index) => ({ taskId: item.taskId, order: index + 1, note: item.note })) }) })
+      await api(`/api/workbench/plans/${date}`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          items: items.map((item, index) => ({
+            taskId: item.taskId,
+            order: index + 1,
+            note: item.note,
+            ...(item.minutes === undefined ? {} : { minutes: item.minutes }),
+          })),
+        }),
+      })
       await refresh()
       setPlanRefreshKey((v) => v + 1)
       setNotice('计划已保存（来源：手动编辑）')
@@ -2448,7 +2346,6 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   // 周/月日历
   const [cursor, setCursor] = useState<Date>(startOfWeek(now))
   const [calMode, setCalMode] = useState<'week' | 'month'>('week')
-  const [picked, setPicked] = useState<Date>(todayStart)
   const [dayTab, setDayTab] = useState<'plan' | 'done' | 'report'>('plan')
   const reportAnchor = reportSubTab === 'week' ? localDateString(startOfWeek(picked)) : localDateString(picked)
   const reportScope = reportSubTab === 'week' ? 'week_report' : 'day_report'
@@ -2473,7 +2370,6 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
       .catch(() => setTodayPlanSession(null))
   }, [todayAnchor, bootstrap])
 
-  const pickedAnchor = localDateString(picked)
   useEffect(() => {
     if (view !== 'calendar' || dayTab !== 'plan') {
       setPickedPlan(null); setPickedPlanSession(null)
@@ -2588,6 +2484,22 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
       isWsl: detectWslHost(runtime),
     }), settings.autoCreateTypeFolders)
     setQuickText('')
+    /**
+     * 每次打开都把角色复位成「未指定」：上一次误点过的角色不该**静默**成为这一次的选择
+     * （默认值必须是"无角色 / 不改变原有行为"，这是 AX-R07 的前提）。
+     */
+    setQuickPersona(INHERIT_PERSONA)
+    /**
+     * 技能同理（2026-10-01）：每次打开都复位选择并**拉一次技能目录**。
+     *
+     * 为什么必须在这里拉：`loadSkills()` 原来只在 `askUserPrompt`（共享提示词弹窗）里调，
+     * 而快速录入从不走那个入口 —— 于是快速录入里的技能块永远是"暂不可用"或空的
+     * （用户反馈的"快速录入无法选择 SKill"有一半是这个）。与角色一样，
+     * 上一次的选择不该静默成为这一次的（默认=不注入技能）。
+     */
+    setSelectedSkills([])
+    setSkillQuery('')
+    void loadSkills()
     setShowQuick(true)
   }
   /**
@@ -2901,72 +2813,56 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
       )}
       {promptModal !== null && (
         <div className="wb-modal-mask" onClick={cancelPrompt}>
-          <div className="wb-modal" style={skillsAvailable || skillsLoading || skillProblem !== '' ? { width: 'min(620px, 94vw)' } : undefined} onClick={(e) => e.stopPropagation()}>
+          <div className="wb-modal" style={{ width: 'min(620px, 94vw)' }} onClick={(e) => e.stopPropagation()}>
             <h4>补充 AI 提示词</h4>
             <p>{promptModal.title}：可留空，留空则继续使用原有默认提示词；填写后会在默认提示词末尾追加你的补充要求。</p>
             <textarea autoFocus value={promptModal.value} onChange={(e) => setPromptModal((prev) => prev === null ? prev : { ...prev, value: e.target.value })} placeholder="输入你想追加给 AI 的补充要求…" />
             {/**
-              * 技能目录**拿不到时也要可见**（v1.15.6）。
+              * 角色选择器（D13-B）：与技能选择器**并列**，且都走普通文档流（不遮挡，AX-R07）。
+              * 9 个走共享提示词弹窗的 mode 全部经由这里选择角色。
               *
-              * 旧写法是 `skillsAvailable && (…)` —— 只要那一次拿到空目录就整块消失，
-              * 用户看到的是"Skill 选择功能没了"，而且没有任何重试入口（2026-09-27 实测：
-              * 宿主某次技能来源发现失败会静默返回空目录，下一次又自己好了）。
-              * 现在分成三态：读取中 / 可选 / 拿不到（原因 + 重试）。
+              * 顺序：**角色在前、技能在后**（AX-R07 的判据，也是原实现的顺序）——
+              两个都是普通文档流里的块，谁在前谁在上；角色是"这次以谁的身份"，先定身份再挑工具。
               */}
-            {!skillsAvailable && (skillsLoading || skillProblem !== '') && (
-              <div className="wb-skill-problem" role="status">
-                <span>
-                  <Icon name="skill" size={13} /> 加载 Skill：
-                  {skillsLoading ? '正在读取技能目录…' : `暂不可用 —— ${skillProblem}`}
-                </span>
-                {!skillsLoading && (
-                  <button type="button" className="wb-btn" onClick={() => void loadSkills()}><Icon name="refresh" size={12} />重试</button>
-                )}
-              </div>
-            )}
-            {skillsAvailable && (
-              <div className="wb-skill-picker">
-                <div className="wb-skill-picker-head">
-                  <span><Icon name="skill" size={13} /> 加载 Skill</span>
-                  <span className="wb-skill-count">{selectedSkills.length > 0 ? `已选 ${selectedSkills.length}` : '可选'}</span>
-                </div>
-                <input
-                  className="wb-skill-search"
-                  value={skillQuery}
-                  onChange={(e) => setSkillQuery(e.target.value)}
-                  placeholder={`搜索技能名或描述（共 ${skillCatalog.length} 个）`}
-                />
-                {selectedSkills.length > 0 && (
-                  <div className="wb-skill-selected">
-                    {selectedSkills.map((name) => (
-                      <button key={name} type="button" className="wb-skill-tag" onClick={() => toggleSkill(name)} title="点击移除">
-                        {name}<span aria-hidden="true">×</span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-                <div className="wb-skill-list">
-                  {skillsLoading && <div className="wb-skill-hint">加载技能目录…</div>}
-                  {!skillsLoading && visibleSkills.length === 0 && (
-                    <div className="wb-skill-hint">{skillCatalog.length === 0 ? '本机暂无可选技能' : '没有匹配的技能'}</div>
-                  )}
-                  {!skillsLoading && visibleSkills.map((skill) => {
-                    const checked = selectedSkills.includes(skill.name)
-                    return (
-                      <label key={skill.name} className={`wb-skill-item${checked ? ' on' : ''}`} title={skill.whenToUse ?? skill.description}>
-                        <input type="checkbox" checked={checked} onChange={() => toggleSkill(skill.name)} />
-                        <span className="wb-skill-body">
-                          <span className="wb-skill-name">{skill.name}</span>
-                          <span className="wb-skill-desc">{skill.description || '（无描述）'}</span>
-                        </span>
-                        <span className="wb-skill-provider">{skill.provider}</span>
-                      </label>
-                    )
-                  })}
-                </div>
-                <div className="wb-skill-foot">选中后会在提示词开头注入“请加载这些技能”的指令，技能正文由 AI 按需加载。</div>
-              </div>
-            )}
+            <PersonaPicker
+              value={promptPersona}
+              onChange={setPromptPersona}
+              disabled={busy}
+              onError={setError}
+              onNotice={(message) => pushToast(message, 'success')}
+            />
+            {/**
+              * 技能选择器：与角色选择器并列（都走普通文档流）。
+              *
+              * 抽成 `SkillPicker` 组件之后，**快速录入弹窗挂的是同一个组件** ——
+              * 用户反馈的"快速录入不能选 Skill"就是在这里补上的（2026-10-01）。
+              */}
+            <SkillPicker
+              catalog={skillCatalog}
+              loading={skillsLoading}
+              available={skillsAvailable}
+              problem={skillProblem}
+              selected={selectedSkills}
+              onToggle={toggleSkill}
+              onRetry={() => void loadSkills()}
+              disabled={busy}
+            />
+            {/**
+              * 模型选择器（2026-10-01 补上）：与快速录入**同一个组件**。
+              *
+              * 用户反馈："除了快速录入外，其他调用 AI 的弹框中依旧无法选择 AI 模型。"
+              * 原来它只渲染在快速录入里；现在两个弹窗共用一份实现，
+              * 选择值经 `askUserPrompt()` 的返回值传到 `startAISession`（并在那里对**所有 mode**生效）。
+              */}
+            <ModelPicker
+              runtime={runtime}
+              value={promptModelSelection}
+              onChange={setPromptModelSelection}
+              modalityTable={modelModalityTable}
+              disabled={busy}
+              onError={setError}
+              onLoaded={() => { void loadModelModalityTable().then(setModelModalityTable) }}
+            />
             <div className="wb-modal-actions">
               <button className="wb-btn" onClick={cancelPrompt}>取消</button>
               <button className="wb-btn primary" onClick={confirmPrompt}>开始</button>
@@ -3222,42 +3118,62 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                     : null)}
                   {capacity.free > 0 && <i className="free" style={{ width: `${(capacity.free / capacity.total) * 100}%` }} title={`空闲 · ${capacity.free} min`} />}
                 </div>
-                <div className="wb-cap-legend">
-                  <span><i style={{ background: 'var(--wb-p0)' }} />紧急 <b>{capacity.byPriority.p0}</b></span>
-                  <span><i style={{ background: 'var(--wb-p1)' }} />高 <b>{capacity.byPriority.p1}</b></span>
-                  <span><i style={{ background: 'var(--wb-p2)' }} />普通 <b>{capacity.byPriority.p2}</b></span>
-                  <span><i style={{ background: 'var(--wb-p3)' }} />低 <b>{capacity.byPriority.p3}</b></span>
-                  <span><i style={{ background: 'color-mix(in srgb, var(--wb-ok) 36%, transparent)' }} />空闲 <b>{capacity.free}</b></span>
+                {/**
+                  * 容量图例 + 「规则」按钮**同一行**（2026-10-01 用户要求）。
+                  *
+                  * ⚠️ `CapacityRulePanel` 的**内联模式**只把那个按钮渲染进这一行；
+                  * 它的展开体（规则清单 / 账本 / 未排入）由 CSS 拿到**全宽的下方**
+                  * （`.wb-cap-rule[data-inline=1] { display: contents }`）。
+                  * 早期版本把整块塞进这一行 —— 一展开，长内容就被挤在这条窄行里，
+                  * 按钮位置也跟着跳（用户原话："打开、收起规则 的按钮还不在同一个位置"）。
+                  */}
+                <div className="wb-cap-legend" data-cap-expanded={capacityExpanded ? '1' : '0'}>
+                  <span className="wb-cap-legend-item"><i style={{ background: 'var(--wb-p0)' }} />紧急 <b>{capacity.byPriority.p0}</b></span>
+                  <span className="wb-cap-legend-item"><i style={{ background: 'var(--wb-p1)' }} />高 <b>{capacity.byPriority.p1}</b></span>
+                  <span className="wb-cap-legend-item"><i style={{ background: 'var(--wb-p2)' }} />普通 <b>{capacity.byPriority.p2}</b></span>
+                  <span className="wb-cap-legend-item"><i style={{ background: 'var(--wb-p3)' }} />低 <b>{capacity.byPriority.p3}</b></span>
+                  <span className="wb-cap-legend-item"><i style={{ background: 'color-mix(in srgb, var(--wb-ok) 36%, transparent)' }} />空闲 <b>{capacity.free}</b></span>
+                  <CapacityRulePanel
+                    capacity={capacity}
+                    dailyCapacityMinutes={settings.dailyCapacityMinutes}
+                    defaultEstimateMinutes={settings.defaultEstimateMinutes}
+                    includeOverdue={settings.dailyCapacityIncludeOverdue}
+                    onIncludeOverdueChange={(next) => void saveIncludeOverdue(next)}
+                    expanded={capacityExpanded}
+                    onExpandedChange={setCapacityExpanded}
+                    onAddToPlan={addTaskToPlan}
+                    addingTaskId={addingPlanTaskId}
+                    inlineToggle
+                  />
                 </div>
-                {/* 规则与账本：只吃 props，不自己算（唯一权威源是纯函数与 settings） */}
-                <CapacityRulePanel
-                  capacity={capacity}
-                  dailyCapacityMinutes={settings.dailyCapacityMinutes}
-                  defaultEstimateMinutes={settings.defaultEstimateMinutes}
-                  includeOverdue={settings.dailyCapacityIncludeOverdue}
-                  onIncludeOverdueChange={(next) => void saveIncludeOverdue(next)}
-                  expanded={capacityExpanded}
-                  onExpandedChange={setCapacityExpanded}
-                />
               </div>
-              <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+              <div style={{ display: 'flex', gap: 8, marginBottom: 10, alignItems: 'center', flexWrap: 'wrap' }}>
                 <button className="wb-btn primary" disabled={busy || openTasks.length === 0} onClick={() => void startAISession('plan', null, localDateString())}><Icon name="sparkles" />{todayPlan !== null || (pendingDraft?.kindCode === 'daily_plan' && String(pendingDraft.payload.planDate ?? '') === todayAnchor) ? '继续编辑今日计划' : 'AI 智能排序'}</button>
-                <span style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)', alignSelf: 'center' }}>AI 会先提交顺序提案，确认后才生效</span>
+                <span style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)' }}>AI 会先提交顺序提案，确认后才生效</span>
+                {/* 候选被截断时必须当场说出来：不给"全量排序"的假印象（需求 §5.1） */}
+                {todayPromptInfo.truncated && (
+                  <span style={{ fontSize: 12, color: '#d9a03f' }} role="status">{todayPromptInfo.notice}</span>
+                )}
               </div>
               {todayPlan !== null && (
                 <PlanPanel
                   plan={todayPlan}
                   tasks={tasks}
                   title={`今日计划 · ${todayPlan.planDate}`}
+                  candidateTasks={todayPlanCandidateRows}
+                  canEndEffort
                   onComplete={completePlanTask}
                   onDefer={deferPlanTask}
+                  onEffortChange={(taskId, next) => patchPlanItem(localDateString(), taskId, { effortDone: next })}
+                  onMinutesChange={(taskId, minutes) => patchPlanItem(localDateString(), taskId, { minutes })}
+                  onProgressChange={saveProgress}
                   onRefresh={() => void startAISession('plan', null, localDateString())}
                   onClear={() => void clearTodayPlan()}
                   onSave={(items) => savePlan(localDateString(), items)}
                 />
               )}
               <div className="wb-list">
-                <TaskTreeRows roots={todayTree} depth={0} expanded={todayExpanded} toggle={toggleTodayExpanded} dicts={dicts} onOpen={openTask} selectedId={selected?.task.id} />
+                <TaskTreeRows roots={todayTree} depth={0} expanded={todayExpanded} toggle={toggleTodayExpanded} dicts={dicts} onOpen={openTask} selectedId={selected?.task.id} pending={pendingMap} childrenOf={childrenOf} />
                 {openTasks.length === 0 && (
                   <div className="wb-empty" style={{ padding: '28px 18px' }}>
                     <div style={{ marginBottom: 6, color: 'var(--dsw-alias-state-business-primary, #4f8ef7)' }}><Icon name="today" size={30} /></div>
@@ -3324,6 +3240,9 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                       ? <span style={{ fontSize: 12, color: '#999' }}>过去日期只读；如需为今天/未来排期，请选择今天或之后的日期。</span>
                       : <button className="wb-btn primary" disabled={busy} onClick={() => void startAISession('plan', null, pickedAnchor)}><Icon name="sparkles" />{pickedPlan !== null || (pendingDraft?.kindCode === 'daily_plan' && String(pendingDraft.payload.planDate ?? '') === pickedAnchor) ? '继续编辑该日计划' : `AI 智能排序（${pickedAnchor}）`}</button>}
                     <span style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)' }}>AI 会先提交顺序提案，确认后才生效</span>
+                    {pickedPromptInfo.truncated && (
+                      <span style={{ fontSize: 12, color: '#d9a03f' }} role="status">{pickedPromptInfo.notice}</span>
+                    )}
                   </div>
                   {pickedPlan !== null && (
                     <PlanPanel
@@ -3331,8 +3250,13 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                       tasks={tasks}
                       title={`${pickedPlan.planDate} 计划`}
                       canEdit={pickedAnchor >= todayAnchor}
+                      candidateTasks={pickedPlanCandidateRows}
+                      canEndEffort={pickedAnchor === todayAnchor}
                       onComplete={completePlanTask}
                       onDefer={deferPlanTask}
+                      onEffortChange={pickedAnchor === todayAnchor ? (taskId, next) => patchPlanItem(pickedAnchor, taskId, { effortDone: next }) : undefined}
+                      onMinutesChange={pickedAnchor >= todayAnchor ? (taskId, minutes) => patchPlanItem(pickedAnchor, taskId, { minutes }) : undefined}
+                      onProgressChange={saveProgress}
                       onRefresh={pickedAnchor >= todayAnchor ? () => void startAISession('plan', null, pickedAnchor) : undefined}
                       onClear={() => {
                         void api(`/api/workbench/plans/${pickedAnchor}`, { method: 'DELETE' }).then(() => { setPlanRefreshKey((v) => v + 1); setNotice('该日计划已清除') }).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
@@ -3387,7 +3311,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                 </div>
               ) : (
                 <div className="wb-list">
-                  <TaskTreeRows roots={dayTab === 'plan' ? pickedPlanTree : pickedDoneTree} depth={0} expanded={calendarExpanded} toggle={toggleCalendarExpanded} dicts={dicts} onOpen={openTask} selectedId={selected?.task.id} contextIds={dayTab === 'done' ? doneContextIds : undefined} />
+                  <TaskTreeRows roots={dayTab === 'plan' ? pickedPlanTree : pickedDoneTree} depth={0} expanded={calendarExpanded} toggle={toggleCalendarExpanded} dicts={dicts} onOpen={openTask} selectedId={selected?.task.id} contextIds={dayTab === 'done' ? doneContextIds : undefined} pending={pendingMap} childrenOf={childrenOf} />
                   {(dayTab === 'plan' ? pickedPlanTree : pickedDoneTree).length === 0 && (
                     <div className="wb-empty" style={{ padding: '24px 18px' }}>
                       <div style={{ fontWeight: 600, marginBottom: 4 }}>{picked.getMonth() + 1}/{picked.getDate()} 没有{dayTab === 'plan' ? '计划任务' : '完成记录'}</div>
@@ -3606,7 +3530,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                 }}>{archivedMode ? '返回任务' : '查看归档'}</button>
               </div>
               <div className="wb-list">
-                <TaskTreeRows roots={visibleTaskTree} depth={0} expanded={expanded} toggle={toggleExpanded} dicts={dicts} onOpen={openTask} selectedId={selected?.task.id} />
+                <TaskTreeRows roots={visibleTaskTree} depth={0} expanded={expanded} toggle={toggleExpanded} dicts={dicts} onOpen={openTask} selectedId={selected?.task.id} pending={pendingMap} childrenOf={childrenOf} />
                 {archivedMode && archivedTasks.length === 0 && <div className="wb-empty">没有归档任务</div>}
                 {!archivedMode && tasks.length === 0 && <div className="wb-empty">还没有任务，点“快速录入”或“新建”开始</div>}
                 {!isTaskFilterEmpty(taskFilter) && visibleTaskTree.length === 0 && <div className="wb-empty">没有符合条件的任务，点“清空”恢复完整列表</div>}
@@ -3756,6 +3680,21 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                     <>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                         <h4 style={{ flex: 1, margin: 0 }}>{selected.task.title}</h4>
+                        {/**
+                          * 「归档」移到详情页**右上角**（2026-10-01 用户要求）。
+                          * 原来它在下面那排 AI 动作按钮的最右边，一个低频且不可逆的动作
+                          * 混在高频动作里，还把那一行挤到换行（用户截图："归档掉到第二行"）。
+                          * 判定与确认弹窗一个字没改，只是位置和视觉权重变了：
+                          * 这里是 secondary + 危险色，与「编辑」并列。
+                          */}
+                        {!selected.task.archived && (
+                          <button
+                            className="wb-btn"
+                            style={{ color: '#e0645c', borderColor: 'color-mix(in srgb, #e0645c 45%, transparent)' }}
+                            title="归档后任务会从工作台列表隐藏（其子任务也会一并从列表隐藏），可在列表页「查看归档」中恢复"
+                            onClick={archiveSelectedTask}
+                          ><Icon name="archive" />归档</button>
+                        )}
                         {!selected.task.archived && <button className="wb-btn" onClick={() => setEditDraft({ title: selected.task.title, description: selected.task.description, typeCode: selected.task.typeCode, priorityCode: selected.task.priorityCode, statusCode: selected.task.statusCode, aiPolicyCode: selected.task.aiPolicyCode, dueLocal: toLocalInput(selected.task.dueAt), workspacePath: selected.task.workspacePath ?? '', recurrenceCode: selected.task.recurrenceCode ?? 'none', parentId: selected.task.parentId ?? '', estimatedMinutes: selected.task.estimatedMinutes === null ? '' : String(selected.task.estimatedMinutes), allDay: selected.task.allDay })}><Icon name="edit" />编辑</button>}
                       </div>
                       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', margin: '8px 0' }}>
@@ -3789,6 +3728,28 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                   )}
                 </div>
 
+                {/**
+                  * 进度卡（T1/D04）：**独立组件** `TaskProgress`，列表/详情/计划行共用同一份。
+                  * 判定全部来自纯模块 `taskProgressView()`——这里不写 `statusCode === 'done' ?` 这类分支。
+                  * `pending` 传的是列表那次**共用查询**折出来的 Map（避免 N+1），
+                  * 但详情页以自身 `pendingCompletion` 为准（它是最新的单任务读取）。
+                  */}
+                <TaskProgress
+                  view={taskProgressView({
+                    task: selected.task,
+                    children: selected.children,
+                    pending: selected.pendingCompletion !== undefined
+                      ? new Map([[selected.task.id, selected.pendingCompletion]])
+                      : pendingMap,
+                  })}
+                  onSave={selected.task.statusCode === 'done' || selected.task.statusCode === 'cancelled' || selected.task.archived
+                    ? undefined
+                    : (percent) => saveProgress(selected.task.id, percent)}
+                  onComplete={selected.task.statusCode === 'done' || selected.task.statusCode === 'cancelled' || selected.task.archived
+                    ? undefined
+                    : () => completeTaskFromProgress(selected.task.id)}
+                />
+
                 {editDraft === null && (
                   <>
                     <div className="wb-detail-actions">
@@ -3810,23 +3771,46 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                                     }
                                   }}><Icon name="report" />{selected.sessions.some((x) => x.role_code === 'review') ? '进入复盘会话' : 'AI 复盘'}</button>
                                 : <>
-                                    <button className="wb-btn primary" disabled={busy || selected.task.aiPolicyCode !== 'execute'} title={selected.task.aiPolicyCode !== 'execute' ? '请先开启“可执行”' : selected.children.length > 0 ? '执行父任务：验收通过后未完成子任务会级联完成' : selected.sessions.some((x) => x.role_code === 'execute') ? '新建执行会话并携带此前会话提示' : '开始执行'} onClick={() => void startAISession('execute', selected.task, selected.task.title, selected.sessions.filter((x) => x.role_code === 'execute'))}><Icon name="ai" />AI 执行{selected.children.length > 0 ? '（父任务）' : ''}{selected.sessions.some((x) => x.role_code === 'execute') ? '（新会话续作）' : ''}{selected.task.aiPolicyCode !== 'execute' ? '（需可执行）' : ''}</button>
-                                    <button className="wb-btn" disabled={busy} onClick={() => void startAISession('consult', selected.task, selected.task.title)}><Icon name="ai" />AI 协助</button>
-                                    <button className="wb-btn" disabled={busy} onClick={() => void startAISession('breakdown', selected.task, selected.task.title)}><Icon name="breakdown" />AI 拆解</button>
-                                    <button className="wb-btn" onClick={() => { setSubtaskParent(selected.task); setDetailTab('children') }}><Icon name="subtask" />子任务</button>
+                                    {/**
+                                      * ⚠️ **文案精简**（2026-10-01 用户要求）。
+                                      *
+                                      * 原先把"父任务 / 新会话续作 / 需可执行"三件事全部拼进按钮文字，
+                                      * 父任务上就成了「AI 执行（父任务）（新会话续作）（需可执行）」——
+                                      * 一行放不下，整个动作行被挤到换行。用户明确要求精简。
+                                      *
+                                      * 精简口径：**按钮上只留"能不能点、点了干什么"**，
+                                      * 其余全放进 `title`（悬停可看，不占宽度）。唯一保留在文字里的是
+                                      * 「父任务」——它是**动作语义的一部分**（验收会级联子任务），
+                                      * 不适合只藏在悬停里。
+                                      */}
+                                    <button
+                                      className="wb-btn primary"
+                                      disabled={busy || selected.task.aiPolicyCode !== 'execute'}
+                                      title={selected.task.aiPolicyCode !== 'execute'
+                                        ? '请先在“AI 策略”里开启「可执行」'
+                                        : selected.children.length > 0
+                                          ? '执行父任务：验收通过后未完成子任务会级联完成；所有子节点完成后父节点也会自动完成'
+                                          : selected.sessions.some((x) => x.role_code === 'execute')
+                                            ? '新建执行会话并携带此前会话提示'
+                                            : '开始执行'}
+                                      onClick={() => void startAISession('execute', selected.task, selected.task.title, selected.sessions.filter((x) => x.role_code === 'execute'))}
+                                    ><Icon name="ai" />AI 执行{selected.children.length > 0 ? '（父任务）' : ''}</button>
+                                    <button className="wb-btn" disabled={busy} title="就这个任务向 AI 咨询（不改任务状态）" onClick={() => void startAISession('consult', selected.task, selected.task.title)}><Icon name="ai" />AI 协助</button>
+                                    <button className="wb-btn" disabled={busy} title="让 AI 把任务拆成子任务提案（确认后才建）" onClick={() => void startAISession('breakdown', selected.task, selected.task.title)}><Icon name="breakdown" />AI 拆解</button>
+                                    <button className="wb-btn" title="手动添加子任务" onClick={() => { setSubtaskParent(selected.task); setDetailTab('children') }}><Icon name="subtask" />子任务</button>
                                   </>}
-                          <button className="wb-btn" onClick={() => { if (window.confirm('归档后任务会从工作台列表隐藏（其子任务也会一并从列表隐藏），可在列表页“查看归档”中恢复。确认归档？')) { const id = selected.task.id; setTasks((list) => list.filter((t) => t.id !== id)); void api(`/api/workbench/tasks/${id}/archive`, { method: 'POST' }).then(() => { setSelected(null); selectedRef.current = null; setNotice('任务已归档，可在列表页“查看归档”恢复。'); void refresh() }).catch((e: unknown) => { const msg = e instanceof Error ? e.message : String(e); if (msg.includes('not found')) { setSelected(null); selectedRef.current = null; void refresh(); setNotice('该任务已不存在，已从当前视图移除') } setError(msg) }) } }}><Icon name="archive" />归档</button>
+                          {/* 「归档」已移到详情页右上角（与「编辑」并列），见本卡片标题那一行 */}
                         </>
                       )}
                     </div>
-                    <div style={{ fontSize: 12, color: '#999', margin: '-4px 2px 10px' }}>
-                      {selected.task.aiPolicyCode === 'execute' && selected.task.statusCode !== 'done' && selected.task.statusCode !== 'cancelled'
-                        ? selected.children.length > 0
-                          ? '执行父任务：验收通过后未完成子任务会级联完成；所有子节点完成后父节点也会自动完成。'
-                          : '执行会话完成后，AI 会提交验收申请，由你验收后标记完成。'
-                        : ''}
-                    </div>
-
+                    {/**
+                      * ⚠️ 这里原本有一段独立提示（"执行父任务：验收通过后未完成子任务会级联完成…" /
+                      * "执行会话完成后，AI 会提交验收申请…"）。用户要求删除：它独占一行高度，
+                      * 而**同样的语义已经在两处说清**——
+                      * ① 点「完成任务」时的确认弹窗（`completeTaskFromProgress` 的 window.confirm 写明级联）；
+                      * ② 「AI 执行」按钮的 `title`（"执行父任务：验收通过后未完成子任务会级联完成"）。
+                      * 删掉它不丢语义，只是不再重复占高度。
+                      */}
                     <div className="wb-detail-tabs">
                       <button className={`wb-detail-tab ${detailTab === 'desc' ? 'on' : ''}`} onClick={() => setDetailTab('desc')}>描述</button>
                       <button className={`wb-detail-tab ${detailTab === 'children' ? 'on' : ''}`} onClick={() => setDetailTab('children')}>子任务<span className="count">{selected.children.length}</span></button>
@@ -4053,6 +4037,8 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                   void startAISession('clarify', null, quickText, [], undefined, chosen, {
                     attachments: quickAttachments,
                     followFolder: quickFollowFolder,
+                    /** 角色选择随会话一起带下去（澄清 mode 的角色入口就在这里）。 */
+                    persona: quickPersona,
                   })
                 }}
               >
@@ -4129,7 +4115,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
               <button type="button" className="wb-btn" disabled={busy} onClick={() => quickImageInputRef.current?.click()}>
                 <Icon name="image" />添加附件
               </button>
-              <QuickModelPicker
+              <ModelPicker
                 runtime={runtime}
                 value={quickModelSelection}
                 onChange={setQuickModelSelection}
@@ -4141,11 +4127,17 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
             </div>
           </div>
 
-          {/* ---------------- 工作区选择（v1.14.0） ----------------
+          {/* ---------------- 工作区选择（v1.14.0；2026-10-01 上移到技能/角色之前） ----------------
               说明文字一律用 <div className="wb-hint"> 而不是 <p>/<label>：
               `.wb-hint` 自带 margin，而 `.wb-field` 的标签是 display:block、
               里面的 <input> 是行内元素 —— 把提示塞进 <label> 会被输入框的基线顶开重叠
-              （2026-09-12 用户实测："提示文字被上方输入框遮挡"）。 */}
+              （2026-09-12 用户实测："提示文字被上方输入框遮挡"）。
+
+              用户要求（2026-10-01 第二张截图）：把这一组**移到技能/角色选择之上**，
+              并压缩高度。原来的顺序是「技能 → 角色 → 工作区」，
+              现在改成「工作区 → 技能 → 角色」。
+              注意：三项都只是**本次会话的输入**，彼此没有依赖关系，
+              所以移动顺序不改变任何判定（判定仍全在纯模块里）。 */}
           <div className="wb-field">
             <span>
               AI 会话工作区
@@ -4154,13 +4146,33 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                 {quickWorkspaceTouched ? '手动指定' : quickWorkspaceSourceLabel(quickWorkspaceSource)}
               </span>
             </span>
-            <input
-              name="quick-workspace"
-              list="wb-quick-workspace-options"
-              value={quickWorkspace}
-              placeholder={settings.defaultWorkspace || '例如 D:\\Code\\my-project 或 /mnt/d/code/my-project'}
-              onChange={(e) => { setQuickWorkspaceTouched(true); setQuickWorkspace(e.target.value) }}
-            />
+            {/**
+              * 「输入框 + 不再记住」**同一行**（用户要求：按钮和输入框放一行）。
+              *
+              * 为什么这个按钮必须留着（不能顺手删）：它是**唯一**的"清掉上次手动选择"出口。
+              * 默认值判定是「上次手动选择 → 否则用设置里的默认工作区」，
+              * 没有这个出口时，用户改了设置里的默认工作区**永远不生效** ——
+              * 那正是这条 v1.15.2 修过的缺陷（`forgetQuickWorkspace` 里写明）。
+              */}
+            <div className="wb-field-row">
+              <input
+                name="quick-workspace"
+                list="wb-quick-workspace-options"
+                value={quickWorkspace}
+                placeholder={settings.defaultWorkspace || '例如 D:\\Code\\my-project 或 /mnt/d/code/my-project'}
+                onChange={(e) => { setQuickWorkspaceTouched(true); setQuickWorkspace(e.target.value) }}
+              />
+              {quickWorkspaceSource === 'last-manual' && quickWorkspace.trim() !== '' && !quickWorkspaceTouched && (
+                <button
+                  type="button"
+                  className="wb-btn"
+                  title={`不再把 ${quickWorkspace} 当作默认工作区（下次打开改用设置里的默认值）`}
+                  onClick={() => void forgetQuickWorkspace(quickWorkspace)}
+                >
+                  不再记住
+                </button>
+              )}
+            </div>
             <datalist id="wb-quick-workspace-options">
               {[...new Set([
                 ...(settings.quickWorkspaceRecent ?? []),
@@ -4168,12 +4180,6 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
                 settings.defaultWorkspace,
               ].filter((path) => path !== ''))].map((path) => <option key={path} value={path} />)}
             </datalist>
-            {/* 这个列表是默认值的唯一来源 → 必须能删，否则"在设置里改了默认工作区"永远不生效 */}
-            {quickWorkspaceSource === 'last-manual' && quickWorkspace.trim() !== '' && !quickWorkspaceTouched && (
-              <button type="button" className="wb-btn" style={{ marginTop: 6 }} onClick={() => void forgetQuickWorkspace(quickWorkspace)}>
-                不再记住「{quickWorkspace}」
-              </button>
-            )}
           </div>
           {quickWorkspace.trim() !== '' && (
             <label className="wb-inline-check">
@@ -4185,11 +4191,44 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
               <span>在该工作区下建任务资料夹（`&lt;任务ID&gt;-&lt;标题片段&gt;`；不勾 = 直接用它本身）</span>
             </label>
           )}
-          <div className="wb-hint">
-            默认值取「上次手动选择的目录」，否则用设置里的默认工作区；这两条都与"最近执行过哪个任务"无关。
-            路径不存在时会<b>明确报错</b>，不会静默换目录。
-          </div>
-          <div className="wb-hint">AI 会先澄清必要信息（一次一个主题，最多 5 轮），再提交任务草稿由你确认。</div>
+          {/**
+            * ⚠️ 这里原本还有两行长提示（"默认值取「上次手动选择的目录」…路径不存在时会明确报错" /
+            * "AI 会先澄清必要信息（一次一个主题，最多 5 轮）…"）。用户要求删除：它们各占一行，
+            * 而两条语义都已有去处 ——
+            *   · 默认值来源：就在上面的字段名后面（`wb-field-note` 的"上次手动选择 / 系统默认"，由判定给出）；
+            *   · 路径报错：真出错时以红色错误行就地显示（不静默换目录，这一点没变）；
+            *   · 澄清轮数：弹窗按钮文案与澄清流程本身已经说明，不必事前占高度。
+            */}
+
+          {/* ---------------- 技能选择（2026-10-01 补上） ----------------
+              用户反馈："快速录入弹框页面无法选择 SKill。"
+              与共享提示词弹窗**同一个组件、同一份 selectedSkills**，所以这里选的技能
+              会真的进提示词（`startAISession` 的 clarify 分支读的就是 selectedSkills）。 */}
+          <SkillPicker
+            catalog={skillCatalog}
+            loading={skillsLoading}
+            available={skillsAvailable}
+            problem={skillProblem}
+            selected={selectedSkills}
+            onToggle={toggleSkill}
+            onRetry={() => void loadSkills()}
+            disabled={busy}
+          />
+
+          {/* ---------------- 角色选择（D13-B） ----------------
+              与共享提示词弹窗**同一个组件、同一套选择逻辑**（需求 §6.3）。
+              这样 10 个 mode 都有角色入口：9 个走提示词弹窗，澄清走这里（快速录入）。 */}
+          <PersonaPicker
+            value={quickPersona}
+            onChange={setQuickPersona}
+            disabled={busy}
+            onError={setError}
+            onNotice={(message) => pushToast(message, 'success')}
+          />
+
+          {/* ---------------- 工作区选择已上移到技能选择之前（2026-10-01） ----------------
+              用户要求把「AI 会话工作区」这一组挪到技能/角色上面，所以这里不再重复渲染。
+              整组（字段 + 不再记住 + 任务资料夹勾选）只有一处实现，避免两处装配打架。*/}
         </Modal>
       )}
 
@@ -4392,12 +4431,6 @@ export const name = 'personal-workbench-client'
 export { inject } from './capabilities.js'
 
 /**
- * 宿主上下文（由 apply() 记录），供需要软探测可选服务的模块级函数使用
- * （例如 connectWorkspace 要试 uiWorkspace）。卸载时清空，避免持有已废弃的 fiber。
- */
-let pluginCtx: unknown
-
-/**
  * 上一轮 `apply()` 的清理函数（单实例守卫用）。
  *
  * 为什么必须是模块级的：cordis 重载插件时会重新执行 `apply()`，而 `apply()` 内部的
@@ -4414,17 +4447,6 @@ function disposePreviousInstance(): void {
   activeDisposer = undefined
   try { disposer() } catch (error) {
     console.warn('[workbench] 上一轮实例清理失败（继续挂载新实例）：', String(error))
-  }
-}
-
-/** 软探测可选服务（cordis 代理访问未声明服务会抛错，必须用 ctx.get）。 */
-function optionalService<T>(ctx: unknown, name: string): T | undefined {
-  const getter = (ctx as { get?: (key: string) => unknown } | undefined)?.get
-  if (typeof getter !== 'function') return undefined
-  try {
-    return getter(name) as T | undefined
-  } catch {
-    return undefined
   }
 }
 
@@ -4465,46 +4487,6 @@ function aiSessionUsable(runtime: WorkbenchRuntime, sessionId: string): boolean 
     archivedSessionIds: safeService<WorkbenchRuntime['workspaces']>(runtime, 'workspaces')?.list?.getSnapshot?.()?.archivedSessionIds,
     list: list === undefined ? undefined : { ...list, ...(current === '' ? {} : { current }) },
   })
-}
-
-/**
- * 读「用户当前正在看的那个会话」的 id —— **全插件唯一入口**（v1.15.6）。
- *
- * ## 为什么必须有它（2026-09-27，DSH 0.1.7-rc.2 桌面端真实退化）
- *
- * 插件原先在三处直接读 `sessions.list.getSnapshot().current`，而 0.1.7-rc.2 已经把
- * 这个字段**整个删掉**了（列表快照只剩 `ids` / `byId` / `phase`），选择语义搬进了
- * `uiWorkspace` 的 `mainView` 引用 —— 对外由 `uiSession.adapter.current` 投影。
- * 于是那三处**静默拿到 undefined**：
- *
- * 1. 「快速录入」的模型目录按 `ids[0]`（列表第一个会话）解析，不是当前会话；
- * 2. 「快速录入」推断工作区时 `currentCwd` 恒为空，第 1 档判据"当前会话 cwd 命中谁
- *    就用谁"整档失效 → 工作区多于一个候选时**必然拒绝**（用户实测的红字）；
- * 3. 复用型会话的可用性判据少了"它就是当前会话"这条旁证。
- *
- * 判据（含新旧两端）在 `currentSession.ts`，那里是纯函数、有单测；这里只负责取服务。
- *
- * @param runtime - 插件运行上下文（`ctx`）
- * @returns 会话 id；判定不出来时是空串（调用方按"不知道"处理，绝不猜一个）
- */
-function currentSessionIdOf(runtime: WorkbenchRuntime): string {
-  const list = safeService<WorkbenchRuntime['sessions']>(runtime, 'sessions')?.list?.getSnapshot?.()
-  /**
-   * `uiSession` 走 `ctx.get` 软探测（**不放进 inject**）：它只有 0.1.5+ 才有，
-   * 写进 inject 会让旧宿主上整个插件 pending —— 与 `slots` / `layout` / `uiWorkspace`
-   * 同一条政策（见 `viewTypes.ts` 里那段决策说明）。
-   */
-  return readCurrentSessionId({ uiSession: optionalService<unknown>(runtime, 'uiSession'), list })
-}
-
-function safeService<T>(runtime: unknown, name: string): T | undefined {
-  const target = runtime as Record<string, unknown> | undefined
-  if (target === undefined || target === null) return undefined
-  try {
-    return target[name] as T | undefined
-  } catch {
-    return undefined
-  }
 }
 
 /**
@@ -4585,10 +4567,10 @@ function openWorkspacePaths(runtime: WorkbenchRuntime): string[] {
  * 直接读服务会抛 "inactive context"。
  */
 async function connectWorkspace(workspaceId: string): Promise<string> {
-  const ctx = pluginCtx as { get?: (key: string) => unknown } | undefined
+  const ctx = getPluginCtx() as { get?: (key: string) => unknown } | undefined
   const uiWorkspace = optionalService<{ connectWorkspace?: (id: string) => Promise<string> }>(ctx, 'uiWorkspace')
   if (typeof uiWorkspace?.connectWorkspace === 'function') return await uiWorkspace.connectWorkspace(workspaceId)
-  const runtime = pluginCtx as WorkbenchRuntime
+  const runtime = getPluginCtx() as WorkbenchRuntime
   const workspaces = safeService<WorkbenchRuntime['workspaces']>(runtime, 'workspaces')
   const openPath = workspaces?.openPath
   if (typeof openPath === 'function') {
@@ -4943,7 +4925,14 @@ function WorkbenchPanelContent(props: Record<string, unknown>): JSX.Element | nu
   }, [snapshot.hostPanelId, host])
   if (host === undefined) return null
   return (
-    <div className="wb-panel-host" data-open={dataOpen}>
+    /**
+     * `data-workbench-build-id`：本插件**自建根节点**上的构建标识（plan.md V04-B）。
+     *
+     * 它读的是 bundle 内联值（`WORKBENCH_BUILD_ID`），**不是** health 接口 —— 验收链拿它
+     * 与目标包 manifest、host health 三方比对，才能证明"浏览器真的加载了本次构建"。
+     * 不写宿主 html 的任何未知属性（那是别人的 DOM）。
+     */
+    <div className="wb-panel-host" data-open={dataOpen} data-workbench-build-id={WORKBENCH_BUILD_ID}>
       <div className="wb-app-scope" {...{ [VIEW_ATTR]: '' }}>
         <WorkbenchApp runtime={host.runtime} closePanel={host.closePanel} />
       </div>
@@ -4953,7 +4942,7 @@ function WorkbenchPanelContent(props: Record<string, unknown>): JSX.Element | nu
 
 export function apply(ctx: unknown): () => void {
   const runtime = ctx as WorkbenchRuntime
-  pluginCtx = ctx
+  setPluginCtx(ctx)
   /**
    * 单实例守卫（v1.14.2，2026-09-12 背景渐黑事故的根因修复）。
    *
@@ -5631,7 +5620,7 @@ export function apply(ctx: unknown): () => void {
      * `--wb-sidebar-w` 是内联样式变量，留着无害（下一次 apply 会按真实宽度覆盖）。
      */
     html.removeAttribute(ACTIVE_ATTR); html.removeAttribute(OFFICIAL_ATTR)
-    if (pluginCtx === ctx) pluginCtx = undefined
+    if (getPluginCtx() === ctx) setPluginCtx(undefined)
     if (workbenchHost?.closePanel === undefined ? false : workbenchHost.runtime === runtime) workbenchHost = undefined
     if (activeDisposer === cleanup) activeDisposer = undefined
   }

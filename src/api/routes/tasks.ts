@@ -6,9 +6,10 @@ import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import type { DatabaseSync } from 'node:sqlite'
 import {
   addReminder, addTaskMemory, archiveTask, completeTaskCascade, createTask, createTaskReview, ensureRecurringInstances,
-  getDictionary, getTask, getTaskMemoryContext, getTaskRootId, linkTaskSession, listArchivedTasks, listChildren, listReminders, listTaskEvents,
+  getDictionary, getTask, getTaskMemoryContext, getTaskRootId, getTaskPendingCompletion, linkTaskSession, listArchivedTasks, listChildren, listPendingCompletions, listReminders, listTaskEvents,
   listTaskMemories, listTaskReviews, listTaskSessions, listTasks, repairParentCompletion, restoreTask, updateTask, updateTaskWithCompletion,
 } from '../../db/repo.js'
+import { checkProgressInput } from '../../shared/taskProgress.js'
 import { TASKS_PREFIX, clampEstimateForStorage, defaultRecurrenceRule, isLoopbackRequest, pathSegments, publicTask, readJsonBody, requireCode, taskInputFromBody, todayRange, writeJson } from './helpers.js'
 
 export function makeTaskRoutes(db: DatabaseSync): WebRoute[] {
@@ -60,16 +61,34 @@ export function makeTaskRoutes(db: DatabaseSync): WebRoute[] {
 
         const id = segments[0]
         const action = segments[1]
+        /**
+         * 「待验收」投影（requirements §3.2）：**列表刷新共用一次**查询，
+         * 绝不逐行发请求查草稿。旧服务端没有这个端点时前端不显示徽标（不推测）。
+         *
+         * 判据写成 `id === 'pending-completions' && action === undefined`（而不是
+         * `action === 'pending-completions'`）：这个端点只有**一段**路径，
+         * 判据必须与 URL 形状一致，否则将来谁在这个位置加一段路径就会静默落到
+         * 任务详情分支去（那次我确实是靠"端点 404"才发现的，不该再犯第二次）。
+         */
+        if (method === 'GET' && id === 'pending-completions' && action === undefined) {
+          return writeJson(res, 200, { ok: true, pending: listPendingCompletions(db) })
+        }
         if (method === 'GET' && action === undefined) {
           ensureRecurringInstances(db)
           const task = getTask(db, id)
           if (task === undefined) return writeJson(res, 404, { error: 'task not found' })
+          /**
+           * 详情页的待验收投影（列表用 `GET /tasks/pending-completions` 一次取全量）。
+           * 没有 pending completion 草稿时**不带这个字段**，前端按"没有待验收"处理。
+           */
+          const pending = getTaskPendingCompletion(db, id)
           return writeJson(res, 200, {
             ok: true,
             task: publicTask(task),
             children: listChildren(db, id).map(publicTask),
             sessions: listTaskSessions(db, id),
             reminders: listReminders(db, id),
+            ...(pending === undefined ? {} : { pendingCompletion: { deferred: pending.deferred } }),
           })
         }
         if (method === 'PATCH' && action === undefined) {
@@ -111,6 +130,29 @@ export function makeTaskRoutes(db: DatabaseSync): WebRoute[] {
               else return writeJson(res, 400, { error: 'parentId 必须是任务 id 字符串或 null（null 表示移到顶层）' })
             }
             if (typeof body.extra === 'object' && body.extra !== null) patch.extra = body.extra as Record<string, unknown>
+            /**
+             * 进度（S4 / AX-P05）：`PATCH /api/workbench/tasks/:id` 新增 `progressPercent`（0–99）。
+             *
+             * 三条与工具侧**刻意不同**的边界：
+             * 1. `100` 在普通 PATCH 里**拒绝** —— 100 不是可存储的进度，界面选择 100 时显式调用
+             *    现有完成任务动作（`statusCode: 'done'`）并展示同等的级联确认提示，库里永远不出现 100；
+             * 2. **原子**：先校验完再写。非法进度时其余字段（标题/状态/截止…）**一个都不生效** ——
+             *    "多字段 PATCH 只写了一半"是比报错更糟的结果；
+             * 3. 已完成/已取消/已归档的任务拒绝更新进度（与 `setTaskProgress` 同口径），
+             *    但**不拦"同一次 PATCH 里顺手完成任务"**（即 patch 把状态改成 done 的时候）。
+             */
+            const pendingStatus = typeof patch.statusCode === 'string' ? patch.statusCode : undefined
+            if (pendingStatus !== 'done' && pendingStatus !== 'cancelled' && 'progressPercent' in body) {
+              const checked = checkProgressInput(body.progressPercent)
+              if (!checked.ok) return writeJson(res, 400, { error: checked.reason })
+              const current = getTask(db, id)
+              if (current === undefined) return writeJson(res, 404, { error: 'task not found' })
+              if (current.archived === 1) return writeJson(res, 400, { error: `任务「${current.title}」已归档，不能更新进度` })
+              if (current.statusCode === 'done' || current.statusCode === 'cancelled') {
+                return writeJson(res, 400, { error: `任务「${current.title}」已是${current.statusCode === 'done' ? '已完成' : '已取消'}状态，不能更新进度（重新打开任务后才能改）` })
+              }
+              patch.progressPercent = checked.value
+            }
             // 新语义：任意节点直接完成时，在同一事务内级联完成未完成子节点，并向上递归聚合父节点。
             const task = updateTaskWithCompletion(db, id, patch)
             if (task === undefined) return writeJson(res, 404, { error: 'task not found' })

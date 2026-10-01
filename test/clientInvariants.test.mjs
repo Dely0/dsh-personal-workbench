@@ -204,10 +204,23 @@ test('「当前会话」只允许从 currentSession.ts 读（业务代码不许�
 test('接线：三个读「当前会话」的地方都走 currentSessionIdOf（同一个语义只读一遍）', () => {
   const index = sources.find(({ path }) => rel(path) === 'client/index.tsx')
   assert.ok(index !== undefined, 'index.tsx 必须存在')
-  const code = stripComments(index.text)
-  const calls = code.match(/currentSessionIdOf\(/g) ?? []
+  /**
+   * 2026-10-01：抽 `ModelPicker` 时，"模型目录按当前会话解析"那一处跟着组件
+   * 搬进了 `client/components/ModelPicker.tsx`（组件不该为了一个调用留在 5500 行的巨型文件里）。
+   * 判据因此改成扫**所有客户端源码**：不变的是"至少三处读当前会话、且都走同一个函数"，
+   * 变的是它们不再保证住在同一个文件里。**这不是放宽** —— 下面还要求 host 侧那份
+   * 定义也走 `readCurrentSessionId`（否则就是又有人自己读列表快照）。
+   */
+  const clientCode = sources
+    .filter(({ path }) => rel(path).startsWith('client/'))
+    .map(({ text }) => stripComments(text))
+    .join('\n')
+  const calls = clientCode.match(/currentSessionIdOf\(/g) ?? []
   assert.ok(calls.length >= 3,
     `currentSessionIdOf 至少要被三处调用（模型目录 / 工作区推断 / 会话可用性），实际 ${calls.length} 次`
     + ' —— 少一处就说明又有人自己读了列表快照的 current')
+  const host = sources.find(({ path }) => rel(path) === 'client/runtimeServices.ts')
+  assert.ok(host !== undefined, 'runtimeServices.ts 必须存在（当前会话判定的取服务处）')
+  assert.match(stripComments(host.text), /readCurrentSessionId\(/, '取到服务后必须交给唯一的纯判据')
 })
 

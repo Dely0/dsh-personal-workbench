@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { openWorkbenchDb } from '../lib/db/database.js'
 import { seedDictionaries } from '../lib/db/seed.js'
 import { proposeDailyPlanTool, proposeIdeaClustersTool, submitIdeaTasksTool, submitKnowledgeTool, submitReportTool, submitTaskTool, updateTaskTool, requestCompletionTool, saveTaskMemoryTool } from '../lib/tools.js'
-import { createIdea, createDraft, createTask, confirmTaskDraft, getTask, getTaskMemoryContext, getDraftBySession, getPendingDailyPlanDraft, getPendingDraftForSession, getPendingDraftForTask, getPendingReportDraft, linkTaskSession, updateTask } from '../lib/db/repo.js'
+import { createIdea, createDraft, createTask, confirmDailyPlanDraft, confirmTaskDraft, getTask, getTaskMemoryContext, getDraftBySession, getPendingDailyPlanDraft, getPendingDraftForSession, getPendingDraftForTask, getPendingReportDraft, linkTaskSession, updateTask } from '../lib/db/repo.js'
 
 /**
  * 删临时目录，容忍 Windows 上刚 `close()` 时文件句柄尚未释放导致的 EPERM。
@@ -172,23 +172,41 @@ test('agent tools write pending drafts and update tasks', async () => {
       { agent: { session: { id: 'sess-plan' } } },
     )
     assert.match(planOut, /今日计划提案已保存/)
+    assert.match(planOut, /计划投入 30 min/, '回执必须列最终分钟（AX-D01）')
     const planDraft = getPendingDailyPlanDraft(db, 'sess-plan')
     assert.ok(planDraft)
-    // 同一会话同日再次提交：更新同一草稿，不重复创建
+    // 提案创建即快照：草稿里的 minutes 在创建那一刻算好（不是确认时再取）
+    assert.equal(planDraft.payload.items[0].minutes, 30)
+    // 同一会话同日再次提交：更新同一草稿，不重复创建；省略 minutes 时保留**草稿里**的快照
     const planOut2 = await proposePlan.execute(
       { summary: '第二版排序', items: [{ task_id: t1.id, order: 1, note: '下午' }] },
       { agent: { session: { id: 'sess-plan' } } },
     )
     assert.match(planOut2, /今日计划提案已保存/)
     assert.equal(getPendingDailyPlanDraft(db, 'sess-plan').id, planDraft.id)
-    // 已完成任务不能进入计划
+    // 显式 minutes 非法 → 整份报错（不静默丢弃/夹取）
+    const badMinutes = await proposePlan.execute(
+      { summary: '非法分钟', items: [{ task_id: t1.id, order: 1, minutes: 0 }] },
+      { agent: { session: { id: 'sess-plan-bad' } } },
+    )
+    assert.match(badMinutes, /minutes 非法/)
+    // AI 不能写当日结束状态（那是用户当天的工作状态）
+    const withEffort = await proposePlan.execute(
+      { summary: '想替用户结束', items: [{ task_id: t1.id, order: 1, effortDone: true }] },
+      { agent: { session: { id: 'sess-plan-bad' } } },
+    )
+    assert.match(withEffort, /effortDone/)
+    // 已完成任务仍可以写成草稿，但**确认时**共同校验会整份拒绝并保留草稿（AX-D04）
     updateTask(db, t1.id, { statusCode: 'done' })
     assert.equal(getTask(db, t1.id).statusCode, 'done')
     const badPlan = await proposePlan.execute(
-      { summary: '不应成功', items: [{ task_id: t1.id, order: 1, note: '' }] },
+      { summary: '不应生效', items: [{ task_id: t1.id, order: 1, note: '' }] },
       { agent: { session: { id: 'sess-plan-bad' } } },
     )
-    assert.match(badPlan, /已归档或已关闭/)
+    assert.match(badPlan, /今日计划提案已保存/)
+    const badDraft = getPendingDailyPlanDraft(db, 'sess-plan-bad')
+    assert.ok(badDraft, '被拒的确认必须保留草稿供用户调整')
+    assert.throws(() => confirmDailyPlanDraft(db, badDraft.id), /已完成|已归档/)
 
     const submitReport = submitReportTool(db)
     const reportOut = await submitReport.execute(

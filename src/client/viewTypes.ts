@@ -24,6 +24,8 @@ export interface Task {
   source: string
   workspacePath: string | null
   effectiveWorkspacePath: string | null
+  /** 显式进度 0–99（`100` 不落库，见 `shared/taskProgress.ts`）。旧服务端不下发时为 undefined。 */
+  progressPercent?: number
   archived: boolean
   extra: Record<string, unknown>
   recurrenceCode: string | null
@@ -35,8 +37,32 @@ export interface Task {
   completedAt: string | null
   cancelledAt: string | null
 }
-export interface DailyPlanItemView { taskId: string; order: number; title: string; note: string }
-export interface DailyPlanView { id: string; planDate: string; summary: string; items: DailyPlanItemView[]; sourceCode: string; sessionId: string | null; createdAt: string; updatedAt: string }
+/**
+ * 计划项（视图侧）。
+ *
+ * `minutes` / `effortDone` 是迁移 19 起回填、T2 接线的字段：旧服务端不下发时是 `undefined`，
+ * 界面按"该服务端没有这个能力"处理（不显示、不猜 0）。
+ *
+ * `taskStatusCode` 由服务端给出（`missing` = 任务已删除）——计划行照旧保留，
+ * 界面据此标注并禁用会操作任务的按钮（T2/D07）。
+ */
+export interface DailyPlanItemView { taskId: string; order: number; title: string; note: string; minutes?: number; effortDone?: boolean; taskStatusCode?: string }
+/**
+ * 一份每日计划。`readable=false` 表示 `items_json` 整体无法解析：
+ * 容量必须显示"不可计算"而不是 0，界面也不得假装这份计划可用（requirements §4.2/§5.2）。
+ */
+export interface DailyPlanView {
+  id: string
+  planDate: string
+  summary: string
+  items: DailyPlanItemView[]
+  sourceCode: string
+  sessionId: string | null
+  createdAt: string
+  updatedAt: string
+  readable?: boolean
+  diagnostics?: string[]
+}
 export interface TaskReportView { id: string; periodCode: 'day' | 'week'; periodStart: string; title: string; summaryMd: string; stats: Record<string, unknown>; sessionId: string | null; createdAt: string; updatedAt: string }
 
 // 提醒相关类型来自共享契约（前后端单一事实来源），此处不再重复定义。
@@ -58,7 +84,13 @@ export interface Bootstrap {
    */
   memoryAvailable?: boolean
 }
-export interface TaskDetail { task: Task; children: Task[]; sessions: Array<Record<string, unknown>>; reminders: Array<{ id: string; taskId: string; offsetMinutes: number; methodCode: string; firedAt: string | null; skippedAt?: string | null; acknowledgedAt?: string | null }>; events: Array<Record<string, unknown>>; reviews: Array<Record<string, unknown>> }
+export interface TaskDetail { task: Task; children: Task[]; sessions: Array<Record<string, unknown>>; reminders: Array<{ id: string; taskId: string; offsetMinutes: number; methodCode: string; firedAt: string | null; skippedAt?: string | null; acknowledgedAt?: string | null }>; events: Array<Record<string, unknown>>; reviews: Array<Record<string, unknown>>;
+  /**
+   * 待验收投影（T1/D04）：`GET /tasks/:id` 在该任务有 pending completion 草稿时带上。
+   * `undefined` = 没有待验收草稿（旧服务端同样不带这个字段，两者都按"没有"处理即可，
+   * 因为列表侧的"服务端不支持"是由整体投影 `available=false` 表达的）。
+   */
+  pendingCompletion?: { deferred: boolean } }
 
 export interface SessionDriver {
   sessionId: string

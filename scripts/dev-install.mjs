@@ -33,14 +33,17 @@
  * node scripts/dev-install.mjs --apply      # 真的装进 profile（自动备份 + diff + 跑门禁）
  * ```
  *
- * 选项：`--profile <name>`（默认 web）、`--no-build`、`--skip-dump-config`、`--keep <n>`。
+ * 选项：`--profile <name>`（默认 web）、`--profile-dir <绝对目录>`（**显式**目标；不给就按
+ * fail-closed 规则解析继承来的 DSH_PROFILE_DIR，见 `resolveTargetProfileDir`）、
+ * `--db-path <绝对路径>`（透传给版本门禁核对那个库）、`--print-target`（只打印解析结果就退出，
+ * 零副作用）、`--no-build`、`--skip-dump-config`、`--keep <n>`。
  *
  * **本脚本绝不重启 DSH** —— 重启会掐断用户正在用的会话，必须由用户明确发起。
  */
 import { execFileSync, spawnSync } from 'node:child_process'
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { basename, join } from 'node:path'
+import { basename, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
@@ -57,10 +60,67 @@ const SKIP_DUMP = has('--skip-dump-config')
 const PROFILE = valueOf('--profile', 'web')
 const KEEP = Number(valueOf('--keep', '3'))
 const DEV_DIR = join(ROOT, '_local-build')
-const PROFILE_DIR = process.env.DSH_PROFILE_DIR ?? join(homedir(), '.dsh', 'profiles', PROFILE)
+const EXPLICIT_PROFILE_DIR = valueOf('--profile-dir')
+const DB_PATH = valueOf('--db-path')
+const PRINT_TARGET = has('--print-target')
 
 const step = (n, text) => console.log(`\n[${n}] ${text}`)
 const fail = (text) => { console.error(`\n✖ ${text}`); process.exit(1) }
+
+/**
+ * 目标 profile 目录的**唯一**解析规则（plan.md V03 / AX-V04）。
+ *
+ * 2026-09-30 的真实风险：从桌面端会话里跑 `dev-install --profile web`，而桌面端把
+ * `DSH_PROFILE_DIR` 设成了 desktop 的目录 —— 脚本原来直接信它，于是"装 web"装到
+ * desktop 目录里去了（或者门禁去核对另一个 profile）。这里改成 fail-closed：
+ *
+ * 1. 显式 `--profile-dir` 永远优先；
+ * 2. 继承 `DSH_PROFILE_DIR` 只在**它自己的 DSH_PROFILE 与本次目标同名**时才允许；
+ * 3. 其余情况（尤其是继承来的 desktop 目录）**拒绝**，并告诉人怎么修。
+ */
+function resolveTargetProfileDir() {
+  if (typeof EXPLICIT_PROFILE_DIR === 'string' && EXPLICIT_PROFILE_DIR !== '') {
+    return { dir: resolve(EXPLICIT_PROFILE_DIR), source: '--profile-dir（显式）' }
+  }
+  const inherited = process.env.DSH_PROFILE_DIR
+  if (typeof inherited === 'string' && inherited !== '') {
+    const inheritedProfile = process.env.DSH_PROFILE
+    if (typeof inheritedProfile === 'string' && inheritedProfile !== '' && inheritedProfile !== PROFILE) {
+      fail('拒绝继承 profile 目录：环境里的 DSH_PROFILE_DIR 属于 profile'
+        + `「${inheritedProfile}」（${inherited}），但本次要装的是「${PROFILE}」。`
+        + '\n  典型事故：从 desktop 会话里装 web，静默把 desktop 的目录当成目标。'
+        + `\n  修法：显式传 --profile-dir "<目标 profile 绝对目录>"，或先清掉 DSH_PROFILE / DSH_PROFILE_DIR。`)
+    }
+    return { dir: resolve(inherited), source: 'DSH_PROFILE_DIR（profile 名一致，允许）' }
+  }
+  return { dir: join(homedir(), '.dsh', 'profiles', PROFILE), source: '默认 ~/.dsh/profiles/<profile>' }
+}
+
+const TARGET = resolveTargetProfileDir()
+const PROFILE_DIR = TARGET.dir
+const INHERITED_WORKBENCH_DIR = process.env.WORKBENCH_PROFILE_DIR
+if (typeof INHERITED_WORKBENCH_DIR === 'string' && INHERITED_WORKBENCH_DIR !== ''
+  && resolve(INHERITED_WORKBENCH_DIR).toLowerCase() !== resolve(PROFILE_DIR).toLowerCase()) {
+  fail(`环境里的 WORKBENCH_PROFILE_DIR（${INHERITED_WORKBENCH_DIR}）与装盘目标（${PROFILE_DIR}）不一致`
+    + ' —— 版本一致性门禁会去核对另一个 profile。'
+    + '\n  修法：显式传 --profile-dir "<目标 profile 绝对目录>"，或清掉 WORKBENCH_PROFILE_DIR。')
+}
+
+/** `--print-target`：只解析目标就退出，零副作用（给自锁判据做真正的端到端验证用）。 */
+if (PRINT_TARGET) {
+  console.log(JSON.stringify({
+    profile: PROFILE,
+    profileDir: PROFILE_DIR,
+    profileDirSource: TARGET.source,
+    dbPath: typeof DB_PATH === 'string' && DB_PATH !== '' ? DB_PATH : null,
+    inherited: {
+      DSH_PROFILE: process.env.DSH_PROFILE ?? null,
+      DSH_PROFILE_DIR: process.env.DSH_PROFILE_DIR ?? null,
+      WORKBENCH_PROFILE_DIR: process.env.WORKBENCH_PROFILE_DIR ?? null,
+    },
+  }, null, 2))
+  process.exit(0)
+}
 
 function run(command, options = {}) {
   return execFileSync(command, { encoding: 'utf8', shell: true, stdio: ['ignore', 'pipe', 'pipe'], ...options })
@@ -178,7 +238,7 @@ if (!APPLY) {
   process.exit(0)
 }
 
-step(4, `装进 profile：${PROFILE_DIR}`)
+step(4, `装进 profile：${PROFILE_DIR}（目标来源：${TARGET.source}）`)
 const profilePkgPath = join(PROFILE_DIR, 'package.json')
 const profileLockPath = join(PROFILE_DIR, 'pnpm-lock.yaml')
 const backupStamp = stamp
@@ -277,10 +337,16 @@ if (!freshProfile) console.log(`  ✅ 其余 ${Object.keys(afterDeps).length - 1
 
 // ── 6. 三道门禁（必须在重启之前跑）────────────────────────────────────────
 step(6, '门禁：指纹 / 版本一致性 / 插件树能否组装')
-const env = { DSH_PROFILE_DIR: PROFILE_DIR, WORKBENCH_PROFILE_DIR: PROFILE_DIR }
+const env = { DSH_PROFILE: PROFILE, DSH_PROFILE_DIR: PROFILE_DIR, WORKBENCH_PROFILE_DIR: PROFILE_DIR }
+/**
+ * 门禁必须核对**装盘目标**本身，而不是它环境里继承来的东西：
+ * `--profile-dir` 与 `--db-path` 显式透传给 check-installed-version，
+ * 否则"装 A、核对 B"的老毛病会以另一种形态回来。
+ */
+const dbArg = typeof DB_PATH === 'string' && DB_PATH !== '' ? ` --db-path "${DB_PATH}"` : ''
 for (const [label, command] of [
   ['装盘指纹（唯一可信判据）', `node "${join(ROOT, 'scripts', 'check-installed-fingerprint.mjs')}"`],
-  ['版本一致性', `node "${join(ROOT, 'scripts', 'check-installed-version.mjs')}"`],
+  ['版本一致性', `node "${join(ROOT, 'scripts', 'check-installed-version.mjs')}" --profile-dir "${PROFILE_DIR}"${dbArg}`],
 ]) {
   console.log(`\n  ── ${label}`)
   if (runVisible(command, env) !== 0) fail(`${label} 没过 —— 先别重启，按上面的提示修`)

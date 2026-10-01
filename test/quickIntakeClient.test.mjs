@@ -218,7 +218,7 @@ test('回归 v1.15.2：可用性判定不得依赖它自己要控制的状态（
    * （`open ? resolveModelDirectory(...) : undefined`），
    * 不剥注释的扫描会把自己的"反面教材"当成违规 —— 这与扫斜杠菜单那次是同一个坑。
    */
-  const raw = readFileSync(new URL('../src/client/index.tsx', import.meta.url), 'utf8')
+  const raw = readFileSync(new URL('../src/client/components/ModelPicker.tsx', import.meta.url), 'utf8')
   const source = raw.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
   // 具体形态：`open ? resolveModelDirectory(...) : undefined`
   assert.equal(
@@ -265,7 +265,8 @@ test('回归 v1.15.2：可用性判定不得依赖它自己要控制的状态（
 // ---------------------------------------------------------------------------
 
 test('回归 v1.15.2：模型浮层必须 portal 到 body、位置由 placePopover 算、打开状态可读', () => {
-  const source = readFileSync(new URL('../src/client/index.tsx', import.meta.url), 'utf8')
+  /** 2026-10-01：模型选择器抽成独立组件（components/ModelPicker.tsx），判据跟实现走。 */
+  const source = readFileSync(new URL('../src/client/components/ModelPicker.tsx', import.meta.url), 'utf8')
   assert.match(source, /import \{ createPortal \} from 'react-dom'/, '浮层要 portal，必须引 createPortal')
   assert.match(source, /placePopover\(\{/, '浮层位置必须由 placePopover() 算（不许再手写 bottom/left）')
   assert.match(source, /const menu = menuRef\.current[\s\S]{0,900}placePopover\(\{/, '量到的是菜单自己的自然高度（scrollHeight）')
@@ -273,8 +274,8 @@ test('回归 v1.15.2：模型浮层必须 portal 到 body、位置由 placePopov
     '自然高度要加回边框：max-height 指的是整块菜单的高度（border-box）')
   assert.match(source, /viewport: \{ width: window\.innerWidth, height: window\.innerHeight \}/)
   // 浮层的渲染结果只从组件内部看：整文件里 `document.body`/`'Escape'` 之类到处都有，按全文匹配会假通过
-  const picker = /function QuickModelPicker\([\s\S]*?\r?\n\}\r?\n/.exec(source)
-  assert.ok(picker !== null, '没找到 QuickModelPicker 实现（改名了就要同步这条断言）')
+  const picker = /export function ModelPicker\([\s\S]*?\r?\n\}\r?\n/.exec(source)
+  assert.ok(picker !== null, '没找到 ModelPicker 实现（改名/挪文件了就要同步这条断言）')
   assert.match(picker[0], /createPortal\(/, '菜单必须走 createPortal')
   assert.match(picker[0], /,\s*document\.body,\s*\)/, 'portal 的目标必须是 document.body（留在弹窗里就还会被 overflow 裁）')
   // 滚动/改尺寸要重算：`scroll` 不冒泡，必须捕获阶段才收得到弹窗内部的滚动
@@ -313,9 +314,10 @@ test('回归 v1.15.2：模型浮层必须 portal 到 body、位置由 placePopov
  * 量 placement 的那一次里不许出现 `focusOption(`；落实焦点必须以 `placement` 非空为前提。
  */
 test('回归 v1.15.2 复审：焦点不许点在还是 hidden 的菜单上（量 placement 的那次里不能点）', () => {
-  const source = readFileSync(new URL('../src/client/index.tsx', import.meta.url), 'utf8')
-  const picker = /function QuickModelPicker\([\s\S]*?\r?\n\}\r?\n/.exec(source)
-  assert.ok(picker !== null, '没找到 QuickModelPicker 实现（改名了就要同步这条断言）')
+  /** 同上：浮层焦点回归的判据也在组件文件里。 */
+  const source = readFileSync(new URL('../src/client/components/ModelPicker.tsx', import.meta.url), 'utf8')
+  const picker = /export function ModelPicker\([\s\S]*?\r?\n\}\r?\n/.exec(source)
+  assert.ok(picker !== null, '没找到 ModelPicker 实现（改名/挪文件了就要同步这条断言）')
 
   const measureEffect = /useLayoutEffect\(\(\) => \{([\s\S]*?)\}, \[open, focusOption\]\)/.exec(picker[0])
   assert.ok(measureEffect !== null, '没找到"量并写 placement"的 layout effect（结构变了就要同步这条断言）')
@@ -342,4 +344,46 @@ test('回归 v1.15.2：浮层样式不许退回"就地 absolute 朝上开"', () 
     'max-height 必须按整块菜单算（content-box 时 border+padding 会额外顶出 14px，实测会在矮窗口里再被挤出视口）')
   assert.match(styles, /\.wb-model-scrim \{[^}]*z-index:\s*3\d\d/, '点外面关掉的层要在弹窗（300）之上')
   assert.match(rule[1], /z-index:\s*3\d\d/, '浮层要压住 .wb-overlay（300）')
+})
+
+// ---------------------------------------------------------------------------
+// 2026-10-01：三个"用户报的"UI 缺陷的回归判据
+// ---------------------------------------------------------------------------
+
+test('快速录入里的技能选择**真的会进提示词**（不许再硬编码空数组）', () => {
+  /**
+   * 用户反馈："快速录入弹框页面无法选择 SKill。"
+   * 这里其实有两层，第二层比第一层更隐蔽：
+   *   1) 弹窗里没有 SkillPicker（已在组件层修好，见 index.tsx 的快速录入块）；
+   *   2) `startAISession` 的 clarify 分支把 `skills` **硬编码成 `[]`** ——
+   *      而那是唯一喂给 `withSkillPromptBlock()` 的输入，于是"选了等于没选"。
+   *
+   * 只修第 1 层就是"能选、但不生效"的假功能，所以这条判据盯的是第 2 层。
+   */
+  const index = readFileSync(new URL('../src/client/index.tsx', import.meta.url), 'utf8')
+  const clarifyInput = /mode === 'clarify'\s*\r?\n?\s*\?\s*\{([^}]*)\}/.exec(index)
+  assert.ok(clarifyInput !== null, '没找到 clarify 分支的 promptInput（结构变了就要同步这条断言）')
+  assert.equal(
+    /skills:\s*\[\]/.test(clarifyInput[1]), false,
+    'clarify 分支不许再把 skills 硬编码成空数组 —— 那会让快速录入选的技能永远不进提示词',
+  )
+  assert.match(
+    clarifyInput[1],
+    /skills:\s*\[\.\.\.selectedSkills\]/,
+    'clarify 分支必须带上用户真选的技能（与共享提示词弹窗同一份 state）',
+  )
+})
+
+test('三个 AI 入口的选择器都接在同一处：快速录入与共享提示词弹窗共用 Skill/Persona/Model', () => {
+  const index = readFileSync(new URL('../src/client/index.tsx', import.meta.url), 'utf8')
+  const code = index.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1')
+  // 每个选择器都要在**两个**弹窗里各出现一次
+  for (const [label, tag] of [['角色', '<PersonaPicker'], ['技能', '<SkillPicker'], ['模型', '<ModelPicker']]) {
+    const count = (code.match(new RegExp(tag.replace('<', '<'), 'g')) ?? []).length
+    assert.equal(count, 2, `${label}选择器必须挂在两个弹窗里各一次（快速录入 + 共享提示词），实际 ${count} 次`)
+  }
+  // 顺序：角色 → 技能（AX-R07 的"角色在技能之前"，两个弹窗都要一致）
+  const promptModal = code.slice(code.indexOf('{promptModal !== null && ('), code.indexOf('wb-modal-actions', code.indexOf('{promptModal !== null && (')))
+  assert.ok(promptModal.indexOf('<PersonaPicker') < promptModal.indexOf('<SkillPicker'),
+    '共享提示词弹窗里角色必须在技能之前')
 })

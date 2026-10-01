@@ -22,6 +22,8 @@ export interface RawTaskRow {
   estimated_minutes: number | null
   source: string
   workspace_path: string | null
+  /** 显式进度 0–99（迁移 19 起；旧行由 DEFAULT 0 补齐）。 */
+  progress_percent: number
   archived: number
   extra: string
   recurrence_code: string | null
@@ -139,6 +141,7 @@ export function parseTask(row: RawTaskRow | undefined, db?: DatabaseSync): TaskR
     estimatedMinutes: row.estimated_minutes,
     source: row.source,
     workspacePath: row.workspace_path,
+    progressPercent: typeof row.progress_percent === 'number' ? row.progress_percent : 0,
     effectiveWorkspacePath: db === undefined
       ? row.workspace_path
       : effectiveWorkspacePathForTask(db, { id: row.id, parentId: row.parent_id, workspacePath: row.workspace_path }),

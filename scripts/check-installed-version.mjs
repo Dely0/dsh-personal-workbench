@@ -44,11 +44,37 @@ function compare(left, right) {
   return 0
 }
 
-const profileDir = process.env.WORKBENCH_PROFILE_DIR
+/**
+ * 目标 profile 目录的解析（2026-10-01 补，plan.md V03）。
+ *
+ * 原来只认环境变量 `WORKBENCH_PROFILE_DIR`，默认 `~/.dsh/profiles/web`。
+ * 从桌面端会话里跑时，环境里那个变量可能指向 desktop —— 于是"装 web、核对 desktop"。
+ * 现在 `--profile-dir` 显式优先；调用方（scripts/dev-install.mjs / dev-verify.mjs）
+ * 一律显式传它，环境变量只作为人工直接调用时的兜底。
+ */
+function argValue(flag) {
+  const index = process.argv.indexOf(flag)
+  return index === -1 ? undefined : process.argv[index + 1]
+}
+
+const profileDir = argValue('--profile-dir')
+  ?? process.env.WORKBENCH_PROFILE_DIR
   ?? join(homedir(), '.dsh', 'profiles', 'web')
+
+/**
+ * 被核对的工作台数据库。
+ *
+ * `--db-path` 到位之前这里**永远**只看默认共享库 `~/.dsh/workbench/workbench.db`：
+ * 在独立测试 DB 的隔离 profile 上，这就等于核对错了库（真正的库是隔离的那个）。
+ */
+const dbPath = argValue('--db-path') ?? join(homedir(), '.dsh', 'workbench', 'workbench.db')
 
 const problems = []
 const notes = []
+
+// 0) 核对目标（装盘目录与数据库必须**显式**，避免"装 A、核对 B"）
+notes.push(`目标 profile  : ${profileDir}`)
+notes.push(`核对的数据库  : ${dbPath}`)
 
 // 1) 装盘版本
 const installedPath = join(profileDir, 'node_modules', ...PLUGIN.split('/'), 'package.json')
@@ -109,7 +135,6 @@ if (existsSync(lockPath)) {
 }
 
 // 4) 数据库 schema 与插件支持的 schema
-const dbPath = join(homedir(), '.dsh', 'workbench', 'workbench.db')
 let dbVersion
 if (existsSync(dbPath)) {
   try {

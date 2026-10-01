@@ -19,6 +19,29 @@ import {
 } from '../lib/db/repo.js'
 
 /**
+ * 删掉测试用的临时目录，并**在 Windows 上重试几次**。
+ *
+ * 现象（本机实测，且已用 `git checkout` 回到未改动源码复现过同一现象）：`mkdtempSync` 建目录
+ * → `openWorkbenchDb` 在里面建 WAL 库 → `db.close()` → 立刻 `rmSync`，偶发
+ * `EPERM: Permission denied`（目录本身删不掉）。**所有断言其实都跑过了**，失败只发生在
+ * `finally` 的清理里 —— 属于清理期假失败，与产品代码无关。
+ *
+ * 为什么不"忽略失败"：忽略会让临时目录越积越多；重试则在句柄释放后自然成功，
+ * 次数用尽仍失败就照旧抛（不吞异常）。
+ */
+function removeTempDir(dir) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      rmSync(dir, { recursive: true, force: true })
+      return
+    } catch (error) {
+      if (attempt >= 9) throw error
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50)
+    }
+  }
+}
+
+/**
  * 回归：子任务 type_code 非法时**不能静默丢弃**。
  *
  * 真实事故：提交 1 父任务 + 5 子任务，其中两项的 type_code 用了字典外的 `ops`
@@ -101,7 +124,7 @@ test('confirmTaskDraft reports invalid subtask codes instead of silently droppin
 
     db.close()
   } finally {
-    rmSync(dir, { recursive: true, force: true })
+    removeTempDir(dir)
   }
 })
 
@@ -137,18 +160,21 @@ test('db migrations, dictionaries and task tree', () => {
     // V2 daily plan: draft -> confirm -> persisted per date, replace & delete work
     const planDate = localDateString()
     const planTask = createTask(db, { title: 'plan target', typeCode: 'code_impl', priorityCode: 'p2' })
+    // 另一个**顶层**任务：同一父子链不能同时入计划（下面单独断言），所以计划里的第二条
+    // 必须是独立的一支，而不是 planTask 的子任务。
+    const sibling = createTask(db, { title: 'plan sibling', typeCode: 'code_impl', priorityCode: 'p2' })
     const planDraft = createDraft(db, { kindCode: 'daily_plan', sessionId: 's-plan', payload: { planDate, summary: '先清逾期', items: [{ taskId: planTask.id, order: 1, note: '先做' }] } })
     const plan = confirmDailyPlanDraft(db, planDraft.id)
     assert.equal(plan.planDate, planDate)
     assert.equal(plan.items.length, 1)
     assert.equal(getDailyPlan(db, planDate).summary, '先清逾期')
-    const planDraft2 = createDraft(db, { kindCode: 'daily_plan', sessionId: 's-plan-2', payload: { planDate, summary: '第二版', items: [{ taskId: task.id, order: 1, note: '' }] } })
+    const planDraft2 = createDraft(db, { kindCode: 'daily_plan', sessionId: 's-plan-2', payload: { planDate, summary: '第二版', items: [{ taskId: sibling.id, order: 1, note: '' }] } })
     confirmDailyPlanDraft(db, planDraft2.id)
-    assert.equal(getDailyPlan(db, planDate).items[0].taskId, task.id)
+    assert.equal(getDailyPlan(db, planDate).items[0].taskId, sibling.id)
     // V2 manual plan update: reorder/notes saved and source marked manual
     const updatedPlan = updateDailyPlan(db, planDate, { items: [
       { taskId: planTask.id, order: 1, note: '改到前面' },
-      { taskId: task.id, order: 2, note: '手动备注' },
+      { taskId: sibling.id, order: 2, note: '手动备注' },
     ] })
     assert.equal(updatedPlan.sourceCode, 'manual')
     assert.equal(updatedPlan.items.length, 2)
@@ -156,19 +182,56 @@ test('db migrations, dictionaries and task tree', () => {
     assert.equal(updatedPlan.items[0].note, '改到前面')
     assert.equal(updatedPlan.items[1].note, '手动备注')
     assert.equal(getDailyPlan(db, planDate).sourceCode, 'manual')
+    // 同一父子链（根 + 它的子任务）不能同时在计划里 —— 显式给出中文原因，不部分生效
+    assert.throws(
+      () => updateDailyPlan(db, planDate, { items: [
+        { taskId: planTask.id, order: 1, note: '' },
+        { taskId: task.id, order: 2, note: '' },
+      ] }),
+      /同一父子链/,
+    )
+    assert.equal(getDailyPlan(db, planDate).items.length, 2, '被拒的写入不得有部分生效')
     // validation: empty items and unknown task still throw; archived/closed tasks are allowed as plan records
     assert.throws(() => updateDailyPlan(db, planDate, { items: [] }), /at least one item/)
-    assert.throws(() => updateDailyPlan(db, planDate, { items: [{ taskId: 'no-such-task', order: 1 }] }), /unknown task/)
+    assert.throws(() => updateDailyPlan(db, planDate, { items: [{ taskId: 'no-such-task', order: 1 }] }), /不存在/)
     const donePlanTask = createTask(db, { title: 'done plan target', typeCode: 'code_impl', priorityCode: 'p2' })
+    const archivedPlanTask = createTask(db, { title: 'archived plan target', typeCode: 'code_impl', priorityCode: 'p2' })
+    // 先把两条排进计划（此刻它们都还 open——新增关闭项会被拒，见下面两条断言）
+    const beforeClose = updateDailyPlan(db, planDate, { items: [
+      { taskId: donePlanTask.id, order: 1, note: '保留已完成' },
+      { taskId: archivedPlanTask.id, order: 2, note: '保留已归档' },
+    ] })
+    assert.equal(beforeClose.items.length, 2)
+    // 新增关闭项 → 拒绝（"未知任务只拒绝新增"；既有关闭项才允许原样保留）
     updateTask(db, donePlanTask.id, { statusCode: 'done' })
-    const withDone = updateDailyPlan(db, planDate, { items: [{ taskId: donePlanTask.id, order: 1, note: '保留已完成' }] })
+    const freshDone = createTask(db, { title: 'fresh done', typeCode: 'code_impl', priorityCode: 'p2' })
+    updateTask(db, freshDone.id, { statusCode: 'done' })
+    assert.throws(
+      () => updateDailyPlan(db, planDate, { items: [
+        { taskId: donePlanTask.id, order: 1, note: '保留已完成' },
+        { taskId: freshDone.id, order: 2, note: '新增已完成' },
+      ] }),
+      /已完成/,
+    )
+    updateTask(db, archivedPlanTask.id, { archived: true })
+    const freshArchived = createTask(db, { title: 'fresh archived', typeCode: 'code_impl', priorityCode: 'p2' })
+    updateTask(db, freshArchived.id, { archived: true })
+    assert.throws(
+      () => updateDailyPlan(db, planDate, { items: [
+        { taskId: archivedPlanTask.id, order: 1, note: '保留已归档' },
+        { taskId: freshArchived.id, order: 2, note: '新增已归档' },
+      ] }),
+      /已归档/,
+    )
+    // 既有的已完成/已归档项：全量编辑时原样保留（历史记录，不许为了过滤而默默移除）
+    const withDone = updateDailyPlan(db, planDate, { items: [
+      { taskId: donePlanTask.id, order: 1, note: '保留已完成' },
+      { taskId: archivedPlanTask.id, order: 2, note: '保留已归档' },
+    ] })
     assert.equal(withDone.items[0].taskId, donePlanTask.id)
     assert.equal(withDone.items[0].note, '保留已完成')
-    const archivedPlanTask = createTask(db, { title: 'archived plan target', typeCode: 'code_impl', priorityCode: 'p2' })
-    updateTask(db, archivedPlanTask.id, { archived: true })
-    const withArchived = updateDailyPlan(db, planDate, { items: [{ taskId: archivedPlanTask.id, order: 1, note: '保留已归档' }] })
-    assert.equal(withArchived.items[0].taskId, archivedPlanTask.id)
-    assert.equal(withArchived.items[0].note, '保留已归档')
+    assert.equal(withDone.items[1].taskId, archivedPlanTask.id)
+    assert.equal(withDone.items[1].note, '保留已归档')
     const doneDraft = createDraft(db, { kindCode: 'daily_plan', sessionId: 's-done-plan', payload: { planDate, summary: '含已完成任务', items: [{ taskId: donePlanTask.id, order: 1 }] } })
     const confirmedDonePlan = confirmDailyPlanDraft(db, doneDraft.id)
     assert.equal(confirmedDonePlan.items[0].taskId, donePlanTask.id)
@@ -237,7 +300,7 @@ test('db migrations, dictionaries and task tree', () => {
     assert.deepEqual(tasks[0].extra.sourceIdeaIds, [i1.id])
     db.close()
   } finally {
-    rmSync(dir, { recursive: true, force: true })
+    removeTempDir(dir)
   }
 })
 
@@ -276,7 +339,7 @@ test('effective due date dynamically inherits nearest ancestor due', () => {
 
     db.close()
   } finally {
-    rmSync(dir, { recursive: true, force: true })
+    removeTempDir(dir)
   }
 })
 
@@ -327,7 +390,7 @@ test('status cascade aggregation, repair and shared memory', () => {
     assert.equal(listTaskMemories(db, { taskId: leaf1.id }).length, 1)
     db.close()
   } finally {
-    rmSync(dir, { recursive: true, force: true })
+    removeTempDir(dir)
   }
 })
 
@@ -376,7 +439,7 @@ test('subtask_plan confirm is idempotent and preserves estimated_minutes', () =>
 
     db.close()
   } finally {
-    rmSync(dir, { recursive: true, force: true })
+    removeTempDir(dir)
   }
 })
 
@@ -402,7 +465,7 @@ test('idea_tasks confirm preserves estimated_minutes written in snake_case', () 
 
     db.close()
   } finally {
-    rmSync(dir, { recursive: true, force: true })
+    removeTempDir(dir)
   }
 })
 
@@ -451,7 +514,7 @@ test('archiving a task hides its descendants from the active list but keeps them
 
     db.close()
   } finally {
-    rmSync(dir, { recursive: true, force: true })
+    removeTempDir(dir)
   }
 })
 
@@ -488,7 +551,7 @@ test('effective workspace path dynamically inherits nearest ancestor workspace',
 
     db.close()
   } finally {
-    rmSync(dir, { recursive: true, force: true })
+    removeTempDir(dir)
   }
 })
 
@@ -593,6 +656,6 @@ test('改父任务：写库 / 移到顶层 / 防环守卫 / 审计事件 / 继�
   } finally {
     // 断言失败时也要先关库：Windows 下句柄没释放会让 rmSync 抛 EPERM，把真正的失败原因盖掉。
     try { db?.close() } catch { /* 已经关过就算了 */ }
-    rmSync(dir, { recursive: true, force: true })
+    removeTempDir(dir)
   }
 })

@@ -55,6 +55,22 @@ function buildOpenQuickEntry() {
     const setQuickWorkspaceTouched = (value) => { state.quickWorkspaceTouched = value }
     const setQuickFollowFolder = (value) => { state.quickFollowFolder = value }
     const setShowQuick = (value) => { state.showQuick = value }
+    /*
+     * 角色复位（T4/D13-B）：openQuickEntry 里新增了「每次打开都把角色复位成未指定」。
+     * 本文件测的是**工作区预填**，所以这里只提供一个同形的桩（记进 state 便于断言），
+     * 不断言它的语义 —— 角色那条线在 test/personaWiring.test.mjs。
+     */
+    const INHERIT_PERSONA = { mode: 'inherit' }
+    const setQuickPersona = (value) => { state.quickPersona = value }
+    /*
+     * 技能复位（2026-10-01）：openQuickEntry 里新增了「每次打开把技能选择清空 + 拉一次目录」
+     * （用户反馈"快速录入无法选择 Skill"的另一半 —— 原来快速录入从不加载技能目录）。
+     * 本文件只测**工作区预填**，所以同样给同形桩，不断言它的语义；
+     * 技能那条线的判据在 test/quickIntakeClient.test.mjs。
+     */
+    const setSelectedSkills = (value) => { state.selectedSkills = value }
+    const setSkillQuery = (value) => { state.skillQuery = value }
+    const loadSkills = () => Promise.resolve()
     const applyQuickWorkspaceDecision = (decided, autoCreateTypeFolders) => {${applyBody}}
     return () => {${openBody}}
   `)

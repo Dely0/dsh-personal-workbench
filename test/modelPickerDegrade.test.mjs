@@ -181,7 +181,7 @@ test('BUG1-B3：拿不到目录 + 有残留选择 ⇒ 菜单必须退化并**说
 })
 
 test('BUG1-B4（审查 F2）：清空出口的判据只有一处 —— 门禁从菜单判定读，不自己看 hasSelection', () => {
-  const source = read('src/client/index.tsx')
+  const source = read('src/client/components/ModelPicker.tsx')
   const code = stripComments(source)
   /** 门禁那一次调用的实参块（到该调用闭合的 `})` 为止）。 */
   const gateCall = /gateModelPicker\(\{([\s\S]*?)\n    \}\)/.exec(code)
@@ -302,15 +302,25 @@ const stripComments = (source) => source
   .replace(/\/\*[\s\S]*?\*\//g, ' ')
   .replace(/(^|[^:])\/\/.*$/gm, '$1 ')
 
-test('接线：index.tsx 的快速录入降级路径不许 throw，且选择器保留出口', () => {
-  const source = read('src/client/index.tsx')
-  const code = stripComments(source)
+test('接线：提交路径的降级不许 throw，且选择器保留出口', () => {
+  /**
+   * 2026-10-01 抽组件后的分工：
+   * - **提交路径**（应用模型 / 降级）仍在 `index.tsx`；
+   * - **门禁与成因**（`gateModelPicker` / `modelDirectoryUnavailableReason`）随组件搬进
+   *   `components/ModelPicker.tsx`。
+   * 所以这条断言要读**两个**文件，各查各的那一半 —— 不是放宽，是不再把两个文件的
+   * 实现混在一起扫（否则任何一次搬家都会假红，而假红正是我们最贵的成本）。
+   */
+  const submitSource = read('src/client/index.tsx')
+  const gateSource = read('src/client/components/ModelPicker.tsx')
+  const submitCode = stripComments(submitSource)
+  const gateCode = stripComments(gateSource)
   assert.equal(
-    source.includes('无法为快速录入切换模型'), false,
-    '那条"抛错中断整条快速录入"的写法必须消失（验收标准 1）',
+    submitSource.includes('无法为快速录入切换模型'), false,
+    '那条"抛错中断整条流程"的写法必须消失（验收标准 1）',
   )
   assert.ok(
-    code.includes('selectionToApply('),
+    submitCode.includes('selectionToApply('),
     '提交路径必须走纯判据 selectionToApply（否则"不抛错"就只是换了个地方写死）',
   )
   /**
@@ -319,12 +329,12 @@ test('接线：index.tsx 的快速录入降级路径不许 throw，且选择器�
    * 用户看到的却是一句空泛的"当前拿不到模型列表" —— 只有源码扫描拦得住。
    */
   assert.match(
-    code,
+    gateCode,
     /gateModelPicker\(\{\s*hasDirectory: outcome\.ok,\s*sessionId: directorySessionId,\s*unavailableReason: reason,/,
     '门禁的成因必须来自 modelDirectoryUnavailableReason（唯一实现），不许在调用点另写一句',
   )
   assert.match(
-    code,
+    gateCode,
     /const reason = outcome\.ok \? '' : modelDirectoryUnavailableReason\(outcome\)/,
     '成因的唯一来源就是这个纯函数',
   )
@@ -337,16 +347,16 @@ test('接线：index.tsx 的快速录入降级路径不许 throw，且选择器�
    * （实测：把 `clearExitReachable` 写死成 `false` 时纯函数单测 14/14 全绿）。
    */
   assert.match(
-    code,
-    /clearExitReachable: quickModelSelection !== null,/,
+    submitCode,
+    /clearExitReachable: modelSelection !== null,/,
     '有残留选择时提示必须告诉用户出口在哪',
   )
   assert.equal(
-    /new Notification\(/.test(code), false,
+    /new Notification\(/.test(submitCode), false,
     '系统通知的发送必须唯一走 sendSystemNotification（可观测）；不许在组件里裸 new Notification',
   )
   assert.equal(
-    /Notification\.requestPermission\(/.test(code), false,
+    /Notification\.requestPermission\(/.test(submitCode), false,
     '请求授权必须唯一走 requestNotificationPermission（不支持的客户端会抛 TypeError）',
   )
 })

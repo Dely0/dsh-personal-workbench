@@ -1,383 +1,153 @@
+/**
+ * 接线不变量（源码级扫描）—— T2/D09、AX-C06、AX-G02。
+ *
+ * 本项目最大的 bug 类别是"同一个语义被独立计算多次"：本次改造把「当日候选」
+ * 收进 `src/shared/dailyPlanPolicy.ts`，而它有三个消费点（AI 排序 / 手动池 /
+ * 容量未排入区）。**"不存在第二处实现"只能用扫描证明**，所以这里逐条钉住：
+ *
+ * 1. 候选判定只有 `planCandidates` 一份实现；
+ * 2. `index.tsx` 不再内联"今天到期/doing/无截止"那套 filter，也不再 `.slice(0, 30)`；
+ * 3. 30 条上限只有 `selectPromptCandidates` 一份，且 `dailyPlanPrompt.ts` 不自己 slice；
+ * 4. `client/capacity.ts` 变成薄接线：不求和、不判 open、不内联默认耗时；
+ * 5. 容量组件不自己 reduce，面板拿到的候选就是共享函数的输出。
+ *
+ * 绝不断言行号（本项目明确禁止脆行号断言），只按符号与调用点断言。
+ */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { MAX_ESTIMATE_MINUTES, DEFAULT_ESTIMATE_MINUTES } from '../lib/client/capacity.js'
 
 /**
- * 接线不变量（源码级扫描 + 源码抽取行为断言）。
- *
- * 纯函数由 `test/capacity.test.mjs` 逐条测；这里只锁**接线**上那些
- * "删掉也不会报错、但会让功能悄悄退化"的点 —— 本项目规范要求
- * 「政策要变成会失败的测试，不要写成注释」。
- *
- * 其中 M10（memo 依赖塞回 `now`）、M11（payload 丢 `estimatedMinutes`）、
- * M12（editDraft 初值改常量）都是"接线类"缺陷：纯函数全绿，功能照样坏。
- * 所以它们必须有**源码级**断言守着，`scripts/repro/probe-capacity-mutations.mjs`
- * 会把这三条变异装回去验证它们真的会变红。
- */
-/**
  * ⚠️ 行尾归一化：Windows 检出是 CRLF，而下面所有片段/正则是按 `\n` 写的。
- * 不归一化就会出现"片段明明在源码里、`includes` 却说不存在"的假红（本项目已踩过一次）。
+ * 不归一化就会出现"片段明明在源码里、`includes` 却说不存在"的假红。
  */
-const indexSource = readFileSync('src/client/index.tsx', 'utf8').replace(/\r\n/g, '\n')
-const capacitySource = readFileSync('src/client/capacity.ts', 'utf8').replace(/\r\n/g, '\n')
-const settingsSource = readFileSync('src/client/components/SettingsModal.tsx', 'utf8').replace(/\r\n/g, '\n')
-const panelSource = readFileSync('src/client/components/CapacityRulePanel.tsx', 'utf8').replace(/\r\n/g, '\n')
+const read = (path) => readFileSync(path, 'utf8').replace(/\r\n/g, '\n')
+const indexSource = read('src/client/index.tsx')
+const capacitySource = read('src/client/capacity.ts')
+const policySource = read('src/shared/dailyPlanPolicy.ts')
+const promptSource = read('src/client/dailyPlanPrompt.ts')
+const panelSource = read('src/client/components/CapacityRulePanel.tsx')
+const planPanelSource = read('src/client/components/PlanPanel.tsx')
 
 /** 去掉注释：避免"注释里提到某个写法"被当成代码里的实现/第二处实现。 */
 function stripComments(source) {
   return source.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/^[ \t]*\/\/.*$/gm, '').replace(/([^:])\/\/.*$/gm, '$1')
 }
 
-/** 抽出 `computeTodayCapacity` 那次 `useMemo` 的依赖数组字面量。 */
-function memoDepsLiteral(source) {
-  const callStart = source.indexOf('computeTodayCapacity(')
-  assert.ok(callStart > 0, 'index.tsx 里应该有 computeTodayCapacity 的调用')
-  // 依赖数组是 useMemo 的第二个实参：调用结束（`}),`）之后紧跟的那个 `[`
-  const callEnd = source.indexOf('}),', callStart)
-  assert.ok(callEnd > callStart, '找不到 useMemo 调用的结束位置')
-  const open = source.indexOf('[', callEnd)
-  const close = source.indexOf(']', open)
-  assert.ok(open > callEnd && close > open, '依赖数组应是一段字面量')
-  return source.slice(open + 1, close)
-}
+// ---------------------------------------------------------------------------
+// 唯一实现
+// ---------------------------------------------------------------------------
 
-/** 抽出 `computeTodayCapacity({...})` 那一段实参源码。 */
-function capacityCallLiteral(source) {
-  const start = source.indexOf('computeTodayCapacity(')
-  assert.ok(start > 0, '调用存在')
-  const end = source.indexOf('}),', start)
-  assert.ok(end > start, '调用实参可定位')
-  return source.slice(start, end)
-}
+test('AX-G02 候选判定只有一份实现：dailyPlanPolicy.ts 导出，client 只是接线', () => {
+  assert.match(policySource, /export function planCandidates\(/, '权威实现必须在共享模块里')
+  assert.equal((policySource.match(/export function planCandidates\(/g) ?? []).length, 1)
+  // 客户端不许再定义自己的候选函数
+  assert.doesNotMatch(capacitySource, /export function planCandidates\(/)
+  assert.doesNotMatch(indexSource, /function planCandidates\(/)
+})
 
-/** 抽出 `saveEditDraft` 的**函数体**（这次调用的范围，不含后面的函数）。 */
-function saveEditDraftBody(source) {
-  const start = source.indexOf('const saveEditDraft = async (): Promise<void> => {')
-  assert.ok(start > 0, 'saveEditDraft 存在')
-  // 以它之后第一个 `\n  }\n` 作为函数体结束（组件内所有成员都是两级缩进）
-  const end = source.indexOf('\n  }\n', start)
-  assert.ok(end > start, 'saveEditDraft 函数体结束位置可定位')
-  return source.slice(start, end)
-}
-
-test('唯一实现：容量算法只有 capacity.ts 一份，index.tsx 不再自己算', () => {
+test('AX-G02 index.tsx 不再内联"今天到期/doing/无截止"那套候选 filter', () => {
   const code = stripComments(indexSource)
-  // 旧内联块的特征符号必须彻底消失（`?? 30` 逐处求和就是"第二份实现"的样子）
-  assert.doesNotMatch(code, /capacityPlanned|capacityByPriority|capacityTotal|capacityFromPlan/, '旧的 4 处内联求和必须彻底删掉')
-  assert.doesNotMatch(code, /capacityTodayTasks/, '旧的"先筛一遍再求和"必须删掉')
-  assert.equal((code.match(/computeTodayCapacity\(/g) ?? []).length, 1, '唯一调用点')
-  assert.match(capacitySource, /export function computeTodayCapacity/, '权威实现在纯函数模块里')
-  /**
-   * ⚠️ 这里**不**断言"全文搜不到 `estimatedMinutes ??`"：AI 计划提示词里有一处
-   * `${t.estimatedMinutes ?? '未知'}`，那是**给模型看的文案兜底**，不是容量口径。
-   * 断言把两者混为一谈就会为了让它变绿而去改一段无关代码 —— 库里已有的教训是
-   * "别拿一个过宽的正则当政策"。所以这里锁的是**容量段自己的形状**：
-   * 唯一调用点 + 容量块里没有逐处求和。
-   */
-  const capacityBlock = code.slice(code.indexOf('const capacity = useMemo'), code.indexOf('const saveDailyCapacity'))
-  assert.doesNotMatch(capacityBlock, /estimatedMinutes/, '容量计算结果只能来自纯函数，页面里不许再碰这个字段')
-  assert.doesNotMatch(capacityBlock, /\.reduce\(|\.filter\(/, '页面里不许再自己算一遍（只调用纯函数）')
+  // 旧实现的特征：按 effectiveDueAt 与 planDayEnd 比较、以及"今天且无截止"这条腿
+  assert.doesNotMatch(code, /planDayEnd\.getTime\(\)/, '不许再内联按截止过滤的候选公式')
+  assert.doesNotMatch(code, /planCandidates\b(?!Info|For)/, '不许再内联名为 planCandidates 的过滤结果')
+  assert.match(code, /todayPlanCandidates\(/, '候选必须走共享函数（经 client/capacity.ts 接线）')
 })
 
-test('接线：memo 依赖数组不含 now，改用日期字符串（否则每帧失效）', () => {
-  const deps = memoDepsLiteral(indexSource)
-  // 只要出现独立的 `now` 标识符就算退化（`capacityTodayKey(now)` 里那个被括号包住，不算独立）
-  const bareNow = deps.split(',').map((part) => part.trim()).filter((part) => part === 'now')
-  assert.deepEqual(bareNow, [], `依赖数组里不许直接放 now：${deps.trim()}`)
-  assert.match(deps, /capacityTodayKey\(now\)/, '用日字符串代替 now（跨天才变）')
-  assert.match(capacitySource, /export function capacityTodayKey/, '派生函数在纯函数模块里')
+test('AX-C02 30 条上限只有一份：selectPromptCandidates；调用点不许自己 slice', () => {
+  assert.match(policySource, /export function selectPromptCandidates\(/)
+  // 共享模块里除"定义"外**只允许**在 planCandidates 附近出现；客户端不许再实现一遍
+  assert.doesNotMatch(stripComments(capacitySource), /selectPromptCandidates/)
+  assert.match(promptSource, /selectPromptCandidates\(/, '提示词模块必须复用共享的截断口径')
+  assert.doesNotMatch(stripComments(promptSource), /\.slice\(0, *30\)/, '提示词模块不许自己截断')
+  assert.doesNotMatch(stripComments(capacitySource), /slice\(0, *30\)/, '容量接线不许截断候选')
+  assert.doesNotMatch(stripComments(indexSource), /slice\(0, *30\)/, 'index.tsx 不许再静默截断候选')
+  assert.equal((stripComments(policySource).match(/\.slice\(0, safeLimit\)/g) ?? []).length, 1, '截断只许有一处')
 })
 
-test('接线：传的是全量列表，过滤在函数内做（同一语义不许两处算）', () => {
-  const call = capacityCallLiteral(indexSource)
-  assert.match(call, /tasks: \[\.\.\.tasks, \.\.\.archivedTasks\]/, '传入任务全集')
-  assert.doesNotMatch(call, /\.filter\(/, '调用点不许自己先滤一遍')
-  assert.match(capacitySource, /if \(task\.archived === true\) continue/, '归档过滤在函数内')
-  assert.match(capacitySource, /task\.statusCode === 'done' \|\| task\.statusCode === 'cancelled'\) continue/, 'done/cancelled 过滤在函数内')
+test('AX-C02 截断提示必须同时出现在提示词与发起窗口（不宣称全量）', () => {
+  // 唯一的提示文案在共享模块里（"另有 N 条未列出"），提示词模块只负责把它贴进 prompt
+  assert.match(policySource, /另有 \$\{omitted\} 条未列出/)
+  assert.match(promptSource, /\$\{notice\} —— 未列出的条目/)
+  assert.match(promptSource, /不要声称已对全量做排序/)
+  assert.match(indexSource, /todayPromptInfo\.truncated/)
+  assert.match(indexSource, /pickedPromptInfo\.truncated/)
 })
 
-test('死字段已删：`capacity.count` / `planCovered` 在 src/ 里 0 次出现', () => {
-  const code = stripComments(indexSource)
-  assert.doesNotMatch(code, /planCovered/, 'planCovered 从未被读取，已删')
-  assert.doesNotMatch(code, /capacity\.count/, 'capacity.count 从未被读取，已删')
+test('AX-C06 客户端容量接线是薄的：不求和、不判 open、不内联默认耗时', () => {
+  const code = stripComments(capacitySource)
+  assert.doesNotMatch(code, /if \(task\.archived === true\) continue/, '归档过滤必须在共享函数里')
+  assert.doesNotMatch(code, /statusCode === 'done'/, 'open 判定必须复用共享函数')
+  assert.doesNotMatch(code, /estimatedMinutes \?\? 30/, '默认投入取值必须在共享函数里')
+  assert.doesNotMatch(code, /\breduce\(/, '容量接线不许自己求和')
+  assert.match(code, /computeCapacityLedger\(/, '唯一实现是共享模块的 computeCapacityLedger')
 })
 
-test('settings 初值补齐两个新键（漏了就是 undefined → 容量算成 NaN）', () => {
-  const start = indexSource.indexOf('useState<WorkbenchSettings>(')
-  assert.ok(start > 0, 'settings 初值存在')
-  const literal = indexSource.slice(start, indexSource.indexOf('})', start))
-  assert.match(literal, /defaultEstimateMinutes:/, '初值必须含 defaultEstimateMinutes')
-  assert.match(literal, /dailyCapacityIncludeOverdue:/, '初值必须含 dailyCapacityIncludeOverdue')
-  // 初值用共享常量而不是再写一个字面量 30，避免"常量改了初值没改"
-  assert.match(literal, /defaultEstimateMinutes: DEFAULT_ESTIMATE_MINUTES/)
-})
-
-/**
- * `saveEditDraft` 是 4986 行组件里的**闭包**，`node --test` 导入不了 `index.tsx`
- * （它碰 `window`），所以沿用本项目既有的"从源码逐字抽出函数体 + 注入桩"的做法。
- * 抽不到就显式失败 —— 那说明接线改名了，测试必须跟着更新，而不是静默全绿。
- */
-function extractSaveEditDraft() {
-  const start = indexSource.indexOf('const saveEditDraft = async (): Promise<void> => {')
-  assert.ok(start > 0, 'saveEditDraft 源码存在（抽不到即接线改名，需同步本测试）')
-  const end = indexSource.indexOf('\n  }\n', start)
-  assert.ok(end > start, 'saveEditDraft 函数体结束位置可定位')
-  /**
-   * 抽出来的是 **TypeScript** 源码，而 `new Function` 跑的是 JS —— 必须先把
-   * 类型注解去掉（`async (): Promise<void> =>`），否则构造时就 `SyntaxError`，
-   * 表现是"三条测试全报 Unexpected token ':'"，很容易被误读成产品代码坏了。
-   */
-  return indexSource
-    .slice(start, end + 4)
-    .replace('async (): Promise<void> =>', 'async () =>')
-    .replace('const payload: Record<string, unknown> =', 'const payload =')
-}
-
-/** 把抽出来的源码包成真函数：注入它实际用到的那几个外部符号。 */
-function makeSaveEditDraft({ editDraft, selected, settings, patchTask, setTasks, setEditDraft, pushToast }) {
-  const body = extractSaveEditDraft()
-  // 文案函数与常量来自模块作用域：常量用**真值**（import 自 lib），
-  // 文案函数用同构复刻（`index.tsx` 碰 window，测试里 import 不了它）
-  const estimateRangeMessage = (defaultMinutes) => `耗时必须是 1–1440 之间的整数（留空表示用默认 ${defaultMinutes} 分钟）`
-  // eslint-disable-next-line no-new-func -- 测试专用：跑的是仓库里的真实源码
-  return new Function(
-    'editDraft', 'selected', 'settings', 'patchTask', 'setTasks', 'setEditDraft', 'pushToast',
-    'MAX_ESTIMATE_MINUTES', 'DEFAULT_ESTIMATE_MINUTES', 'estimateRangeMessage',
-    `${body}\nreturn saveEditDraft`,
-  )(editDraft, selected, settings, patchTask, setTasks, setEditDraft, pushToast,
-    MAX_ESTIMATE_MINUTES, DEFAULT_ESTIMATE_MINUTES, estimateRangeMessage)
-}
-
-const BASE_DRAFT = {
-  title: '任务标题',
-  description: '描述',
-  typeCode: 'code_impl',
-  priorityCode: 'p2',
-  statusCode: 'todo',
-  aiPolicyCode: 'consult',
-  dueLocal: '',
-  workspacePath: '',
-  recurrenceCode: 'none',
-  parentId: '',
-  estimatedMinutes: '90',
-  allDay: false,
-}
-
-function draftOf(overrides = {}) {
-  return { ...BASE_DRAFT, ...overrides }
-}
-
-async function runSave(editDraft, { patchFails = false } = {}) {
-  const calls = []
-  const toasts = []
-  const taskUpdates = []
-  const save = makeSaveEditDraft({
-    editDraft,
-    selected: { task: { id: 'task-1', recurrenceMasterId: null } },
-    settings: { defaultEstimateMinutes: 30 },
-    patchTask: async (id, payload) => {
-      if (patchFails) throw new Error('服务端拒绝')
-      calls.push({ id, payload })
-    },
-    setTasks: (updater) => { taskUpdates.push(updater) },
-    setEditDraft: () => {},
-    pushToast: (message, tone) => { toasts.push({ message, tone }) },
-  })
-  await save()
-  return { calls, toasts, taskUpdates }
-}
-
-/** 用乐观更新的更新函数去跑一遍本地列表，看它到底把哪条改成了什么。 */
-function applyOptimistic(taskUpdates, task) {
-  const list = [task, { id: 'other', estimatedMinutes: 15, allDay: false }]
-  return taskUpdates[0](list)
-}
-
-test('payload 真的带 estimatedMinutes 与 allDay（桩收到的实参，不是形态扫描）', async () => {
-  const { calls } = await runSave(draftOf({ estimatedMinutes: '90', allDay: true }))
-  assert.equal(calls.length, 1, '合法输入必须发一次请求')
-  assert.equal(calls[0].payload.estimatedMinutes, 90, 'payload.estimatedMinutes 必须是数字 90')
-  assert.equal(calls[0].payload.allDay, true, 'payload.allDay 必须带上')
-  // 留空 → null（= 没填，走默认耗时），不是 0、不是 NaN
-  const blank = await runSave(draftOf({ estimatedMinutes: '' }))
-  assert.equal(blank.calls[0].payload.estimatedMinutes, null, '留空 → null')
-  const alsoBlank = await runSave(draftOf({ estimatedMinutes: '   ' }))
-  assert.equal(alsoBlank.calls[0].payload.estimatedMinutes, null, '纯空格也算留空')
-})
-
-test('耗时输入非法时就地报错并阻止保存（不发请求，不靠服务端 400 猜）', async () => {
-  for (const bad of ['0', '-5', '2000', 'abc', '1441', '1.5abc']) {
-    const { calls, toasts } = await runSave(draftOf({ estimatedMinutes: bad }))
-    assert.equal(calls.length, 0, `非法值 ${bad} 不许发请求`)
-    assert.equal(toasts.length, 1, `非法值 ${bad} 必须给一条行内提示`)
-    assert.equal(toasts[0].tone, 'error', '必须报错而不是静默')
-    assert.match(toasts[0].message, /1–1440|1-1440/, '提示要写清合法区间')
-  }
-  // 合法的边界值必须放行
-  for (const [raw, want] of [['1', 1], ['1440', 1440], ['30', 30]]) {
-    const { calls } = await runSave(draftOf({ estimatedMinutes: raw }))
-    assert.equal(calls.length, 1, `合法值 ${raw} 必须放行`)
-    assert.equal(calls[0].payload.estimatedMinutes, want)
-  }
-  // 小数四舍五入（用户拖 number 输入框的步进值可能带小数）
-  const rounded = await runSave(draftOf({ estimatedMinutes: '90.6' }))
-  assert.equal(rounded.calls[0].payload.estimatedMinutes, 91, '小数四舍五入')
-})
-
-test('乐观更新：保存成功后立刻改本地列表（不刷新就能看到「已排」跟着变）', async () => {
-  const { calls, taskUpdates } = await runSave(draftOf({ estimatedMinutes: '90', allDay: true }))
-  assert.equal(calls.length, 1)
-  assert.equal(taskUpdates.length, 1, '成功后必须调一次 setTasks（乐观更新）')
-  const next = applyOptimistic(taskUpdates, { id: 'task-1', estimatedMinutes: null, allDay: false, title: 't' })
-  assert.deepEqual(
-    next.find((t) => t.id === 'task-1'),
-    { id: 'task-1', estimatedMinutes: 90, allDay: true, title: 't' },
-    '被编辑的那条要立刻变成新值（其余字段不动）',
-  )
-  assert.deepEqual(
-    next.find((t) => t.id === 'other'),
-    { id: 'other', estimatedMinutes: 15, allDay: false },
-    '别的任务不能被顺手改掉',
-  )
-  // 幂等：再跑一次同样的更新，结果一致
-  const again = taskUpdates[0](next)
-  assert.deepEqual(again, next, '同一个更新函数重复应用结果一致')
-  // 失败路径不乐观更新：否则界面会显示一个服务端并没有接受的值
-  const failed = await runSave(draftOf({ estimatedMinutes: '90' }), { patchFails: true })
-  assert.equal(failed.taskUpdates.length, 0, '保存失败时不许乐观更新')
-  assert.equal(failed.toasts.length, 1)
-  assert.equal(failed.toasts[0].tone, 'error')
-})
-
-test('editDraft 初值来自 task.estimatedMinutes / task.allDay，不是常量', () => {
-  const start = indexSource.indexOf('setEditDraft({ title: selected.task.title')
-  assert.ok(start > 0, '编辑按钮里的 setEditDraft 初始化存在（抽不到即接线改名）')
-  const init = indexSource.slice(start, indexSource.indexOf('}))', start))
-  assert.match(init, /estimatedMinutes: selected\.task\.estimatedMinutes === null \? '' : String\(selected\.task\.estimatedMinutes\)/, '耗时初值取自任务（未填 → 空串）')
-  assert.match(init, /allDay: selected\.task\.allDay/, '全天初值取自任务')
-})
-
-test('新建任务表单也补了同一组字段（同一字段两个入口，不许两套说法）', () => {
-  const form = indexSource.slice(indexSource.indexOf('id="wb-new-task-form"'), indexSource.indexOf('</form>', indexSource.indexOf('id="wb-new-task-form"')))
-  assert.ok(form.length > 0, '新建任务表单存在')
-  assert.match(form, /name="estimatedMinutes"/, '新建表单也要能设耗时')
-  assert.match(form, /name="allDay"/, '新建表单要能设全天')
-  assert.match(indexSource, /allDay: form\.get\('allDay'\) !== null/, 'createTask 的 payload 要带上 allDay')
-  assert.match(indexSource, /estimatedMinutes, allDay: form\.get\('allDay'\)/, 'createTask 的 payload 要带上 estimatedMinutes')
-})
-
-/**
- * 「服务端还没重启」的过渡态（真机实测踩到的缺陷，不是假想）。
- *
- * 装盘完成、宿主还没重启的那段时间里，宿主跑的是**旧的服务端代码**：
- * `GET /api/workbench/settings` 的响应里没有 `defaultEstimateMinutes` /
- * `dailyCapacityIncludeOverdue`。旧写法 `setSettings(r.settings)` 会把新键冲成 `undefined`，
- * 界面于是显示「预计耗时：默认 **undefined** 分钟（未单独设置）」——
- * 真机脚本第一次跑就把这句话逮住了。
- *
- * 这里锁住两件事：① 从服务端 hydrate 的地方**都**过 `withSettingsFallback`；
- * ② 缺失的键被补成缺省值（30 / false），且**不覆盖**服务端明确给出的值。
- */
-test('settings 从服务端 hydrate 时补兜底：缺字段不许把界面渲染成 undefined', () => {
-  /**
-   * 用"数出现次数"而不是正则抽调用：`setSettings((prev) => ({ ...prev, x: y }))` 里有多层括号，
-   * 正则很容易截错。⚠️ 必须先剥注释 —— 上面 `withSettingsFallback` 的文档注释里就写了
-   * `setSettings(r.settings)` 这个"旧写法示例"，不剥注释会多数出一处（我第一版就多数了 1 处）。
-   * 两类调用点分别数清：
-   * - 服务端回填：`setSettings(withSettingsFallback(res.settings))` / `... (r.settings))`
-   * - 局部 patch：`setSettings((prev) => ...)`（不经服务端，不需要兜底）
-   */
-  const code = stripComments(indexSource)
-  const fromServer = (code.match(/setSettings\(withSettingsFallback\((res|r)\.settings\)\)/g) ?? []).length
-  const localPatch = (code.match(/setSettings\(\(prev\) =>/g) ?? []).length
-  const total = (code.match(/setSettings\(/g) ?? []).length
-  assert.ok(fromServer >= 3, `服务端回填的调用点应至少 3 处（初次加载 + 记住路径 + 不再记住），实际 ${fromServer}`)
-  assert.ok(localPatch >= 3, `局部 patch 的调用点应至少 3 处，实际 ${localPatch}`)
-  assert.equal(fromServer + localPatch, total,
-    `每个 setSettings 调用点都必须是「过兜底的服务端回填」或「局部 patch」，实际 ${total} 处里有 ${total - fromServer - localPatch} 处两者都不是`)
-  // 兜底函数本身的行为
-  const start = code.indexOf('function withSettingsFallback(')
-  assert.ok(start > 0, 'withSettingsFallback 存在')
-  const body = code.slice(start, code.indexOf('\n}', start))
-  assert.match(body, /defaultEstimateMinutes: settings\.defaultEstimateMinutes \?\?/, '缺 defaultEstimateMinutes 要补')
-  assert.match(body, /dailyCapacityIncludeOverdue: settings\.dailyCapacityIncludeOverdue \?\?/, '缺 dailyCapacityIncludeOverdue 要补')
-  // 用 `??` 而不是 `||`：`||` 会把服务端明确给出的 0/false 也当成"没给"从而改写用户设置
-  assert.doesNotMatch(body, /\|\|/, '兜底只能用 ??（用 || 会改写服务端明确给出的 0/false）')
-})
-
-test('设置页有两个新控件的入口（默认耗时 + 逾期口径）', () => {
-  assert.match(settingsSource, /defaultEstimateMinutes/, '设置页要有默认耗时控件')
-  assert.match(settingsSource, /dailyCapacityIncludeOverdue/, '设置页要有逾期口径开关')
-})
-
-/**
- * ── 面板接线（P2）───────────────────────────────────────────────────────────
- * `test/capacityPanel.test.mjs` 用真渲染断言"页面上显示了什么"；
- * 这里锁**接线**：props 有没有真的把账本两半与计数传下去、面板有没有自己算第二遍。
- */
-
-test('面板 props：账本两半与三个计数都要传下去（少一个就是"新 aria-label 没有数据可用"）', () => {
-  const start = indexSource.indexOf('<CapacityRulePanel')
-  assert.ok(start > 0, '面板已接线')
-  const call = indexSource.slice(start, indexSource.indexOf('/>', start))
-  for (const prop of ['capacity={capacity}', 'defaultEstimateMinutes={settings.defaultEstimateMinutes}', 'includeOverdue={settings.dailyCapacityIncludeOverdue}', 'onIncludeOverdueChange=']) {
-    assert.ok(call.includes(prop), `面板 props 缺 ${prop}：${call.trim()}`)
-  }
-  // 三个计数与账本两半都在 capacity 对象里（由纯函数产出），面板只读它
-  for (const field of ['included', 'overdueExcluded', 'dueTodayCount', 'noDueDoingCount', 'fallbackCount']) {
-    assert.match(capacitySource, new RegExp(`${field}[,:]`), `CapacityResult 必须显式给 ${field}`)
-  }
-})
-
-test('面板不自己算：组件里没有求和/过滤容量任务的地方', () => {
+test('AX-C06 容量组件只吃 props：不 reduce、不自己判今天到期', () => {
   const code = stripComments(panelSource)
-  /**
-   * 断言范围只取**组件函数体**（`export function CapacityRulePanel` 到文件末尾）。
-   * 为什么：props 的**类型声明**里有 `defaultEstimateMinutes` 这类字段名，
-   * 那是"接口形状"不是"第二份实现"。把整份文件当组件体断言，就会为了让它变绿
-   * 而去改类型名 —— 过宽的断言会逼出错误的改动。
-   */
-  const body = code.slice(code.indexOf('export function CapacityRulePanel('))
-  assert.ok(body.length > 0, '组件函数体可定位')
-  assert.doesNotMatch(body, /estimatedMinutes/, '组件体不许碰这个字段（读它就是要自己算）')
-  assert.doesNotMatch(body, /\.reduce\(/, '组件体不许自己求和（唯一权威源是纯函数）')
-  assert.doesNotMatch(body, /Date\.parse\(/, '组件体不许自己判"今天到期"')
+  assert.doesNotMatch(code, /\.reduce\(/, '面板不许再算合计')
+  assert.doesNotMatch(code, /effectiveDueAt/, '面板不许自己判到期/逾期')
+  assert.doesNotMatch(code, /estimatedMinutes/, '面板不许自己取估时')
+  assert.match(code, /capacity\.plannedItems/, '账本直接渲染纯函数给的明细')
+  assert.match(code, /capacity\.unscheduled/, '未排入区直接渲染纯函数给的候选')
 })
 
-test('面板开关写回 settings（唯一权威源），不是面板自己的局部 state', () => {
-  assert.match(indexSource, /const saveIncludeOverdue = async \(next: boolean\)/, '有唯一写入口')
-  const saver = indexSource.slice(indexSource.indexOf('const saveIncludeOverdue'), indexSource.indexOf('/** 保存「每天可投入时长」'))
-  assert.match(saver, /\/api\/workbench\/settings/, '写服务端设置')
-  assert.match(saver, /dailyCapacityIncludeOverdue/, '写的是同一个键')
-  assert.match(saver, /catch/, '失败要回滚 + 报错，不许静默')
-  // 面板自己不许存第二份 includeOverdue（那会让"面板开了、容量按关的算"）
-  assert.doesNotMatch(panelSource, /useState/, '面板是纯展示组件（无内部状态）')
+test('AX-C06 手动池（PlanPanel）不再内联候选过滤，吃父级喂的 candidateTasks', () => {
+  const code = stripComments(planPanelSource)
+  assert.match(code, /candidateTasks/, '手动池候选必须由父级用共享函数算好传进来')
+  assert.doesNotMatch(code, /statusCode !== 'done' && t\.statusCode !== 'cancelled'/, '不许再内联 open 过滤')
+  assert.doesNotMatch(code, /effectiveDueAt/, '不许再自己判到期')
 })
 
-test('文案：规则七条与账本列在组件里逐字存在（改文案必须同步设计文档）', () => {
-  for (const text of [
-    '只看未归档、未完成、未取消的任务。',
-    '任务自己没设截止时间时，用它最近的有截止时间的祖先的。',
-    '有效截止时间落在今天（本地日）的，计入「已排」。',
-    '自己和祖先都没有截止时间、且状态是进行中/受阻的，计入「已排」。',
-    '它和「今天到期」互不重叠，不会算两遍。',
-    '「全天」只影响显示与重复锚点，不改变容量计算。',
-    '下面的账本逐条列出了每个数字的来源。',
-  ]) {
-    assert.ok(panelSource.includes(text), `规则文案缺：${text}`)
-  }
-  for (const label of ['今天到期', '无截止·推进中', '逾期计入', '全天', '继承父任务截止', '继承自已取消父任务']) {
-    assert.ok(panelSource.includes(label), `来源标记缺：${label}`)
-  }
-  assert.ok(panelSource.includes('把逾期任务计入今日容量'), '开关文案逐字')
-  assert.ok(panelSource.includes('默认耗时') && panelSource.includes('在设置里改'), '底部提示逐字')
+test('AX-C06 三个调用点都指向同一份候选：AI 排序 / 手动池 / 未排入区', () => {
+  const code = stripComments(indexSource)
+  // 未排入区在 CapacityRulePanel 里由 capacity.unscheduled 渲染（父级用 computeTodayCapacity 算）
+  assert.match(code, /computeTodayCapacity\(/)
+  // 手动池候选
+  assert.match(code, /todayPlanCandidateRows/)
+  assert.match(code, /pickedPlanCandidateRows/)
+  // AI 排序提示词
+  assert.match(code, /buildPlanPrompt\(/)
+  assert.equal((code.match(/todayPlanCandidates\(/g) ?? []).length, 3, '三个入口共用同一份候选函数')
 })
 
-test('样式：新类名都真的定义了（否则渲染出来是裸元素）', () => {
-  const css = readFileSync('src/client/styles.ts', 'utf8')
-  for (const cls of ['.wb-cap-rule', '.wb-cap-rule-toggle', '.wb-cap-rule-sum', '.wb-cap-rules',
-    '.wb-cap-audit', '.wb-cap-audit-total', '.wb-cap-overdue', '.wb-cap-switch', '.wb-cap-foot']) {
-    assert.ok(css.includes(cls + ' ') || css.includes(cls + '{') || css.includes(cls + ','), `styles.ts 缺 ${cls}`)
-  }
+// ---------------------------------------------------------------------------
+// 口径不变量
+// ---------------------------------------------------------------------------
+
+test('容量 memo 依赖日键而不是 `now` 对象（放进去等于每帧失效）', () => {
+  const start = indexSource.indexOf('computeTodayCapacity(')
+  assert.ok(start > 0)
+  const end = indexSource.indexOf('}),', start)
+  const depsStart = indexSource.indexOf('[', end)
+  const depsEnd = indexSource.indexOf(']', depsStart)
+  const deps = indexSource.slice(depsStart, depsEnd)
+  assert.match(deps, /capacityTodayKey\(now\)/)
+  assert.doesNotMatch(deps, /,\s*now\s*,/)
+  assert.match(deps, /todayPlan/, '计划变了必须重算容量（已排来自计划快照）')
+})
+
+test('容量 memo 喂的是**全量**任务列表（归档过滤在共享函数里）', () => {
+  const start = indexSource.indexOf('computeTodayCapacity(')
+  const end = indexSource.indexOf('}),', start)
+  const call = indexSource.slice(start, end)
+  assert.match(call, /tasks: \[\.\.\.tasks, \.\.\.archivedTasks\]/)
+  assert.match(call, /plan: todayPlan === null \? null : \{ \.\.\.todayPlan/)
+})
+
+test('一分钟口径只有一处：DEFAULT / MAX 与共享模块同值', () => {
+  assert.equal(DEFAULT_ESTIMATE_MINUTES, 30)
+  assert.equal(MAX_ESTIMATE_MINUTES, 1440)
+  assert.match(policySource, /export const DEFAULT_PLAN_MINUTES = 30/)
+  assert.match(policySource, /export const MAX_PLAN_MINUTES = 1440/)
+  assert.match(capacitySource, /DEFAULT_ESTIMATE_MINUTES = DEFAULT_PLAN_MINUTES/)
+})
+
+test('逾期开关只影响候选：容量函数的 planned 与它无关（源码级：ledger 入参里没有开关就改不了已排）', () => {
+  const code = stripComments(policySource)
+  // computeCapacityLedger 内已排只累加计划项 minutes，includeOverdue 只传给 planCandidates
+  assert.match(code, /planned \+= minutes/)
+  assert.match(code, /const candidateResult = planCandidates\(\{/)
+  assert.equal((code.match(/planned \+= minutes/g) ?? []).length, 1, '已排只允许累加一次（在计划项循环里）')
 })

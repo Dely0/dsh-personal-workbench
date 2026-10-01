@@ -46,6 +46,13 @@ export interface PublicTask {
   workspacePath: string | null
   /** 动态有效工作区（自身为空时继承最近祖先） */
   effectiveWorkspacePath: string | null
+  /**
+   * 显式进度百分比，**只存 0–99**（ADR 0003/0004）。
+   *
+   * `100` 不是可存储的值：它表示「提交完成验收申请」，由 `tasks.status_code = done` 表达。
+   * 旧客户端不认识这个字段时不传也不影响读写（遗漏字段仍可操作）。
+   */
+  progressPercent: number
   archived: number
   extra: Record<string, unknown>
   recurrenceCode: string | null
@@ -73,6 +80,22 @@ export interface TaskDetailView {
   reminders: TaskReminderView[]
   events: Array<Record<string, unknown>>
 }
+
+/**
+ * 「待验收」投影（requirements §3.2）。
+ *
+ * 唯一权威源是 **completion 草稿的 pending 状态**（含暂存：`deferredAt` 非空仍是待验收）。
+ * 列表刷新时**一次性**取这份投影再分发到各行，绝不逐行发请求查草稿。
+ *
+ * `available: false` = 服务端拿不到这份投影（更旧的服务端）→ 界面**不推测、不显示徽标**，
+ * 而不是把所有任务当成"没有待验收"。
+ */
+export interface PendingCompletionView {
+  available: boolean
+  items: Array<{ taskId: string; draftId: string; deferred: boolean; summary: string; updatedAt: string }>
+}
+
+export interface PendingCompletionsResponse { ok: true; pending: PendingCompletionView }
 
 export interface TaskSessionView {
   taskId: string
@@ -265,6 +288,21 @@ export interface WorkbenchSettings {
    * 开关状态与规则文案一起呈现（见 `CapacityRulePanel`），避免"数字变了但不知道谁改的"。
    */
   dailyCapacityIncludeOverdue: boolean
+  /**
+   * 外部角色目录（D11/§6.3）：可配置的一等角色来源，如 `D:\Code\Linksight\LS-Skills\personas`。
+   *
+   * 为什么是**字符串路径**而不是布尔开关：来源本身由用户决定放哪（不同机器克隆位置不同），
+   * 工作台只读它、不复制不派生（权威源留在原处）。空串 = 未配置。
+   */
+  personaExternalDir: string
+  /**
+   * 收藏的角色 ID（逻辑路径，见 `shared/persona.ts`）；缺省 `[]`。
+   *
+   * ID 而不是显示名：**同显示名不同路径是两个角色**，用名字当键必然把两个合并成一个。
+   */
+  personaFavorites: string[]
+  /** 被禁用的角色 ID；缺省 `[]`（内置/用户/外部的合法角色**默认启用**）。 */
+  personaDisabledIds: string[]
 }
 
 // ---------------------------------------------------------------------------
@@ -350,3 +388,19 @@ export interface IdeasResponse { ok: true; ideas: IdeaView[] }
 export interface KnowledgeResponse { ok: true; entries: KnowledgeView[] }
 export interface IdeaClustersResponse { ok: true; clusters: IdeaClusterView[] }
 export interface DeletedResponse { ok: true; deleted: boolean }
+
+/**
+ * `GET /api/workbench/health` 的形状（plan.md V04-B）。
+ *
+ * `buildId` 是**本次构建**的内容哈希（`lib/build-info.json`），不是公开版本号：
+ * 本地装盘迭代刻意不改版本号，只比版本号会把"旧包还在跑"判成通过。
+ * 浏览器侧的对应值是客户端 bundle 内联的 `globalThis.__WORKBENCH_BUILD_ID__`
+ * （渲染在 `.wb-panel-host` 的 `data-workbench-build-id` 上），验收链三者一起比。
+ */
+export interface WorkbenchHealthResponse {
+  ok: true
+  name: string
+  version: string
+  buildId: string
+  db: { schemaVersion: string; taskCount: number; dictionaryCount: number }
+}

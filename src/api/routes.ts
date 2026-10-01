@@ -22,6 +22,7 @@ import { makeKnowledgeRecallRoutes } from './knowledgeRecallRoute.js'
 import type { KnowledgeRecallManager } from '../knowledge-recall.js'
 import { makeModelModalityRoutes, type LlmModalityProbe } from './routes/model-modalities.js'
 import { makePlanRoutes } from './routes/plans.js'
+import { makePersonaRoutes, type PersonaRouteOptions } from './routes/personas.js'
 import { makeQuickAttachmentRoutes } from './routes/quick-attachments.js'
 import { makeReminderRoutes, type ReminderRouteDeps } from './routes/reminders.js'
 import { makeReportRoutes } from './routes/reports.js'
@@ -30,6 +31,7 @@ import type { TeamMemoryService } from '../review-memory.js'
 import { teamMemoryAvailable } from '../review-memory.js'
 import { normalizeRecentWorkspaces } from '../shared/quickWorkspaceRecent.js'
 import type { WorkbenchSettings } from '../shared/contracts.js'
+import { readPersonaSettings, writePersonaSettings } from '../db/repo/personas.js'
 
 /**
  * 插件版本：直接读包内 package.json，避免再出现"代码已升级、health 还报旧版本"的漂移。
@@ -39,6 +41,23 @@ const PACKAGE_VERSION: string = (() => {
   try {
     const pkg = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')) as { version?: string }
     return pkg.version ?? 'unknown'
+  } catch { return 'unknown' }
+})()
+
+/**
+ * 构建标识（plan.md V04-B）：读**随包**的 `lib/build-info.json`。
+ *
+ * lib/api/routes.js 相对包根是 ../../lib/build-info.json —— 与 PACKAGE_VERSION 同一层目录。
+ * 它由 scripts/build-info.mjs 在构建时生成，内容哈希来自构建输入（不含时间戳）。
+ *
+ * 为什么 health 必须报它：版本号在装盘迭代里**根本不变**（本地迭代刻意不改版本号），
+ * 只比版本号会把"旧包还在跑"判成通过。验收链同时比对目标包 manifest / host health /
+ * 浏览器根属性三者，缺一即失败。
+ */
+const PACKAGE_BUILD_ID: string = (() => {
+  try {
+    const info = JSON.parse(readFileSync(new URL('../../lib/build-info.json', import.meta.url), 'utf8')) as { buildId?: string }
+    return typeof info.buildId === 'string' && info.buildId !== '' ? info.buildId : 'unknown'
   } catch { return 'unknown' }
 })()
 
@@ -103,6 +122,14 @@ export interface WorkbenchRouteDeps extends ReminderRouteDeps {
    * 未注入（测试里的朴素用法）时这几个端点不注册，其余路由照常。
    */
   knowledgeRecall?: KnowledgeRecallManager
+  /**
+   * 角色库路由的可注入选项（D11）。
+   *
+   * **只给测试用**：生产三个根由 `resolvePersonaRoots` 从设置项 + 包内资产 + `homedir()`
+   * 算出来。留这个口是因为 `homedir()` 不认环境变量 —— 没有它，"用户库覆盖内置"
+   * 这条覆盖顺序只能用假的对象测，而不是真实文件。
+   */
+  personas?: PersonaRouteOptions
 }
 
 /**
@@ -124,6 +151,8 @@ export function readWorkbenchSettings(db: DatabaseSync): WorkbenchSettings {
     defaultEstimateMinutes: readDefaultEstimateMinutes(db),
     /** 缺省**关**：逾期是历史欠账，默认不混进"今天要做的事"（见 contracts 里的说明）。 */
     dailyCapacityIncludeOverdue: (readMeta(db, 'daily_capacity_include_overdue') ?? '0') === '1',
+    /** 角色库三个偏好：**唯一读入口**在 `db/repo/personas.ts`（与写入端共用一处形状）。 */
+    ...readPersonaSettings(db),
   }
 }
 
@@ -151,6 +180,15 @@ export function makeRoutes(db: DatabaseSync, deps: WorkbenchRouteDeps = {}): Web
       listDue: deps.listDue ?? (() => listDueReminders(db)),
       fire: deps.fire ?? ((id: string) => fireReminder(db, id)),
     }),
+    // ------------------------------------------------------------------ personas
+    /**
+     * 角色库（D11）：摘要列表 + 资源只读读取。
+     *
+     * 三级来源的**根解析只有一处**（`resolvePersonaRoots`）：外部根读设置项，
+     * 用户库在 `~/.dsh/workbench/personas`，内置库在包内 `assets/personas`。
+     * `deps.personas` 只用于**测试注入根**（生产不传）。
+     */
+    ...makePersonaRoutes(db, deps.personas ?? {}),
     // ------------------------------------------------------------------ workspace ensure
     {
       kind: 'exact',
@@ -208,6 +246,19 @@ export function makeRoutes(db: DatabaseSync, deps: WorkbenchRouteDeps = {}): Web
           if (body.dailyCapacityIncludeOverdue === true || body.dailyCapacityIncludeOverdue === false) {
             writeMeta(db, 'daily_capacity_include_overdue', body.dailyCapacityIncludeOverdue ? '1' : '0')
           }
+          /**
+           * 角色库三个偏好（§6.3）：路径 + 两个 ID 数组。
+           *
+           * 写入实现**只有一处**（`db/repo/personas.ts`）：GET 与 POST 的响应都走
+           * `readWorkbenchSettings`，所以"形状一致"是结构上保证的，不靠人记得同步两处。
+           * 数组语义是**整表替换**（与 `quickWorkspaceRecent` 同口径）：设置页必须能
+           * 删掉一个收藏 —— 合并语义下删掉的门会被并回来。
+           */
+          writePersonaSettings(db, {
+            personaExternalDir: body.personaExternalDir,
+            personaFavorites: body.personaFavorites,
+            personaDisabledIds: body.personaDisabledIds,
+          })
           if (Array.isArray(body.quickWorkspaceRecent)) {
             /**
              * ⚠️ 语义是**整表替换**（2026-09-16 从"合并"改过来）：
@@ -240,14 +291,25 @@ export function makeRoutes(db: DatabaseSync, deps: WorkbenchRouteDeps = {}): Web
           Date.parse(task.effectiveDueAt) >= Date.parse(start) && Date.parse(task.effectiveDueAt) < Date.parse(end))
         const doing = tasks.filter((task) => task.statusCode === 'doing' || task.statusCode === 'blocked')
         const plan = getDailyPlan(db, localDateString(now))
+        /**
+         * 计划视图（T2/D06）：**原样保留**每一项的 `minutes`/`effortDone`/`taskStatusCode`。
+         *
+         * 旧实现按 `getTask` 过滤掉了"任务已删除"的项 —— 那是静默丢件：用户看到的是
+         * "计划里少了一条，又没人说"。现在缺失任务照样返回（`taskStatusCode: 'missing'`），
+         * 由界面标注，容量也照它的快照计入已排（requirements §4.2、AX-C04）。
+         */
+        const planTaskStatus = new Map(listTasks(db, { includeArchived: true }).map((task) => [task.id, task.archived === 1 ? 'archived' : task.statusCode]))
         const planView = plan === undefined ? null : {
           ...plan,
-          items: plan.items
-            .map((item) => {
-              const task = getTask(db, item.taskId)
-              return task === undefined ? null : { taskId: item.taskId, order: item.order, title: task.title, note: item.note }
-            })
-            .filter((item): item is { taskId: string; order: number; title: string; note: string } => item !== null),
+          items: plan.items.map((item) => ({
+            taskId: item.taskId,
+            order: item.order,
+            title: item.title,
+            note: item.note,
+            minutes: item.minutes,
+            effortDone: item.effortDone,
+            taskStatusCode: planTaskStatus.get(item.taskId) ?? 'missing',
+          })),
         }
         writeJson(res, 200, {
           ok: true,
@@ -300,6 +362,7 @@ export function makeRoutes(db: DatabaseSync, deps: WorkbenchRouteDeps = {}): Web
           ok: true,
           name: '@dely0/dsh-personal-workbench',
           version: PACKAGE_VERSION,
+          buildId: PACKAGE_BUILD_ID,
           db: {
             schemaVersion: versionRow?.value ?? 'unknown',
             taskCount: listTasks(db, { includeArchived: true }).length,

@@ -1,0 +1,182 @@
+{
+  "version": 1,
+  "note": "研发版本验收链的显式白名单（plan.md V01 / S16）。它只声明「哪些套件是现役、哪些还没迁进来、哪些已作废」，不是通过证据；计数一律由 scripts/check-verify-scripts.mjs 动态统计，不写死在文档里。 顺序说明：verify-safety 排在 persona 之前 —— persona 的模型层拿不到就 skip，而 required+skipped 会让链在 suites 阶段停下；把纯本机复核的那套放前面，一轮就能收齐它的证据。",
+  "roots": {
+    "repoSuites": "scripts/verify/suites",
+    "localScripts": ".pwtest"
+  },
+  "statusMeaning": {
+    "active": "现役：文件必须存在且可读，缺文件 = 硬失败（不许条件少测报绿）",
+    "pending-migration": "已登记但文件尚未迁入仓库：不会被静默跳过，checker 会列出来，链在必需套件未就绪时拒绝报绿",
+    "deprecated": "明确作废：禁止进入任何执行链，保留文件不删"
+  },
+  "suspectKeywords": [
+    "dsh-panel-activate",
+    "data-dsh-taskboard",
+    "data-dsh-ssh",
+    "data-dsh-mnem",
+    "降级腿"
+  ],
+  "suites": [
+    {
+      "id": "verify-safety",
+      "kind": "new",
+      "required": true,
+      "status": "active",
+      "repoPath": "scripts/verify/suites/verify-safety.mjs",
+      "axIds": [
+        "AX-V01",
+        "AX-V02",
+        "AX-V03",
+        "AX-V04",
+        "AX-V05",
+        "AX-V06",
+        "AX-V07",
+        "AX-V08",
+        "AX-V09"
+      ],
+      "reason": "S17-N/V05：AX-V01–V09 在真实隔离实例上的复核（checker 真跑、两个独立调试实例、真实端口归属、dry-run 零写入、真 token 全树查不到）。"
+    },
+    {
+      "id": "legacy-acceptance",
+      "kind": "legacy",
+      "required": true,
+      "status": "active",
+      "repoPath": "scripts/verify/suites/legacy-acceptance.mjs",
+      "legacySource": ".pwtest/verify-acceptance.mjs",
+      "legacyIds": [
+        "LEG-A01",
+        "LEG-A02",
+        "LEG-A03",
+        "LEG-A04",
+        "LEG-A05",
+        "LEG-A06",
+        "LEG-A07",
+        "LEG-A08",
+        "LEG-A09",
+        "LEG-A10",
+        "LEG-A11",
+        "LEG-A12",
+        "LEG-A13",
+        "LEG-A14",
+        "LEG-A15",
+        "LEG-A16",
+        "LEG-A17"
+      ],
+      "reason": "S17/V05：已按 legacy-regression.md §1 的 17 个 LEG 判据迁入 scripts/verify/suites/legacy-acceptance.mjs（逐字保留判据语义；脚手架差异见文件头迁移摘要）。"
+    },
+    {
+      "id": "legacy-final-2",
+      "kind": "legacy",
+      "required": true,
+      "status": "active",
+      "repoPath": "scripts/verify/suites/legacy-final-2.mjs",
+      "legacySource": ".pwtest/verify-final-2.mjs",
+      "legacyIds": [
+        "LEG-F01",
+        "LEG-F02",
+        "LEG-F03",
+        "LEG-F04",
+        "LEG-F05",
+        "LEG-F06",
+        "LEG-F07",
+        "LEG-F08",
+        "LEG-F09"
+      ],
+      "reason": "S17/V05：已按 legacy-regression.md §2 的 9 个 LEG 判据迁入（含原脚本 check() 形参错位导致恒过的修正记录）。"
+    },
+    {
+      "id": "legacy-sidebar-collapse",
+      "kind": "legacy",
+      "required": true,
+      "status": "active",
+      "repoPath": "scripts/verify/suites/legacy-sidebar-collapse.mjs",
+      "legacySource": ".pwtest/verify-sidebar-collapse.mjs",
+      "legacyIds": [
+        "LEG-S01",
+        "LEG-S02",
+        "LEG-S03",
+        "LEG-S04",
+        "LEG-S05",
+        "LEG-S06"
+      ],
+      "reason": "S17/V05：已按 legacy-regression.md §3 的 6 个 LEG 判据迁入；旧实现的条件跳过已改成明确前置失败。"
+    },
+    {
+      "id": "legacy-duplicate-task",
+      "kind": "legacy",
+      "required": true,
+      "status": "active",
+      "repoPath": "scripts/verify/suites/legacy-duplicate-task.mjs",
+      "legacySource": ".pwtest/verify-duplicate-task.mjs",
+      "legacyIds": [
+        "LEG-D01",
+        "LEG-D02",
+        "LEG-D03",
+        "LEG-D04",
+        "LEG-D05",
+        "LEG-D06",
+        "LEG-D07",
+        "LEG-D08",
+        "LEG-D09",
+        "LEG-D10",
+        "LEG-D11"
+      ],
+      "reason": "S17/V05：已按 legacy-regression.md §4 的 11 个 LEG 判据迁入；合成标题带 runId，只归档本次登记的任务 id（不按同名标题批量归档）。只允许对隔离测试库跑。"
+    },
+    {
+      "id": "progress",
+      "kind": "new",
+      "required": true,
+      "status": "active",
+      "repoPath": "scripts/verify/suites/progress.mjs",
+      "axIds": [
+        "AX-P07",
+        "AX-P08"
+      ],
+      "reason": "S17-N/V05：AX-P07/P08 的 B 层（真实点击 + DOM 重读 + 接口重读 + 截图）。"
+    },
+    {
+      "id": "daily-effort",
+      "kind": "new",
+      "required": true,
+      "status": "active",
+      "repoPath": "scripts/verify/suites/daily-effort.mjs",
+      "axIds": [
+        "AX-D07",
+        "AX-D08",
+        "AX-D09",
+        "AX-C02",
+        "AX-C05",
+        "AX-C06"
+      ],
+      "reason": "S17-N/V05：AX-D07/D08/D09/C02/C05/C06 的 B 层。写入只对隔离测试库。"
+    },
+    {
+      "id": "persona",
+      "kind": "new",
+      "required": true,
+      "status": "active",
+      "repoPath": "scripts/verify/suites/persona.mjs",
+      "axIds": [
+        "AX-R07",
+        "AX-R08"
+      ],
+      "reason": "S17-N/V05：AX-R07/R08；H 层用真实 HTTP 证明绑定/加载语义，B 层验真实选择器，M 层需要真实模型链路（拿不到就 skip，链判 required+skipped=不通过）。"
+    }
+  ],
+  "deprecated": [
+    {
+      "path": "scripts/repro/compare-capacity-before-after.mjs",
+      "reason": "T2 起口径已变（旧容量 = 按到期任务求和）。文件头已标 ⚠️ 已过时；保留不删，禁止进入验收链。"
+    },
+    {
+      "path": "scripts/repro/verify-capacity-fixed-dataset.mjs",
+      "reason": "T2 起口径已变（旧容量口径）。保留不删，禁止进入验收链。"
+    },
+    {
+      "path": "scripts/repro/harness-real-browser.mjs",
+      "reason": "T2 起口径已变（旧容量口径）；浏览器判据的现役实现是 scripts/verify/cdp.mjs + 白名单套件。保留不删。"
+    }
+  ]
+}

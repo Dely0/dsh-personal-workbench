@@ -30,7 +30,7 @@ import { ReminderScheduler } from './reminder/scheduler.js'
 import { readWeixinInboundCount } from './reminder/weixin-status.js'
 import type { TeamMemoryService } from './review-memory.js'
 import { taskWorkspaceFolderName } from './client/taskFolder.js'
-import { proposeDailyPlanTool, proposeIdeaClustersTool, proposeSubtasksTool, requestCompletionTool, saveTaskMemoryTool, submitIdeaTasksTool, submitKnowledgeTool, submitReportTool, submitReviewTool, submitTaskTool, updateTaskTool } from './tools.js'
+import { loadPersonaTool, proposeDailyPlanTool, proposeIdeaClustersTool, proposeSubtasksTool, readPersonaResourceTool, requestCompletionTool, saveTaskMemoryTool, submitIdeaTasksTool, submitKnowledgeTool, submitReportTool, submitReviewTool, submitTaskTool, updateProgressTool, updateTaskTool } from './tools.js'
 
 export const name = 'personal-workbench'
 
@@ -64,6 +64,7 @@ const WORKBENCH_GUIDANCE = [
   '本机已安装 dsh-personal-workbench 插件（个人工作台）：侧边栏「工作台」入口；',
   'V1 能力：日历 + 任务列表、自然语言快速录入与 AI 澄清、子任务拆解（AI 提案 + 用户确认）、任务关联多个 Harness 会话。',
   'V1.5 已提供任务“执行”：任意节点（含父任务）均可执行，执行会话完成后应调用 workbench_request_completion 提交验收申请，由用户验收后完成；父任务验收通过时未完成子任务会级联完成。AI 不得直接把任务标记为完成/取消。',
+  '任务进度（进度是显式值，不由子任务比例派生）：执行过程中**阶段性推进后请主动调用 workbench_update_progress 报一次进度**（0–99 直接生效，不需要用户确认）；这部分工作全部做完时调用 workbench_update_progress progress=100 并给出 summary —— 100 不是可存储的进度，它等同于提交完成验收申请（与 workbench_request_completion 同一条路径），AI 永远不能直接把任务标记为已完成/已取消。咨询/拆解/排序会话不得被这条提示诱导去执行任务。',
   '任务共享记忆：执行/拆解/咨询过程中有关键上下文、阶段性结论或决策时，请调用 workbench_save_task_memory 保存到任务共享记忆；同一任务/子树下的后续会话会自动加载这些记忆。',
   'V2 AI 智能排序：请调用 workbench_propose_daily_plan(plan_date, summary, items) 提交指定日期的执行顺序提案（只写草稿，用户确认后生效），不要修改任务字段；同一父子链不要同时入列。',
   'V2 日报/周报：请在报告会话中调用 workbench_submit_report(period_code, period_start, title, summary_md) 提交报告草稿，用户确认后才保存。',
@@ -406,7 +407,13 @@ function applyReady(ctx: Context, db: DatabaseSync, config: Config): void {
     () => {
       const disposers = [
         submitTaskTool(db), proposeSubtasksTool(db), proposeDailyPlanTool(db), submitReportTool(db), submitKnowledgeTool(db),
-        proposeIdeaClustersTool(db), submitIdeaTasksTool(db), updateTaskTool(db), requestCompletionTool(db), submitReviewTool(db), saveTaskMemoryTool(db),
+        proposeIdeaClustersTool(db), submitIdeaTasksTool(db), updateTaskTool(db), updateProgressTool(db), requestCompletionTool(db), submitReviewTool(db), saveTaskMemoryTool(db),
+        /**
+         * 角色（persona）两个工具（D12/S11）：只按**执行上下文真实 sessionId** 的绑定读，
+         * 不接受任何 session/角色 id 入参（越权面在结构上不存在）。
+         * 生产不注入根覆盖：三级根由设置项 + 包内资产 + 用户主目录算出来。
+         */
+        loadPersonaTool(db), readPersonaResourceTool(db),
         // 知识库回流：模型主动查 + 自动召回的开关/引用回报（与钩子共用同一个管理器）。
         searchKnowledgeTool(knowledgeRecall), knowledgeRecallControlTool(knowledgeRecall),
       ].map((tool) => ctx.tools.register(tool))

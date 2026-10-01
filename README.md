@@ -190,11 +190,43 @@ dsh plugin --profile web add link:/path/to/dsh-personal-workbench
   失败必须可观测、幂等与副作用时机、静默丢件的禁区、可选服务分两级、删除与重构的顺序；
 - **交付流程**：装盘/版本回退的门禁、"客户端改动必须重启宿主"、
   验收判据为什么会变成假阴性、发布与回滚纪律；
+- **研发版本验收链**（SKILL §14）：这条链怎么跑、加一套件要动哪几处、
+  写套件时的硬纪律（不许空计数当通过、前置缺失记失败、`finally` 不改退出码）；
 - **事故档案**：13 起真实事故的"现象 → 根因 → 下次怎么避免"。
 
 > 这些不是风格偏好，**每条都对应一次真实事故**（整机 DSH 起不来、面板整块消失、发布后前端崩溃）。
 > 如果你用别的 AI 编码工具，也可以直接把 `SKILL.md` 及其 `references/` 喂给它 ——
 > 内容与工具无关，讲的是这个代码库的规矩。
+
+## 研发版本验收链（在隔离测试实例上真跑一遍）
+
+改了客户端或服务端之后，"我自己跑通了"和"**装盘的这一版在真实浏览器里跑通了**"是两件事。
+本仓库自带一条链，把后者做成一条命令（设计见 [`docs/adr/0006-dev-verify-chain.md`](docs/adr/0006-dev-verify-chain.md)）：
+
+```sh
+# 1) 只读预检：打印阶段计划，零写入（不构建/不装盘/不重启/不写库）
+node scripts/dev-verify.mjs --url http://127.0.0.1:3080 --profile web \
+  --profile-dir "<测试 profile 的绝对目录>" --db-path "<独立测试 DB 的绝对路径>" --dry-run
+
+# 2) 真跑：构建 → 装盘 → 零增量 diff → dump-config → 只重启 3080 → health → token → 套件 → 证据包
+node scripts/dev-verify.mjs --url http://127.0.0.1:3080 --profile web \
+  --profile-dir "<测试 profile 的绝对目录>" --db-path "<独立测试 DB 的绝对路径>"
+```
+
+- **目标实例只限 `3080` / `profile web`**（预授权范围）。当前 GUI 实例（桌面端 `19387`）**永不重启**：
+  同端口 / 同 profile 物理目录 / 同数据库文件三种情况一律 fail-closed 拒绝，`--force` 也绕不过前两种。
+- **必须给目标 profile 显式配独立数据库**。工作台默认库是 `~/.dsh/workbench/workbench.db`，
+  **不随 profile 变化** —— 桌面端和测试实例默认用的是同一个文件。没配独立 `dbPath` 时预检会拒绝，
+  这是**正确行为**（否则一次验收就会把正式库迁到开发树的新 schema）。
+  配法见 [`.dsh/skills/dsh-safe-plugin-ops/`](.dsh/skills/dsh-safe-plugin-ops/SKILL.md) 的门禁 C。
+- 退出码：`0` 全过 / `1` 构建·装盘·断言失败 / `2` 自锁拒绝或前置缺失 / `3` 等待超时。
+- 证据落在 `test-results/workbench-verify/<runId>/`（已 gitignore）：`summary.json` / `summary.md` /
+  各套件截图与 DOM 读数；**token 全路径脱敏**，不会写进证据。
+- 已纳入白名单的套件（`scripts/verify/suites.json`）：4 套历史回归（acceptance / final-2 /
+  sidebar-collapse / duplicate-task，判据源 [`legacy-regression.md`](docs/tasks/36c8e8ef-1104-4e68-b55f-a2a6cc533ab9-工作台插件优化/legacy-regression.md)）
+  + 4 套本轮新增（progress / daily-effort / persona / verify-safety）。
+  脚本卫生与白名单校验：`node scripts/check-verify-scripts.mjs`。
+- **验收链的绿不等于上线**：最终判定由用户在正式实例上实测，公开版本号与发布仍走 `dsh-release` 的流程。
 
 ## 兼容性与已知限制
 

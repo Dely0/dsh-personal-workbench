@@ -4,7 +4,7 @@
  */
 import type { DatabaseSync } from 'node:sqlite'
 
-export const SCHEMA_VERSION = 18
+export const SCHEMA_VERSION = 19
 
 export interface Migration {
   version: number
@@ -480,4 +480,130 @@ export const MIGRATIONS: Migration[] = [
       db.exec('CREATE INDEX idx_knowledge_superseded ON knowledge_entries(superseded_by_id)')
     },
   },
+  {
+    version: 19,
+    name: 'task-progress-and-plan-effort',
+    up(db) {
+      /**
+       * S1：把「任务显式进度」与「每日计划投入」一次性落进数据模型。
+       *
+       * ## 为什么进度**只允许 0–99**
+       *
+       * ADR 0003：`100` 不是可存储的进度，而是「提交完成验收申请」的触发值
+       * （与 `workbench_request_completion` 同一条路径，弹框/可暂存/可驳回/留痕）。
+       * 「已完成」只能由 `tasks.status_code = done` 表达，写入者只能是用户验收通过
+       * 或用户在界面点完成。所以 DDL 的 CHECK 是**最后一道防线**，
+       * 路由/工具在它之前就给中文错误（不夹取、不静默改成 99）。
+       *
+       * ## 为什么旧任务进度一律 0，而不从状态/子任务反推
+       *
+       * ADR 0004：进度是**显式值**，不由子任务比例派生。存量任务从来没有被任何人
+       * 显式写过进度，反推出来的数字（比如"3 个子任务完成 2 个 → 67%"）是系统**编**的，
+       * 用户既没说过也无法解释。一律置 0 = 「还没人写」，语义最诚实；
+       * done 任务也一样（它已有 status 表达完成，不需要一个假进度）。
+       *
+       * ## 第二个动作：ai_session_scope/persona 字典
+       *
+       * S11 的角色绑定要复用现有 `ai_session_registry` 表（scope_code + anchor），
+       * 需要一个 `persona` 这个 scope 的字典项。**只在这里加一次** ——
+       * 后续子任务不得再开同号或第二个迁移（任务描述明确要求）。
+       *
+       * ## 第三个动作：旧计划 JSON 的兼容回填
+       *
+       * `daily_plans.items_json` 是老格式（`{taskId, order, title, note}`）。
+       * 本迁移按 requirements §2.1 一次性补齐 `minutes`/`effortDone`，
+       * **不改计划表结构**（不需要新列）。
+       *
+       * 三条硬约束（都来自真实教训：静默丢件与静默改写是禁区）：
+       * 1. **合法旧项**：缺 `minutes` 就用"迁移当时该任务的合法预计耗时"，取不到用默认
+       *    30 分钟快照填上；缺 `effortDone` 填 `false`。已有合法值**不覆盖**。
+       * 2. **保留原字段与原顺序**：只做加法，`taskId`/`order`/`title`/`note` 逐字保留；
+       *    未知 taskId 的项照样保留（只补 minutes，不定标题）。
+       * 3. **坏数据不猜不删**：`items_json` 不是 JSON / 不是数组 / 项不是对象时，
+       *    **原串一个字节都不动**，并输出一条带 `planDate` 的诊断（进度链路的
+       *    `GET /plans` 与容量读取会据此报「计划数据无法解析」而不是假装 0）。
+       */
+      db.exec(`ALTER TABLE tasks ADD COLUMN progress_percent INTEGER NOT NULL DEFAULT 0 CHECK(progress_percent BETWEEN 0 AND 99)`)
+
+      const at = new Date().toISOString()
+      db.prepare(
+        `INSERT OR IGNORE INTO dictionaries (kind, code, name, config, builtin, active, sort_order, created_at, updated_at)
+         VALUES ('ai_session_scope', 'persona', '角色会话', '{}', 1, 1, 60, ?, ?)`,
+      ).run(at, at)
+
+      // 计划回填的默认投入：读设置（meta），缺省 30。与 shared/dailyPlanPolicy 的缺省一致。
+      const metaRow = db.prepare("SELECT value FROM meta WHERE key = 'default_estimate_minutes'").get() as { value: string } | undefined
+      const parsedDefault = metaRow === undefined ? Number.NaN : Number(metaRow.value)
+      const defaultMinutes = Number.isInteger(parsedDefault) && parsedDefault >= 1 && parsedDefault <= 1440 ? parsedDefault : 30
+
+      const estimateStmt = db.prepare('SELECT estimated_minutes FROM tasks WHERE id = ?')
+      const plans = db.prepare('SELECT plan_date, items_json FROM daily_plans').all() as unknown as Array<{ plan_date: string; items_json: string }>
+      const updatePlan = db.prepare('UPDATE daily_plans SET items_json = ? WHERE plan_date = ?')
+      const diagnostics: string[] = []
+
+      for (const plan of plans) {
+        let parsed: unknown
+        try {
+          parsed = JSON.parse(plan.items_json)
+        } catch {
+          diagnostics.push(`计划 ${plan.plan_date} 的 items_json 不是合法 JSON，已原样保留（读取时会给「计划数据无法解析」诊断）`)
+          continue
+        }
+        if (!Array.isArray(parsed)) {
+          diagnostics.push(`计划 ${plan.plan_date} 的 items_json 不是数组，已原样保留（读取时会给「计划数据无法解析」诊断）`)
+          continue
+        }
+        let changed = false
+        const items: unknown[] = []
+        for (const raw of parsed) {
+          if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+            // 坏项：不猜语义、不删除，原样留在数组里（顺序也不动）。
+            items.push(raw)
+            diagnostics.push(`计划 ${plan.plan_date} 有一项不是对象，已原样保留`)
+            continue
+          }
+          const item = { ...(raw as Record<string, unknown>) }
+          if (!Number.isInteger(item.minutes) || (item.minutes as number) < 1 || (item.minutes as number) > 1440) {
+            item.minutes = resolveBackfillMinutes(item.taskId, estimateStmt, defaultMinutes)
+            changed = true
+          }
+          if (typeof item.effortDone !== 'boolean') {
+            // 已是 true 之外的任何非布尔值都属于"缺字段"：统一填 false（旧数据没有结束语义）。
+            item.effortDone = false
+            changed = true
+          }
+          items.push(item)
+        }
+        if (changed) updatePlan.run(JSON.stringify(items), plan.plan_date)
+      }
+
+      /**
+       * 诊断**只写日志、不落库**：迁移时刻的观察结果属于运维信息，
+       * 而"这份计划读不出来"是**每次读取都要重新判定**的事实（数据可能被人手工修好）。
+       * 库里存一份快照会在修复后变成假的告警。
+       */
+      if (diagnostics.length > 0) {
+        for (const line of diagnostics) console.warn(`[dsh-personal-workbench] migration 19: ${line}`)
+      }
+    },
+  },
 ]
+
+/**
+ * 迁移回填用的「这条计划项该记多少分钟」。
+ *
+ * 顺序：任务当前合法预计耗时 → 设置里的默认投入 → 30。
+ * 未知 taskId（任务已删除）同样走这个顺序（拿不到估时 → 默认），**不定标题、不丢项**。
+ */
+function resolveBackfillMinutes(
+  taskId: unknown,
+  estimateStmt: { get(id: string): unknown },
+  defaultMinutes: number,
+): number {
+  if (typeof taskId === 'string' && taskId !== '') {
+    const row = estimateStmt.get(taskId) as { estimated_minutes: number | null } | undefined
+    const estimated = row?.estimated_minutes ?? null
+    if (typeof estimated === 'number' && Number.isInteger(estimated) && estimated >= 1 && estimated <= 1440) return estimated
+  }
+  return defaultMinutes
+}

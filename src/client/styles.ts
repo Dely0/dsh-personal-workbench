@@ -118,6 +118,20 @@ ${panelContainerCss({ view: VIEW_ATTR, official: OFFICIAL_ATTR, active: ACTIVE_A
 .wb-plan-item.closed { opacity:.55; }
 .wb-plan-item.closed b { text-decoration:line-through; }
 .wb-plan-edit-note { flex:1 1 36%; min-width:0; background:var(--dsw-alias-bg-base,#17171a); border:1px solid var(--dsw-alias-border-l1, rgba(255,255,255,.18)); color:inherit; border-radius:6px; padding:3px 7px; font-size:12px; }
+/* 计划投入（T2/D07）：显示态的按钮与编辑态的输入框都刻意窄，避免把标题挤没 */
+.wb-plan-minutes { flex:none; border:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.22)); background:color-mix(in srgb, var(--dsw-alias-label-primary, #fff) 4%, transparent); color:var(--dsw-alias-label-secondary); border-radius:999px; padding:1px 8px; font-size:11px; cursor:pointer; font-variant-numeric:tabular-nums; white-space:nowrap; }
+.wb-plan-minutes:hover { color:var(--dsw-alias-label-primary); border-color:color-mix(in srgb, var(--dsw-alias-label-primary, #fff) 35%, transparent); }
+.wb-plan-minutes:disabled { opacity:.5; cursor:default; }
+.wb-plan-minutes-static { flex:none; color:var(--dsw-alias-label-secondary); font-size:11px; font-variant-numeric:tabular-nums; white-space:nowrap; }
+.wb-plan-minutes-input, .wb-plan-edit-minutes { flex:none; width:76px; background:var(--dsw-alias-bg-base,#17171a); border:1px solid var(--dsw-alias-border-l1, rgba(255,255,255,.18)); color:inherit; border-radius:6px; padding:2px 6px; font-size:11.5px; font-variant-numeric:tabular-nums; }
+.wb-plan-effort-done { flex:none; font-size:11px; border-radius:999px; padding:1px 8px; color:color-mix(in srgb, #2E9B7B 88%, #fff); border:1px solid color-mix(in srgb, #2E9B7B 42%, transparent); background:color-mix(in srgb, #2E9B7B 12%, transparent); white-space:nowrap; }
+.wb-plan-act.effort { color:color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 88%, #fff); border-color:color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 45%, transparent); }
+.wb-plan-act.effort.on { color:var(--dsw-alias-label-secondary); }
+/* 结束投入后的进度建议：非自动、不默认勾选，所以视觉上刻意弱于主动作 */
+.wb-plan-progress-hint { flex:1 1 100%; display:flex; align-items:center; gap:6px; margin-top:2px; font-size:11px; color:var(--dsw-alias-label-secondary); }
+.wb-plan-progress-hint .wb-btn { padding:1px 8px; font-size:11px; }
+.wb-plan-item.effort-done b { color:color-mix(in srgb, #2E9B7B 70%, var(--dsw-alias-label-primary, #eee)); }
+.wb-plan-unreadable { border-color:color-mix(in srgb, #d9534f 42%, transparent); }
 .wb-plan-edit-actions { display:inline-flex; gap:4px; flex:none; margin-left:auto; }
 .wb-plan-edit-actions .wb-btn { padding:2px 7px; font-size:11px; }
 .wb-plan-add { max-width:220px; background:var(--dsw-alias-bg-base,#17171a); border:1px solid var(--dsw-alias-border-l1, rgba(255,255,255,.18)); color:inherit; border-radius:8px; padding:5px 8px; font-size:12px; }
@@ -151,6 +165,108 @@ ${panelContainerCss({ view: VIEW_ATTR, official: OFFICIAL_ATTR, active: ACTIVE_A
 .wb-skill-problem svg { width:13px; height:13px; vertical-align:-2px; margin-right:4px; }
 .wb-skill-problem .wb-btn { flex:none; display:inline-flex; align-items:center; gap:4px; }
 .wb-skill-foot { margin-top:7px; font-size:11px; color:var(--dsw-alias-label-secondary); opacity:.85; }
+/* 角色选择器（D13-B）：与技能选择器并列的**普通文档流**区块 —— 不用绝对定位、不加遮罩，
+   所以它下面的技能选择器照常展开，两者不遮挡（AX-R07）。 */
+.wb-persona-picker { margin-top:12px; border:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.22)); border-radius:10px; padding:10px; background: color-mix(in srgb, var(--dsw-alias-label-primary, #fff) 3%, transparent); }
+.wb-persona-head { display:flex; align-items:center; justify-content:space-between; gap:8px; font-size:12.5px; color:var(--dsw-alias-label-primary); }
+.wb-persona-head svg { width:13px; height:13px; vertical-align:-2px; margin-right:4px; }
+.wb-persona-current { font-size:11.5px; color:var(--dsw-alias-label-secondary); max-width:62%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.wb-persona-hint { margin-top:6px; font-size:11px; line-height:1.6; color:var(--dsw-alias-label-secondary); }
+/* 搜索常驻（与「加载 Skill」同形）：一行放搜索框 + 「只看收藏」筛选 */
+.wb-persona-toolbar { margin-top:8px; display:flex; align-items:center; gap:6px; }
+.wb-persona-toolbar .wb-skill-search { flex:1; min-width:0; margin:0; }
+.wb-persona-toolbar .wb-btn { flex:none; white-space:nowrap; }
+.wb-persona-admin { margin-top:8px; }
+/**
+ * 管理列表**不再自带滚动区**（2026-10-01 实测截图暴露的缺陷）。
+ *
+ * 拆成独立页签后这一页有整幅高度，而原来那条 max-height:300px + overflow:auto 会在
+ * 列表中间切一刀：截图里第 4 行从中间被截断、第 5 行完全看不见 ——
+ * 用户要"少滚"，结果变成"弹窗里再滚一层"，比不滚更难用（还看不出下面还有内容）。
+ *
+ * 选择器（弹窗里那个窄条）**保留** max-height：那里确实需要一个上限。
+ */
+.wb-persona-admin-list { margin-top:8px; display:flex; flex-direction:column; gap:2px; }
+.wb-persona-admin-list .wb-persona-name { max-width:26%; }
+.wb-persona-foot { margin-top:8px; font-size:11px; line-height:1.6; color:var(--dsw-alias-label-secondary); }
+.wb-persona-list { margin-top:8px; display:flex; flex-direction:column; gap:4px; max-height:320px; overflow:auto; }
+.wb-persona-item { display:flex; align-items:center; gap:8px; text-align:left; width:100%; box-sizing:border-box; padding:6px 8px; border-radius:8px; cursor:pointer; border:1px solid transparent; background:transparent; color:inherit; font:inherit; }
+.wb-persona-item:hover:not(:disabled) { background: color-mix(in srgb, var(--dsw-alias-label-primary, #fff) 5%, transparent); }
+.wb-persona-item.on { border-color: color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 40%, transparent); background: color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 10%, transparent); }
+.wb-persona-item:disabled { opacity:.55; cursor:not-allowed; }
+.wb-persona-item.grow { flex:1; min-width:0; }
+/* ---- 角色：名称 / 描述 / 来源 三层（2026-10-01 用户报"层级分布不明显、全挤在一起"）----
+   改之前三类信息是**同一个灰、同一个字重**，只差 0.5px 字号（分组名 11、描述 11、来源 10.5），
+   所以视觉上糊成一片。下面按"字号 + 字重 + 颜色深浅"拉开三层：
+     ① 分组标题 14/600/主色 + 上分割线 + 计数
+     ② 角色名 12.5/600/主色；描述 11.5/次色（管理页两行截断，选择器仍单行省略）
+     ③ 来源｜分组 10.5/最淡色
+*/
+.wb-persona-name { flex:none; font-size:12.5px; font-weight:600; color:var(--dsw-alias-label-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:52%; }
+.wb-persona-desc { flex:1; min-width:0; font-size:11px; color:var(--dsw-alias-label-secondary); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.wb-persona-source { flex:none; font-size:10.5px; color:var(--dsw-alias-label-secondary); opacity:.7; }
+.wb-persona-more-head { margin-top:8px; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.wb-persona-more { margin-top:8px; border-top:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.16)); padding-top:8px; max-height:300px; overflow:auto; }
+/**
+ * 分组标题 = **章节级**（两处共用：设置页的角色库管理 + 弹窗里的角色选择器）。
+ * 上分割线把它和上一组分开，计数让它自带规模信息 —— 这两样是"看得出分组"的关键，
+ * 只靠字号（改前 11px vs 12.5px）区分不出来。
+ */
+.wb-persona-group { margin-top:12px; }
+.wb-persona-group:first-child { margin-top:0; }
+.wb-persona-group-name {
+  display:flex; align-items:center; gap:8px;
+  margin:0 0 6px; padding-top:8px;
+  border-top:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.2));
+  font-size:14px; font-weight:600; color:var(--dsw-alias-label-primary);
+  letter-spacing:.2px;
+}
+.wb-persona-group-count { font-size:10.5px; font-weight:400; color:var(--dsw-alias-label-secondary); opacity:.8; }
+.wb-persona-row { display:flex; align-items:flex-start; gap:10px; padding:6px 4px; border-radius:8px; }
+.wb-persona-row:hover { background: color-mix(in srgb, var(--dsw-alias-label-primary, #fff) 4%, transparent); }
+.wb-persona-row.off { opacity:.6; }
+.wb-persona-info { flex:1; min-width:0; display:flex; flex-direction:column; gap:2px; }
+/* 管理页的描述给两行（单行截断在宽栏里浪费空间）；选择器里仍是单行省略。
+   为什么只给管理页：选择器每行只有 300px 上下，两行会让列表长一倍。 */
+.wb-persona-admin .wb-persona-desc {
+  display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; white-space:normal; line-height:1.45;
+}
+.wb-persona-admin .wb-persona-name { max-width:100%; }
+.wb-persona-admin-list .wb-persona-name { max-width:100%; }
+.wb-persona-actions { flex:none; display:flex; align-items:center; gap:6px; padding-top:2px; }
+.wb-persona-star { margin-left:5px; font-size:11px; color:#e8b339; }
+.wb-persona-off-tag {
+  margin-left:6px; padding:0 5px; border-radius:4px; font-size:10px; font-weight:400;
+  color:var(--dsw-alias-label-secondary); border:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.3));
+}
+.wb-persona-flag { flex:none; border:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.28)); background:transparent; color:var(--dsw-alias-label-secondary); border-radius:7px; padding:3px 7px; font:inherit; font-size:10.5px; cursor:pointer; }
+.wb-persona-flag.on { color:#e8b339; border-color: color-mix(in srgb, #e8b339 45%, transparent); background: color-mix(in srgb, #e8b339 12%, transparent); }
+.wb-persona-flag:hover:not(:disabled) { color:var(--dsw-alias-label-primary); border-color: color-mix(in srgb, var(--dsw-alias-label-primary, #fff) 30%, transparent); }
+.wb-persona-flag:disabled { opacity:.5; cursor:not-allowed; }
+/* 列表里的"读取中 / 无匹配"提示：不参与行布局，也不是 .wb-hint（那带 margin）。 */
+.wb-persona-note { padding:8px 4px; font-size:12px; color:var(--dsw-alias-label-secondary); }
+/**
+ * 默认折叠的「使用说明」块（2026-10-01 用户要求把"到处都有的解释性段落"收起来）。
+ *
+ * 口径：**页面默认只留可操作的控件**；要看"这个东西是什么/为什么这样"就点开。
+ * 要点一条都不删（源文件里原文保留），只是不再各占一行把页面撑满。
+ */
+.wb-notes { margin:12px 0 0; border:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.22)); border-radius:10px; background: color-mix(in srgb, var(--dsw-alias-label-primary, #fff) 3%, transparent); }
+.wb-notes > summary {
+  cursor:pointer; list-style:none; padding:8px 11px;
+  font-size:12px; color:var(--dsw-alias-label-secondary);
+  display:flex; align-items:center; gap:6px;
+}
+.wb-notes > summary::-webkit-details-marker { display:none; }
+.wb-notes > summary::before { content:'▸'; font-size:10px; opacity:.8; }
+.wb-notes[open] > summary::before { content:'▾'; }
+.wb-notes > summary:hover { color:var(--dsw-alias-label-primary); }
+.wb-notes-body { padding:0 12px 10px; font-size:11.5px; line-height:1.7; color:var(--dsw-alias-label-secondary); }
+.wb-notes-body p { margin:0 0 6px; }
+.wb-notes-body p:last-child { margin-bottom:0; }
+.wb-notes-body b { color:var(--dsw-alias-label-primary); font-weight:650; }
+.wb-notes-body code { font-size:11px; padding:1px 4px; border-radius:4px; background: color-mix(in srgb, var(--dsw-alias-label-primary, #fff) 8%, transparent); }
+.wb-notes-body .wb-notes-warn { color:#c8892f; }
 .wb-list { border:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.24)); border-radius:12px; overflow:hidden; background:var(--dsw-alias-bg-layer-1, rgba(255,255,255,.03)); }
 .wb-row { display:flex; align-items:center; gap:8px; padding:11px 12px; border-bottom:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.12)); cursor:pointer; transition:background .12s ease; }
 .wb-row:last-child { border-bottom:none; }
@@ -165,6 +281,45 @@ ${panelContainerCss({ view: VIEW_ATTR, official: OFFICIAL_ATTR, active: ACTIVE_A
 .wb-row-meta .wb-chip { display:inline-flex; align-items:center; justify-content:center; width:100%; padding-left:0; padding-right:0; text-align:center; }
 .wb-due { text-align:right; color:var(--dsw-alias-label-secondary); font-size:12px; font-variant-numeric:tabular-nums; white-space:nowrap; }
 .wb-chip { display:inline-flex; align-items:center; justify-content:center; border-radius:6px; padding:2px 7px; font-size:11px; white-space:nowrap; }
+
+/* ---- 任务进度（S4）：列表行的紧凑条 + 详情页的完整卡片 ---- */
+/* 行内形态：**在自己的网格格子里**伸缩（2026-10-01）。
+   旧写法是网格外的 flex 兄弟 + max-width:46%，进度条一长就压窄左边的到期列，
+   同一屏里几行对不齐（用户截图点名的就是它）。
+   现在它占第 4 列固定 96px：0% 与 >10% 的行左右边界完全一致。 */
+.wb-progress-compact { display:inline-flex; align-items:center; gap:5px; min-width:0; width:100%; justify-content:flex-end; }
+.wb-progress { position:relative; height:6px; width:100%; min-width:38px; border-radius:999px; background:color-mix(in srgb, var(--dsw-alias-label-secondary, #8a9aa8) 22%, transparent); overflow:hidden; }
+.wb-progress-fill { height:100%; border-radius:999px; background:var(--dsw-alias-state-business-primary, #4f8ef7); transition:width .18s ease; }
+.wb-progress-num { font-size:11px; color:var(--dsw-alias-label-secondary); font-variant-numeric:tabular-nums; flex:none; }
+.wb-progress-badge.pending { color:#f5b83d; border-color:color-mix(in srgb, #f5b83d 45%, transparent); background:color-mix(in srgb, #f5b83d 14%, transparent); }
+.wb-progress-badge.deferred { color:#8b7be8; border-color:color-mix(in srgb, #8b7be8 45%, transparent); background:color-mix(in srgb, #8b7be8 14%, transparent); }
+/* 详情卡：**一行**（2026-10-01 用户报"进度页面太高、把详情页撑丑了"）。
+   旧的六块竖排（标题/条/旁证/提示/五档/输入框）已合并；旁证与黄色提示改用 title 悬停，
+   用一个小图标表示"这里有话可说"。窄屏自动换行，不再有固定高度。 */
+.wb-progress-card { padding:6px 10px; margin-bottom:10px; }
+/* ⚠️ 进度卡里的 h4 只是"这一个控件叫什么"，不是卡片标题：
+   .wb-card h4 自带 padding-bottom:10px + border-bottom，而用户截图里的
+   "进度下面有个下划线、比其他元素高"正是它。这里清掉，让整条与徽标/状态行同高。 */
+.wb-progress-card h4, .wb-card h4.wb-progress-title {
+  margin:0; padding:0; border-bottom:none;
+  font-size:12.5px; font-weight:600; color:var(--dsw-alias-label-secondary);
+}
+.wb-progress-row { display:flex; align-items:center; gap:8px; flex-wrap:wrap; min-height:24px; }
+.wb-progress-title { margin:0; font-size:12.5px; font-weight:600; flex:none; }
+/* 进度条槽位：**先收缩、不抢宽度**。
+   ⚠️ 别写 flex:1 1 120px：那个 120px 的 flex-basis 在窄右栏里会让整条宽度超出容器，
+   于是"0% 25% 50% 75% 完成任务"和输入框被换到**第二行**（2026-10-01 用户截图：
+   进度卡分了两行，下面还多个下划线，比旁边元素高一截）。
+   现在 basis=0：其余控件先占位，进度条吃剩下的；min-width 兜住"再挤也看得见"。 */
+.wb-progress-bar-slot { flex:1 1 0; min-width:56px; display:flex; align-items:center; }
+.wb-progress-card .wb-progress { height:6px; margin:0; }
+.wb-progress-child, .wb-progress-hint { font-size:12px; color:var(--dsw-alias-label-secondary); margin:0; display:inline-flex; align-items:center; flex:none; }
+.wb-progress-hint { color:#f5b83d; }
+.wb-progress-note { font-size:12px; color:var(--dsw-alias-label-secondary); margin:0; }
+.wb-progress-error { font-size:12px; color:#e7634c; margin-top:6px; }
+.wb-progress-presets { display:inline-flex; align-items:center; gap:6px; flex:none; }
+.wb-progress-input { display:inline-flex; align-items:center; gap:6px; flex:none; }
+.wb-progress-input input { width:70px; }
 .wb-cal-nav { display:flex; align-items:center; gap:8px; margin-bottom:10px; }
 .wb-week { display:grid; grid-template-columns:repeat(7,1fr); gap:6px; margin-bottom:10px; }
 .wb-day { border:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.18)); background:var(--dsw-alias-bg-layer-1, rgba(255,255,255,.03)); border-radius:12px; min-height:92px; padding:8px; cursor:pointer; transition:border-color .12s ease, background .12s ease; }
@@ -422,6 +577,16 @@ ${panelContainerCss({ view: VIEW_ATTR, official: OFFICIAL_ATTR, active: ACTIVE_A
 .wb-inline-check input { margin: 2px 0 0; flex: none; }
 .wb-field-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
 .wb-field { display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; color: var(--dsw-alias-label-secondary); }
+/**
+ * 字段里"输入框 + 一个按钮"同排（2026-10-01 用户要求："不再记住"按钮与输入框放一行）。
+ *
+ * 为什么按钮要 flex:none：输入框自带 width:100%，若让它在 flex 里自由伸缩，
+ * 长路径会把按钮挤出弹窗（或反过来把输入框压到看不清）。
+ * 现在输入框吃剩余宽度（min-width:0 允许收缩）、按钮保持自身宽度不被压扁。
+ */
+.wb-field-row { display: flex; align-items: center; gap: 8px; }
+.wb-field-row > input, .wb-field-row > select { flex: 1 1 auto; min-width: 0; }
+.wb-field-row > .wb-btn { flex: none; white-space: nowrap; }
 .wb-field > span { font-size: 12px; }
 .wb-field input, .wb-field select, .wb-field textarea {
   background: var(--dsw-alias-bg-base, #17171a); color: inherit; font: inherit; font-size: 13px;
@@ -608,7 +773,7 @@ ${panelContainerCss({ view: VIEW_ATTR, official: OFFICIAL_ATTR, active: ACTIVE_A
 [data-dsh-personal-workbench-view] .wb-cap-bar i.p2 { background: var(--wb-p2); }
 [data-dsh-personal-workbench-view] .wb-cap-bar i.p3 { background: var(--wb-p3); }
 [data-dsh-personal-workbench-view] .wb-cap-bar i.free { background: color-mix(in srgb, var(--wb-ok) 36%, transparent); }
-[data-dsh-personal-workbench-view] .wb-cap-legend { display: flex; gap: 14px; margin-top: 8px; font-size: 11.5px; color: var(--wb-ink-2); flex-wrap: wrap; }
+[data-dsh-personal-workbench-view] .wb-cap-legend { display: flex; align-items: center; gap: 12px; margin-top: 8px; font-size: 11.5px; color: var(--wb-ink-2); flex-wrap: wrap; }
 [data-dsh-personal-workbench-view] .wb-cap-legend span { display: inline-flex; align-items: center; gap: 5px; }
 [data-dsh-personal-workbench-view] .wb-cap-legend i { width: 7px; height: 7px; border-radius: 2px; flex: none; }
 [data-dsh-personal-workbench-view] .wb-cap-legend b { color: var(--wb-ink-1); font-weight: 650; font-variant-numeric: tabular-nums; }
@@ -621,8 +786,44 @@ ${panelContainerCss({ view: VIEW_ATTR, official: OFFICIAL_ATTR, active: ACTIVE_A
 [data-dsh-personal-workbench-view] .wb-cap-rule-toggle {
   background: none; border: 1px solid var(--wb-line); border-radius: var(--wb-r-1, 6px);
   color: var(--wb-ink-2); font: inherit; font-size: 11.5px; padding: 2px 8px; cursor: pointer; flex: none;
+  /* 两态等宽：内容是固定的「箭头 + 规则」，宽度不随开合变化 */
+  display: inline-flex; align-items: center; gap: 3px;
 }
 [data-dsh-personal-workbench-view] .wb-cap-rule-toggle:hover { color: var(--wb-ink-1); border-color: var(--wb-ink-3); }
+/* 箭头按展开态旋转：
+   Icon name="chevron" 的字形是**左向**（‹），所以折叠态先转 -90° 变成"下"（⌄），
+   展开态再转 +90° 变成"上"（⌃）。两态之间正好差 180°，且**字形与占位都不变**，
+   按钮盒子尺寸因此逐像素一致。 */
+[data-dsh-personal-workbench-view] .wb-cap-rule-arrow { display: inline-flex; transform: rotate(-90deg); transition: transform .15s ease; }
+[data-dsh-personal-workbench-view] .wb-cap-rule[data-cap-expanded='1'] .wb-cap-rule-arrow { transform: rotate(90deg); }
+
+/**
+ * 内联模式：把「规则」块**拆开**——头部那个开关留在容量图例那一行，展开体拿到全宽下方。
+ *
+ * 'display: contents' 让 '.wb-cap-rule' 这个壳不生成盒子，它的两个孩子直接成为图例 flex 行的成员：
+ * 头部（含开关）就落在图例行里，展开体（'flex-basis:100%'）被挤到下一行、横跨整幅宽度。
+ * 这比"把整块塞进图例行"正确得多：早期版本一展开，长内容全挤在那条窄行里，
+ * 连带把开关推来推去（用户原话："打开、收起规则的按钮还不在同一个位置"）。
+ */
+[data-dsh-personal-workbench-view] .wb-cap-legend {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  font-size: 11.5px; color: var(--wb-ink-2); font-variant-numeric: tabular-nums;
+}
+[data-dsh-personal-workbench-view] .wb-cap-legend .wb-cap-legend-item { display: inline-flex; align-items: center; gap: 4px; }
+/**
+ * 展开时图例项**保留占位、只是看不见**（visibility:hidden，不是 display:none）。
+ *
+ * 为什么不能用 display:none：那样整行会变窄，右推的按钮就**从右端滑到左端**
+ * （2026-10-01 实测：折叠态按钮 x=593，展开态变成 x=313 —— 正是用户说的
+ * "打开、收起规则的按钮不在同一个位置"）。保留占位后按钮横向位置一个像素都不动。
+ * 语义上也没问题：图例是"容量条的分段说明"，展开规则时把它视觉上让位即可。
+ */
+[data-dsh-personal-workbench-view] .wb-cap-legend[data-cap-expanded='1'] .wb-cap-legend-item { visibility: hidden; }
+[data-dsh-personal-workbench-view] .wb-cap-legend .wb-cap-rule { display: contents; margin: 0; border: 0; padding: 0; }
+[data-dsh-personal-workbench-view] .wb-cap-legend .wb-cap-rule-sum { display: none; }
+/* 按钮永远贴在**右端**：两态（含展开态图例项被让位）位置都一致 */
+[data-dsh-personal-workbench-view] .wb-cap-legend .wb-cap-rule-head { display: inline-flex; align-items: center; gap: 0; flex: none; margin-left: auto; }
+[data-dsh-personal-workbench-view] .wb-cap-legend .wb-cap-rule-body { flex-basis: 100%; margin-top: 6px; }
 [data-dsh-personal-workbench-view] .wb-cap-rule-sum { font-size: 11.5px; color: var(--wb-ink-3); font-variant-numeric: tabular-nums; }
 [data-dsh-personal-workbench-view] .wb-cap-rule-sum b { color: var(--wb-ink-1); font-weight: 650; }
 [data-dsh-personal-workbench-view] .wb-cap-rule-body { margin-top: 9px; display: flex; flex-direction: column; gap: 10px; }
@@ -630,7 +831,7 @@ ${panelContainerCss({ view: VIEW_ATTR, official: OFFICIAL_ATTR, active: ACTIVE_A
   margin: 0; padding-left: 20px; font-size: 12px; line-height: 1.75; color: var(--wb-ink-2);
 }
 [data-dsh-personal-workbench-view] .wb-cap-rules b { color: var(--wb-ink-1); font-weight: 650; }
-[data-dsh-personal-workbench-view] .wb-cap-audit-wrap, [data-dsh-personal-workbench-view] .wb-cap-overdue {
+[data-dsh-personal-workbench-view] .wb-cap-audit-wrap, [data-dsh-personal-workbench-view] .wb-cap-overdue, [data-dsh-personal-workbench-view] .wb-cap-unscheduled {
   border: 1px solid var(--wb-line); border-radius: var(--wb-r-2); overflow: hidden;
 }
 [data-dsh-personal-workbench-view] .wb-cap-audit-title, [data-dsh-personal-workbench-view] .wb-cap-overdue-head {
@@ -674,6 +875,20 @@ ${panelContainerCss({ view: VIEW_ATTR, official: OFFICIAL_ATTR, active: ACTIVE_A
   box-shadow: var(--wb-sh-1); padding: 13px 14px; margin-bottom: 12px;
 }
 [data-dsh-personal-workbench-view] .wb-card h4 { font-size: 13px; padding-bottom: 9px; border-bottom: 1px solid var(--wb-line-soft); }
+/**
+ * ⚠️ 进度卡里的 h4 **不是卡片标题**，不该继承上面那条"标题下划线"。
+ *
+ * 为什么必须写在**这里**而不是上面那条 .wb-progress-card h4 里：
+ * 上面那条选择器带 [data-dsh-personal-workbench-view]，**特异性更高**，
+ * 后来者再写 .wb-progress-card h4 也压不过它 —— 2026-10-01 实测踩到：
+ * 我先把覆盖规则写在 233 行，跑真机一看下划线还在、padding-bottom 仍是 9px。
+ * 规矩：皮肤层的覆盖要写在**同层且更靠后**（或用等特异性 + 更靠后）。
+ */
+[data-dsh-personal-workbench-view] .wb-progress-card { padding: 6px 10px; }
+[data-dsh-personal-workbench-view] .wb-progress-card h4 {
+  margin: 0; padding-bottom: 0; border-bottom: none;
+  font-size: 12.5px; font-weight: 600; color: var(--wb-ink-3);
+}
 [data-dsh-personal-workbench-view] .wb-list {
   border: 1px solid var(--wb-line); border-radius: var(--wb-r-2); background: var(--wb-surface);
   box-shadow: var(--wb-sh-1); overflow: hidden;
@@ -991,8 +1206,8 @@ ${panelContainerCss({ view: VIEW_ATTR, official: OFFICIAL_ATTR, active: ACTIVE_A
 /**
  * 对外导出的最终样式表：**令牌层 + 令牌化后的主体**。
  *
- * 两步的意义：主体里所有 `--dsw-*` 引用都被换成 `--wb-*`，而 `--wb-*` 在
- * `tokenLayerCss()` 里以 `light-dark()` 兜底 —— 这样即使宿主主题令牌
+ * 两步的意义：主体里所有 '--dsw-*' 引用都被换成 '--wb-*'，而 '--wb-*' 在
+ * 'tokenLayerCss()' 里以 'light-dark()' 兜底 —— 这样即使宿主主题令牌
  * 没有被继承到我们的节点（Modal portal 到 body、面板跨出主题子树），
  * 也只会跟随明暗，而不会退化成一片深黑。
  */

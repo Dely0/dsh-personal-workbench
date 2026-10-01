@@ -95,7 +95,8 @@ async function withServer(fn, options = {}) {
 test('manual plan editing PUT saves added task instead of returning not found', async () => {
   await withServer(async ({ db, request }) => {
     const task = createTask(db, { title: 'manual plan task', typeCode: 'code_impl', priorityCode: 'p2' })
-    const child = createTask(db, { title: 'manual plan child', typeCode: 'code_impl', priorityCode: 'p2', parentId: task.id })
+    // 同一条独立支上的第二个任务（父子同链会被共同校验拒绝，那是 AX-D04 单独锁的行为）。
+    const second = createTask(db, { title: 'manual plan second', typeCode: 'code_impl', priorityCode: 'p2' })
     const planDate = localDateString()
 
     const health = await request('GET', '/api/workbench/health')
@@ -108,19 +109,36 @@ test('manual plan editing PUT saves added task instead of returning not found', 
     const put = await request('PUT', `/api/workbench/plans/${planDate}`, {
       items: [
         { taskId: task.id, order: 1, note: 'first' },
-        { taskId: child.id, order: 2, note: 'added manually' },
+        { taskId: second.id, order: 2, note: 'added manually' },
       ],
     })
     assert.equal(put.status, 200)
     assert.equal(put.body.ok, true)
     assert.equal(put.body.plan.items.length, 2)
-    assert.equal(put.body.plan.items[1].taskId, child.id)
+    assert.equal(put.body.plan.items[1].taskId, second.id)
     assert.equal(put.body.plan.sourceCode, 'manual')
 
     const get = await request('GET', `/api/workbench/plans?date=${planDate}`)
     assert.equal(get.status, 200)
     assert.equal(get.body.plan.items.length, 2)
     assert.equal(get.body.plan.items[1].note, 'added manually')
+
+    // 同一父子链不能同时入计划（POST/PUT 都拦，且无部分生效）
+    const child = createTask(db, { title: 'manual plan child', typeCode: 'code_impl', priorityCode: 'p2', parentId: task.id })
+    const chainPut = await request('PUT', `/api/workbench/plans/${planDate}`, {
+      items: [
+        { taskId: task.id, order: 1 },
+        { taskId: child.id, order: 2 },
+      ],
+    })
+    assert.equal(chainPut.status, 400)
+    assert.match(chainPut.body.error, /同一父子链/)
+    const afterChain = await request('GET', `/api/workbench/plans?date=${planDate}`)
+    assert.equal(afterChain.body.plan.items.length, 2, '被拒的 PUT 不得有部分生效')
+
+    const chainPost = await request('POST', `/api/workbench/plans/${planDate}/items`, { taskId: child.id })
+    assert.equal(chainPost.status, 400)
+    assert.match(chainPost.body.error, /同一父子链/)
   })
 })
 
@@ -159,10 +177,10 @@ test('manual plan editing PUT removes an item and keeps remaining done task', as
   await withServer(async ({ db, request }) => {
     const normal = createTask(db, { title: 'normal plan item', typeCode: 'code_impl', priorityCode: 'p2' })
     const done = createTask(db, { title: 'done plan item', typeCode: 'code_impl', priorityCode: 'p2' })
-    updateTask(db, done.id, { statusCode: 'done' })
     const planDate = localDateString()
 
-    // Build a plan containing a normal task and a completed task.
+    // Build a plan containing a normal task and a (still open) task, then close the second one —
+    // 既有项即使已完成也原样保留，但**新增**已完成任务会被拒（AX-D04）。
     const initial = await request('PUT', `/api/workbench/plans/${planDate}`, {
       items: [
         { taskId: normal.id, order: 1, note: 'normal' },
@@ -171,6 +189,19 @@ test('manual plan editing PUT removes an item and keeps remaining done task', as
     })
     assert.equal(initial.status, 200)
     assert.equal(initial.body.plan.items.length, 2)
+    updateTask(db, done.id, { statusCode: 'done' })
+
+    // 新增已完成任务 → 400（不许把关闭任务排进未来工作）
+    const addClosed = await request('POST', `/api/workbench/plans/${planDate}/items`, { taskId: done.id })
+    assert.equal(addClosed.status, 200, '同 taskId 已在计划里 → 幂等返回，不是 400')
+    assert.equal(addClosed.body.added, false)
+    assert.equal(addClosed.body.plan.items[1].taskId, done.id, '幂等追加不改已有成员')
+    // 新增**别的**已完成任务 → 400（新增只允许 open 任务）
+    const anotherDone = createTask(db, { title: 'another done', typeCode: 'code_impl', priorityCode: 'p2' })
+    updateTask(db, anotherDone.id, { statusCode: 'done' })
+    const closedPost = await request('POST', `/api/workbench/plans/${planDate}/items`, { taskId: anotherDone.id })
+    assert.equal(closedPost.status, 400)
+    assert.match(closedPost.body.error, /已完成/)
 
     // Remove the normal item; the remaining done task must still be saved.
     const removed = await request('PUT', `/api/workbench/plans/${planDate}`, {
@@ -200,7 +231,7 @@ test('manual plan editing PUT removes an item and keeps remaining done task', as
 
     const empty = await request('PUT', `/api/workbench/plans/${planDate}`, { items: [] })
     assert.equal(empty.status, 400)
-    assert.match(empty.body.error, /at least one item/)
+    assert.match(empty.body.error, /不能为空/)
   })
 })
 
@@ -954,8 +985,88 @@ test('[容量] 两个新设置键：缺省值、写入回读、越界夹取', as
   })
 })
 
-test('[容量] 客户端与服务端的 estimatedMinutes 夹取必须同口径（跨模块等价性，防两处漂移）', async () => {
-  /**
+/**
+ * AX-R03（路由侧）：角色库三个设置键与 GET/POST 同形状。
+ *
+ * 为什么这条在 `routes.test.mjs`（而不是角色测试文件里）：
+ * 它验的是**设置接口的契约**（三个键的类型/缺省/脏值），角色库自己的行为在
+ * `personaLibrary.test.mjs`。这条与上面那条"两个新设置键"是同一类断言。
+ */
+test('[角色] 三个设置键：缺省形状、写入回读、数组去重、脏值不打挂接口', async () => {
+  await withServer(async ({ request }) => {
+    const initial = await request('GET', '/api/workbench/settings')
+    assert.equal(initial.body.settings.personaExternalDir, '')
+    assert.deepEqual(initial.body.settings.personaFavorites, [])
+    assert.deepEqual(initial.body.settings.personaDisabledIds, [])
+
+    const written = await request('POST', '/api/workbench/settings', {
+      personaExternalDir: 'D:\\Code\\Linksight\\LS-Skills\\personas',
+      personaFavorites: ['rf/甲', ' rf/甲 ', 'rf/乙'],
+      personaDisabledIds: ['dotnet/丙', 42, '', '  '],
+    })
+    assert.equal(written.body.settings.personaExternalDir, 'D:\\Code\\Linksight\\LS-Skills\\personas')
+    assert.deepEqual(written.body.settings.personaFavorites, ['rf/甲', 'rf/乙'], '去重 + 去首尾空白 + 保序')
+    assert.deepEqual(written.body.settings.personaDisabledIds, ['dotnet/丙'], '丢非字符串与空白项')
+
+    /** GET 与 POST 的键集合必须逐字一致（设置页拿响应回填 state）。 */
+    const back = await request('GET', '/api/workbench/settings')
+    assert.deepEqual(Object.keys(back.body.settings).sort(), Object.keys(written.body.settings).sort())
+    assert.deepEqual(back.body.settings, written.body.settings)
+
+    /** 不传就不动。 */
+    const kept = await request('POST', '/api/workbench/settings', { defaultWorkspace: 'D:\\Code\\x' })
+    assert.equal(kept.body.settings.personaExternalDir, 'D:\\Code\\Linksight\\LS-Skills\\personas')
+    assert.deepEqual(kept.body.settings.personaFavorites, ['rf/甲', 'rf/乙'])
+
+    /** 非数组不当成"清空"（否则设置页漏传一个字段就会把用户的收藏抹掉）。 */
+    const notArray = await request('POST', '/api/workbench/settings', { personaFavorites: 'oops' })
+    assert.deepEqual(notArray.body.settings.personaFavorites, ['rf/甲', 'rf/乙'])
+  })
+})
+
+test('[角色] 设置里的脏 JSON 不让接口 500（手改 meta / 旧版本写过别的形状）', async () => {
+  const { db, server } = startTestServer({})
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const address = server.address()
+  const port = address.port
+  const request = async (method, path, body) => {
+    const res = await fetch(`http://127.0.0.1:${port}${path}`, {
+      method,
+      headers: body === undefined ? undefined : { 'content-type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    })
+    return { status: res.status, body: await res.json() }
+  }
+  try {
+    const { writeMeta } = await import('../lib/db/repo.js')
+    writeMeta(db, 'persona_favorites', '{不是 JSON')
+    writeMeta(db, 'persona_disabled_ids', '{"not":"an array"}')
+    const res = await request('GET', '/api/workbench/settings')
+    assert.equal(res.status, 200, '脏值必须退化成空数组，而不是把整个设置接口打挂')
+    assert.deepEqual(res.body.settings.personaFavorites, [])
+    assert.deepEqual(res.body.settings.personaDisabledIds, [])
+  } finally {
+    await new Promise((resolve) => server.close(resolve))
+    db.close()
+  }
+})
+
+test('[角色] 默认（未配置外部根、无收藏）就能看到随包的六篇内置角色', async () => {
+  await withServer(async ({ request }) => {
+    const list = await request('GET', '/api/workbench/personas')
+    assert.equal(list.status, 200)
+    const names = list.body.personas.filter((persona) => persona.source === 'builtin').map((persona) => persona.name).sort()
+    assert.deepEqual(names, ['实现者', '只读审查者', '反向验证者', '调研者', '方案设计者', '测试工程师'].sort(),
+      `内置六篇必须开箱可读，实际：${names.join(', ')}`)
+    for (const persona of list.body.personas) {
+      assert.equal(persona.enabled, true, '未禁用时默认启用')
+      assert.equal(persona.favorite, false)
+      assert.match(persona.revision, /^[0-9a-f]{64}$/)
+    }
+  })
+})
+
+test('[容量] 客户端与服务端的 estimatedMinutes 夹取必须同口径（跨模块等价性，防两处漂移）', async () => {  /**
    * 为什么需要这条：客户端与宿主是**两个编译容器**（客户端不进宿主产物），
    * 所以 `clampEstimateForStorage`（服务端）与 `clampEstimatedMinutes`（客户端）
    * 是两份同构实现。两份实现对同一批输入必须给同一个结果 ——

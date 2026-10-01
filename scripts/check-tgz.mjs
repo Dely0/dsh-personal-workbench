@@ -8,13 +8,17 @@
  *
  * 做法：零依赖读 gzip + tar 头（tar 格式足够简单，只需要前 512 字节的头部），
  * 不做完整解包，只核对：① gzip 能解；② tar 里能找到 package.json；③ 版本与期望一致；
- * ④ lib/client.js 与 lib/index.js 都在且非空。
+ * ④ lib/client.js 与 lib/index.js 都在且非空；⑤ 内置角色库（`assets/personas/**`）在包里。
+ *
+ * ⚠️ tar 读取必须认 **PAX 扩展头**（长路径），实现见 `scripts/lib/tarReader.mjs`，
+ * 判据见 `test/tarReader.test.mjs` —— 不认它会让长路径条目被静默漏掉（2026-10-01 实测）。
  *
  * 用法：node scripts/check-tgz.mjs <tgz路径> [期望版本]
  */
 import { createGunzip } from 'node:zlib'
 import { createReadStream, statSync } from 'node:fs'
 import { basename } from 'node:path'
+import { listTarEntries } from './lib/tarReader.mjs'
 
 /**
  * ⚠️ tgz 路径**必须显式给**（2026-09-13 改）。
@@ -53,25 +57,10 @@ async function gunzip(file) {
   return Buffer.concat(chunks)
 }
 
-/** 逐条遍历 tar 头，收集文件条目（只读 512 字节头 + 跳过数据块）。 */
-function listTarEntries(buffer) {
-  const entries = []
-  let offset = 0
-  while (offset + 512 <= buffer.length) {
-    const header = buffer.subarray(offset, offset + 512)
-    /** 全零块 = 归档结束 */
-    if (header.every((byte) => byte === 0)) break
-    const name = header.subarray(0, 100).toString('utf8').replace(/\0.*$/, '')
-    const sizeText = header.subarray(124, 136).toString('utf8').replace(/\0.*$/, '').trim()
-    const size = Number.parseInt(sizeText, 8) || 0
-    const typeFlag = String.fromCharCode(header[156])
-    entries.push({ name, size, typeFlag, dataOffset: offset + 512 })
-    offset += 512 + Math.ceil(size / 512) * 512
-  }
-  return entries
-}
-
-const problems = []
+/**
+ * tar 读取器已抽到 `scripts/lib/tarReader.mjs`（**可单测**，不再内联在脚本里）：
+ * 它认 PAX 扩展头这件事必须有会失败的判据 —— 旧的静默漏条目 bug 就是"看不出来"。
+ */
 let buffer
 try {
   buffer = await gunzip(tgz)
@@ -82,6 +71,8 @@ try {
 }
 
 const entries = listTarEntries(buffer)
+
+const problems = []
 console.log(`✅ tar 条目数：${entries.length}`)
 
 /** ① package.json 必须能解析出版本号 */
@@ -130,6 +121,27 @@ if (entries.some((entry) => entry.name === 'package/cordis.patch.yml')) {
   console.log('✅ package/cordis.patch.yml 存在')
 } else {
   problems.push('缺少 cordis.patch.yml（插件不会被 loader 装上）')
+}
+
+/**
+ * ④ 内置角色库必须**真的在包里**（ADR 0005 / requirements §6.1）。
+ *
+ * 为什么要在"打包检查"这一层拦它：`files` 少写一行时，本地开发全绿、
+ * 测试全绿（测试读的是仓库里的 `assets/`），只有**发布出去的包**里没有默认人格 ——
+ * 用户装完发现"角色库是空的"，而我们在本机永远复现不出来。
+ * 这与 `repository` 那条（①b）是同一类事故：**只有包本身才能证伪**。
+ */
+const personaEntries = entries.filter((entry) => /^package\/assets\/personas\/.+\.md$/i.test(entry.name) && entry.typeFlag !== '5')
+if (personaEntries.length === 0) {
+  problems.push('包里没有 assets/personas/**.md —— package.json 的 files 漏了内置角色库，发布出去的包会是"没有默认人格"的')
+} else {
+  console.log(`✅ 内置角色库：${personaEntries.length} 篇（assets/personas/**）`)
+  const empty = personaEntries.filter((entry) => entry.size <= 0)
+  if (empty.length > 0) problems.push(`内置角色文件为空：${empty.map((entry) => entry.name).join(', ')}`)
+}
+/** README 是说明而不是角色：它被排除（需求 §6.1），所以包里也不该有。 */
+if (entries.some((entry) => /^package\/assets\/personas\/README\.md$/i.test(entry.name))) {
+  console.log('ℹ️ assets/personas/README.md 在包里（会被发现逻辑按 README 排除，不影响角色数量）')
 }
 
 console.log(`\n包名：${basename(tgz)}`)

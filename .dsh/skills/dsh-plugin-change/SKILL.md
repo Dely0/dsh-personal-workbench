@@ -200,7 +200,61 @@ whenToUse: 在本仓库（clone 下来的 DSH 插件源码树）里写代码、�
 - **统计口径自己也要防**：`Measure-Object -Line` 只数换行符（末行无换行会少 1），
   行数/占比这类数字要用 `(Get-Content f).Count` 或 `wc -l`，别拿错口径当证据（我把 4249 说成 4109 过）。
 
-## 14. 提交前自问（编码侧）
+## 14. 研发版本验收链（进仓库那条链，怎么用/怎么改）
+
+> 规格：`docs/adr/0006-dev-verify-chain.md`；实现：`scripts/dev-verify.mjs` + `scripts/verify/*`；
+> 判据源：`docs/tasks/36c8e8ef-…/legacy-regression.md`（43 个 LEG）与 `acceptance.md`（45 个 AX）。
+
+### 14.1 怎么跑
+
+```sh
+# 只读：预检 + 打印阶段计划（零写入，不建证据目录）
+node scripts/dev-verify.mjs --url http://127.0.0.1:3080 --profile web \
+  --profile-dir "<测试 profile 绝对目录>" --db-path "<独立测试 DB 绝对路径>" --dry-run
+
+# 真跑：构建 → 装盘 → 零增量 diff → dump-config → 只重启 3080 → health → token → 套件 → 证据
+node scripts/dev-verify.mjs --url http://127.0.0.1:3080 --profile web \
+  --profile-dir "<测试 profile 绝对目录>" --db-path "<独立测试 DB 绝对路径>"
+```
+
+退出码：`0` 全过 / `1` 构建·装盘·断言失败（含 health 200 但 buildId 不匹配）/ `2` 自锁拒绝·前置缺失 / `3` 等待超时。
+**默认拒绝不是 bug**：目标 profile 没显式配独立 `dbPath` 时，预检 fail-closed 拒绝（默认库跨 profile 共用，
+不隔离就会把正式库迁到新 schema）。`--force` 只能绕"profile 名相同但目录不同"这一条。
+
+### 14.2 加一套件要动的地方
+
+1. 写 `scripts/verify/suites/<id>.mjs`；**共享脚手架是 `scripts/verify/suites/_harness.mjs`**
+   （下划线开头 = 约定俗成的"共享件"，`check-verify-scripts.mjs` 会跳过它）。
+2. argv：`--url / --evidence-dir / --user-data-root`，外加链会显式传的
+   `--target-profile / --target-profile-dir / --db-path`（**目标**的声明；"当前实例"只在环境变量里）。
+   token 只从 `DSH_VERIFY_TOKEN` 环境变量拿，**绝不进 argv**（进程列表可见）。
+3. stdout 最后一行必须是 `{"passed":n,"failed":n,"skipped":n,"total":n}`；同时在
+   `<evidence-dir>/suite-<id>.json` 落一份。
+4. 在 `scripts/verify/suites.json` 里登记并把 `status` 从 `pending-migration` 翻成 `active`
+   —— 只要还有 `required && status!=='active'`，链在 `suites` 阶段直接退出码 2。
+5. 跑 `node scripts/check-verify-scripts.mjs`：套件目录里**未声明**的 `.mjs` 是硬错误（静默丢件）。
+
+### 14.3 写套件时的硬纪律（每条都有本轮实证）
+
+- **`total<=0` / 拿不到汇总 / required 套件有 `skipped` 一律不算通过**。拿不到真实模型链路时
+  记 `skip` + 原因，让链判失败 —— 这就是 `persona` 套件里 M 层的做法，**不许**只测"下拉选中了"就写 pass。
+- **前置缺失记 fail，不记 skip**。历史脚本"找不到按钮就少测一项、最后仍报 6/6"正是要修的形态。
+- **`finally` 只清理，绝不改退出码**；脚本级异常必须变成退出码 1。
+- **只清自己造的东西**：合成任务/草稿标题带 `runId`，清理只认登记过的 id 与本次计划日期，
+  不按标题批量匹配别人的数据。
+- **不写死会漂移的绝对值**：容量这类"库里其他任务也会变"的数字，用
+  "**DOM 读数 == 同一时刻服务端合计**"来断言，不写"应等于 90 min"。
+- **子进程只列顶层文件**：会话目录动辄上万个子目录，递归扫会把套件拖到超时。
+
+### 14.4 改链本身的判据先跑什么
+
+```sh
+node --test test/verifySafety.test.mjs test/devVerify.test.mjs   # 自锁/白名单/脱敏的唯一防线
+```
+
+---
+
+## 15. 提交前自问（编码侧）
 
 - [ ] 这个判定/策略**只有一个实现**吗？投影是否也走它？
 - [ ] 想锁住的行为，**搬到纯模块并写了会失败的测试**吗？（政策 → 测试）

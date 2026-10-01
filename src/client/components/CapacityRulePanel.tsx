@@ -1,74 +1,85 @@
 /**
- * 「今日容量 · 规则与账本」面板。
+ * 「今日容量 · 规则与账本」面板（T2/D09 起口径 = 当日**计划投入**，ADR 0002）。
  *
  * ## 职责边界（本项目最大的 bug 类别是"同一语义两处算"）
- * 这个组件**只吃 props，不自己算一遍**：`planned` / `byPriority` / 账本两半全部来自
- * `computeTodayCapacity`（纯函数，`src/client/capacity.ts`）。
- * 组件里**不许**出现 `reduce(` + `estimatedMinutes` 这种求和，也不许自己判"今天到期"。
+ * 这个组件**只吃 props，不自己算一遍**：`planned` / `doneMinutes` / `unscheduled` /
+ * `byPriority` 全部来自纯函数 `computeTodayCapacity` →
+ * `src/shared/dailyPlanPolicy.ts#computeCapacityLedger`。
+ * 组件里**不许**出现 `reduce(` + `minutes` 这种求和，也不许自己判"今天到期/逾期"。
  *
  * ## 状态所有权
- * `includeOverdue`（逾期是否计入）与 `defaultEstimateMinutes`（默认耗时）的**唯一权威源是
- * `settings`**（服务端 meta）。本组件只负责把值渲染出来、把用户动作回调出去，
- * **不存第二份副本** —— 否则就会出现"面板开关是开的、容量按关的算"这种假控件。
+ * `includeOverdue`（显示逾期待办候选）与 `defaultEstimateMinutes`（默认投入）的
+ * **唯一权威源是 `settings`**（服务端 meta）。本组件只渲染值、把动作回调出去，
+ * **不存第二份副本** —— 否则会出现"面板开关是开的、容量按关的算"这种假控件。
  *
- * 文案与设计文档 §12.1–§12.3 逐字对应，改这里必须同步改文档。
+ * 文案与 ADR 0002 逐条对应，改这里必须同步改文档。
  */
-import type { CapacityResult, CapacityBreakdown } from '../capacity.js'
+import type { CapacityLedger, CapacityPlanRow, CapacityUnscheduledRow } from '../../shared/dailyPlanPolicy.js'
+import { Icon } from './Icon.js'
 
 /** 面板只吃 props；`capacity` 由页面从纯函数结果直接传进来，不做二次加工。 */
 export interface CapacityRulePanelProps {
-  capacity: CapacityResult
+  capacity: CapacityLedger
   /** 每天可投入时长（分钟）—— 头部读数用。 */
   dailyCapacityMinutes: number
-  /** 默认耗时（分钟）—— 文案里要显示"默认 N 分钟"，所以必须用**当前设置值**而不是字面量 30。 */
+  /** 默认投入（分钟）—— 文案里要显示"默认 N 分钟"，所以必须用**当前设置值**而不是字面量 30。 */
   defaultEstimateMinutes: number
   includeOverdue: boolean
-  /** 逾期口径开关（唯一权威源是 settings；这里只回调）。 */
+  /** 逾期候选开关（唯一权威源是 settings；这里只回调）。 */
   onIncludeOverdueChange: (next: boolean) => void
   expanded: boolean
   onExpandedChange: (next: boolean) => void
+  /** 一键排入（每条未排入行）；返回的 Promise 失败时父级负责显示中文错误。 */
+  onAddToPlan?: (taskId: string, minutes: number) => Promise<void>
+  /** 正在排入的 taskId（禁用重复点击）。 */
+  addingTaskId?: string | null
+  /**
+   * 只渲染**头部那个开关**，不渲染摘要与展开体（2026-10-01）。
+   *
+   * 用户要求："规则按钮放到上面一行去"（与容量彩条/图例同一行），并删掉那段
+   * "已排…未排入…"的提示段 —— 它独占一整行，而同样的数字在上面的
+   * 「已排 / 可投入 / 余」里已经有了，属于**同一事实的第二处展示**。
+   * 所以内联模式下这里只出一个开关按钮；展开体仍由本组件渲染（口径不变）。
+   */
+  inlineToggle?: boolean
 }
 
-/**
- * 账本「来源」列的取值（逐字，见设计文档 §12.3）。
- *
- * 一条任务可能同时命中多个标记（例如"逾期计入 + 按默认 30"），所以返回数组而不是单值 ——
- * 只给一个标签会让用户以为"没有别的特殊情况"。
- */
-export function capacitySourceLabels(row: CapacityBreakdown, defaultEstimateMinutes: number): string[] {
+/** 计划项的来源标签（逐字，用户能一眼看出这条是 AI 排的还是手动的）。 */
+export function capacitySourceLabel(source: CapacityPlanRow['source']): string {
+  if (source === 'plan-ai') return 'AI 提案'
+  if (source === 'plan-manual') return '手动排入'
+  return '导入'
+}
+
+/** 账本一行的补充标记（任务状态 / 数据异常）。 */
+export function capacityRowLabels(row: CapacityPlanRow): string[] {
   const labels: string[] = []
-  if (row.dueUnparseable) labels.push('截止时间无法解析')
-  else if (row.overdueIncluded) labels.push('逾期计入')
-  else if (row.source === 'due-today') labels.push('今天到期')
-  else if (row.source === 'no-due-doing') labels.push('无截止·推进中')
-  if (row.usedFallback) labels.push(`按默认 ${defaultEstimateMinutes}`)
-  if (row.allDay) labels.push('全天')
-  if (row.inheritedDue) {
-    // 继承来源要看祖先状态：已取消父任务的过期 due = "幽灵逾期"（既有语义，本任务不修只标注）
-    labels.push(row.ghostFromCancelledAncestor ? '继承自已取消父任务' : '继承父任务截止')
-  }
+  if (row.taskMissing) labels.push('任务不存在')
+  else if (row.taskClosed) labels.push(row.statusCode === 'done' ? '任务已完成' : row.statusCode === 'cancelled' ? '任务已取消' : '任务已归档')
+  if (row.effortDone) labels.push('今日投入已结束')
   return labels
 }
 
-/** 条形读数的 `aria-label`：把三个计数也带上，读屏用户与视觉用户看到的口径必须一致。 */
-export function capacityAriaLabel(capacity: CapacityResult): string {
-  return `今日任务时间占比：紧急 ${capacity.byPriority.p0} 分钟、高 ${capacity.byPriority.p1} 分钟、`
+/** 条形读数的 `aria-label`：读屏用户与视觉用户看到的口径必须一致。 */
+export function capacityAriaLabel(capacity: CapacityLedger): string {
+  if (!capacity.readable) return `今日容量不可计算：${capacity.reason ?? '计划数据无法解析'}`
+  return `今日计划投入占比：紧急 ${capacity.byPriority.p0} 分钟、高 ${capacity.byPriority.p1} 分钟、`
     + `普通 ${capacity.byPriority.p2} 分钟、低 ${capacity.byPriority.p3} 分钟、空闲 ${capacity.free} 分钟；`
-    + `今天到期 ${capacity.dueTodayCount} 条、无截止推进中 ${capacity.noDueDoingCount} 条、`
-    + `逾期未计入 ${capacity.overdueExcluded.filter((row) => !row.dueUnparseable).length} 条 / ${capacity.overdueMinutes} 分钟。`
+    + `已排 ${capacity.plannedCount} 条 / ${capacity.planned} 分钟（其中今日投入已结束 ${capacity.doneMinutes} 分钟），`
+    + `未排入 ${capacity.unscheduledCount} 条 / 建议投入合计 ${capacity.unscheduledSuggestedMinutes} 分钟。`
 }
 
 const RULE_TEXTS = (defaultEstimateMinutes: number): Array<{ title: string; body: string }> => [
-  { title: '算哪些任务', body: '只看未归档、未完成、未取消的任务。' },
-  { title: '截止时间会沿任务树继承', body: '任务自己没设截止时间时，用它最近的有截止时间的祖先的。' },
-  { title: '今天到期', body: '有效截止时间落在今天（本地日）的，计入「已排」。' },
-  { title: '无截止但在推进', body: '自己和祖先都没有截止时间、且状态是进行中/受阻的，计入「已排」。' },
-  { title: '逾期的默认不计入', body: '有效截止时间早于今天 0 点且未完成的，默认不计入「已排」（下面可以打开开关把它算进去）。它和「今天到期」互不重叠，不会算两遍。' },
-  { title: '每条任务算多少分钟', body: `用任务的「预计耗时」；没填的按默认耗时 ${defaultEstimateMinutes} 分钟（可在设置里改）。全天任务同样按预计耗时算 —— 「全天」只影响显示与重复锚点，不改变容量计算。` },
-  { title: '汇总口径', body: '已排 = 上面所有计入任务的分钟之和；余 = max(0, 可投入 − 已排)；已排 > 可投入 时读数标为超支。下面的账本逐条列出了每个数字的来源。' },
+  { title: '「已排」只算当天计划', body: '已排 = 当天的「计划投入」分钟之和。没有排进当天计划的任务，即使今天到期也不计入 —— 它们出现在下面的「未排入」区，可以一键排入。' },
+  { title: '计划投入是快照', body: '每条计划项的分钟数在排入那一刻就冻结：之后改任务的「预计耗时」不会回头改写它。要改就单独改这一条的计划投入。' },
+  { title: '历史投入不自动减', body: '任务完成/取消/归档、或者今日投入已结束时，那一天的投入**仍然算在已排里**（它是那天的计划记录）。只有你移除该日计划项或删除整份计划才会减少。' },
+  { title: '未排入只是候选', body: `下面的「未排入」是你今天可能做的事，每条显示**建议投入**（任务的预计耗时，没填就按默认 ${defaultEstimateMinutes} 分钟，可在设置里改）。建议投入**不计入**已排，避免把两件事混成一个数字。` },
+  { title: '逾期不改变已排', body: '「显示逾期待办候选」只决定逾期的未完成任务要不要出现在候选里，**不改变已排**，也不会把它们自动排进计划。' },
+  { title: '不含实际工时', body: '这里没有计时器：计划投入是你打算投多少，今日投入是否结束是你自己的判断，两者都不是实际工时，也不会自动累加任务进度。' },
+  { title: '提醒与日历不受影响', body: '提醒、逾期判定与日历上的到期展示仍按「截止时间」走，本次改造只动了「今天要投入多少」这件事。' },
 ]
 
-function AuditTable({ rows, defaultEstimateMinutes }: { rows: CapacityBreakdown[]; defaultEstimateMinutes: number }): JSX.Element {
+function AuditTable({ rows }: { rows: CapacityPlanRow[] }): JSX.Element {
   return (
     <table className="wb-cap-audit">
       <thead>
@@ -76,11 +87,14 @@ function AuditTable({ rows, defaultEstimateMinutes }: { rows: CapacityBreakdown[
       </thead>
       <tbody>
         {rows.map((row) => (
-          <tr key={row.id}>
+          <tr key={row.taskId}>
             <td className="t" title={row.title}>{row.title}</td>
             <td className="p">{row.band.toUpperCase()}</td>
             <td className="m">{row.minutes}</td>
-            <td className="s">{capacitySourceLabels(row, defaultEstimateMinutes).map((label) => <span key={label} className="tag">{label}</span>)}</td>
+            <td className="s">
+              <span className="tag">{capacitySourceLabel(row.source)}</span>
+              {capacityRowLabels(row).map((label) => <span key={label} className="tag">{label}</span>)}
+            </td>
           </tr>
         ))}
       </tbody>
@@ -88,17 +102,67 @@ function AuditTable({ rows, defaultEstimateMinutes }: { rows: CapacityBreakdown[
   )
 }
 
-export function CapacityRulePanel(props: CapacityRulePanelProps): JSX.Element {
-  const { capacity, dailyCapacityMinutes, defaultEstimateMinutes, includeOverdue, onIncludeOverdueChange, expanded, onExpandedChange } = props
-  // 逾期区只统计**真逾期**：脏 due 串也在这个账本里（不许静默消失），但它不是逾期，
-  // 不能混进"逾期 N 条 / M min"这个读数里（会让用户以为历史欠账比实际更多）。
-  const overdueRows = capacity.overdueExcluded.filter((row) => !row.dueUnparseable)
-  const unparseableRows = capacity.overdueExcluded.filter((row) => row.dueUnparseable)
-  // 分钟合计**用纯函数给的值**，不在这里再 reduce 一遍：同一语义两处算就是下一个 bug
-  // （`overdueMinutes` 的定义里已经排除了脏 due 串）。
-  const overdueMinutes = capacity.overdueMinutes
+function UnscheduledTable({ rows, defaultEstimateMinutes, onAddToPlan, addingTaskId }: {
+  rows: CapacityUnscheduledRow[]
+  defaultEstimateMinutes: number
+  onAddToPlan?: (taskId: string, minutes: number) => Promise<void>
+  addingTaskId?: string | null
+}): JSX.Element {
   return (
-    <div className="wb-cap-rule" data-cap-expanded={expanded ? '1' : '0'}>
+    <table className="wb-cap-audit">
+      <thead>
+        <tr><th>任务</th><th>优先级</th><th>建议投入</th><th>来源</th><th /></tr>
+      </thead>
+      <tbody>
+        {rows.map((row) => {
+          const labels: string[] = []
+          if (row.dueToday) labels.push('今天到期')
+          if (row.overdue) labels.push('逾期')
+          if (row.inProgress) labels.push('在推进')
+          if (row.usedDefaultEstimate) labels.push(`按默认 ${defaultEstimateMinutes}`)
+          return (
+            <tr key={row.taskId}>
+              <td className="t" title={row.title}>{row.title}</td>
+              <td className="p">{row.band.toUpperCase()}</td>
+              <td className="m">{row.suggestedMinutes}</td>
+              <td className="s">{labels.map((label) => <span key={label} className="tag">{label}</span>)}</td>
+              <td className="a">
+                {onAddToPlan !== undefined && (
+                  <button
+                    type="button"
+                    className="wb-btn"
+                    disabled={addingTaskId !== null && addingTaskId !== undefined}
+                    onClick={() => void onAddToPlan(row.taskId, row.suggestedMinutes)}
+                  >
+                    {addingTaskId === row.taskId ? '排入中…' : '排入今日'}
+                  </button>
+                )}
+              </td>
+            </tr>
+          )
+        })}
+      </tbody>
+    </table>
+  )
+}
+
+/**
+ * 计划数据不可解析时的**唯一**呈现：绝不给假 0。
+ * 界面要说清"哪一天的计划读不出来"以及"原数据没被改动"。
+ */
+function UnreadableNotice({ reason }: { reason: string }): JSX.Element {
+  return (
+    <div className="wb-cap-unreadable" role="alert" style={{ fontSize: 12, lineHeight: 1.7, color: 'var(--dsw-alias-label-secondary)', padding: '6px 2px' }}>
+      <b>今日容量不可计算</b>：{reason}。<br />
+      原数据没有被改动，也不会被自动覆盖。请先备份数据库，再手工修复该日计划的 <code>items_json</code>，或显式清空这份计划。
+    </div>
+  )
+}
+
+export function CapacityRulePanel(props: CapacityRulePanelProps): JSX.Element {
+  const { capacity, dailyCapacityMinutes, defaultEstimateMinutes, includeOverdue, onIncludeOverdueChange, expanded, onExpandedChange, onAddToPlan, addingTaskId, inlineToggle = false } = props
+  return (
+    <div className="wb-cap-rule" data-cap-expanded={expanded ? '1' : '0'} data-inline={inlineToggle ? '1' : '0'}>
       <div className="wb-cap-rule-head">
         <button
           type="button"
@@ -107,13 +171,38 @@ export function CapacityRulePanel(props: CapacityRulePanelProps): JSX.Element {
           aria-label={capacityAriaLabel(capacity)}
           onClick={() => onExpandedChange(!expanded)}
         >
-          {expanded ? '收起规则 ⌃' : '⌄ 规则'}
+          {/**
+            * ⚠️ 文案在两态之间必须**完全相同**，只有箭头的旋转角度变。
+            *
+            * 2026-10-01 实测：旧文案「收起规则 ⌃」↔「⌄ 规则」宽度差 2px（`Icon name="chevron"`
+            * 是左向字形，更糟的是视觉上也指错方向），按钮位置在开合之间会跳动
+            * —— 用户原话："打开、收起规则的按钮还不在同一个位置"。
+            * 现在固定成「规则」两字 + 一个箭头图标（CSS 按展开态旋转 180°），
+            * 按钮宽度与位置在两态之间**逐像素一致**。
+            */}
+          <span className="wb-cap-rule-arrow" aria-hidden="true">
+            <Icon name="chevron" size={12} />
+          </span>
+          规则
         </button>
-        <span className="wb-cap-rule-sum">
-          已排 <b>{capacity.planned}</b> min · 可投入 <b>{dailyCapacityMinutes}</b> min ·
-          余 <b>{capacity.free}</b> min{capacity.over ? ' · 超支' : ''}
-          {capacity.fallbackCount > 0 ? ` · ${capacity.fallbackCount} 条按默认 ${defaultEstimateMinutes} 分钟` : ''}
-        </span>
+        {/**
+          * 摘要只在**非内联**模式下渲染。
+          *
+          * 内联模式（图例那一行）里，这段"已排 N min（M 条）· 可投入 X · 余 Y · 未排入 Z 条"
+          * 与上面「已排 / 可投入 / 余」是**同一事实的第二处展示** —— 用户明确要求删掉它换高度。
+          * 信息没丢：数字仍在标题行，`未排入` 的入口在展开体里（那里有逐条列表与一键排入）。
+          */}
+        {!inlineToggle && (
+          <span className="wb-cap-rule-sum">
+            {capacity.readable
+              ? <>
+                  已排 <b>{capacity.planned}</b> min（{capacity.plannedCount} 条，已结束 {capacity.doneMinutes} min） ·
+                  可投入 <b>{dailyCapacityMinutes}</b> min · 余 <b>{capacity.free}</b> min{capacity.over ? ' · 超支' : ''}
+                  {capacity.unscheduledCount > 0 ? ` · 未排入 ${capacity.unscheduledCount} 条 / 建议 ${capacity.unscheduledSuggestedMinutes} min` : ''}
+                </>
+              : <><b>不可计算</b>：{capacity.reason ?? '计划数据无法解析'}</>}
+          </span>
+        )}
       </div>
 
       {expanded && (
@@ -124,32 +213,33 @@ export function CapacityRulePanel(props: CapacityRulePanelProps): JSX.Element {
             ))}
           </ol>
 
+          {!capacity.readable && <UnreadableNotice reason={capacity.reason ?? '计划数据无法解析'} />}
+
+          {capacity.diagnostics.length > 0 && (
+            <div className="wb-cap-diagnostics" style={{ fontSize: 12, lineHeight: 1.7, padding: '4px 2px' }}>
+              <div><b>数据提示（{capacity.diagnostics.length} 条）</b></div>
+              <ul className="wb-cap-rules">
+                {capacity.diagnostics.map((text) => <li key={text}>{text}</li>)}
+              </ul>
+            </div>
+          )}
+
           <div className="wb-cap-audit-wrap">
-            <div className="wb-cap-audit-title">账本 · 每个数字的来源（{capacity.included.length} 条计入）</div>
-            {capacity.included.length === 0
-              ? <div className="wb-cap-audit-empty">今天没有计入的任务（上面七条规则决定了谁会进来）。</div>
-              : <AuditTable rows={capacity.included} defaultEstimateMinutes={defaultEstimateMinutes} />}
-            <div className="wb-cap-audit-total">合计 = 已排 <b>{capacity.planned}</b> min</div>
+            <div className="wb-cap-audit-title">账本 · 已排明细（{capacity.plannedItems.length} 条 / 合计 {capacity.planned} min）</div>
+            {capacity.plannedItems.length === 0
+              ? <div className="wb-cap-audit-empty">今天还没有排入任何计划投入（「已排」= 0）。下面的未排入区可以直接排入。</div>
+              : <AuditTable rows={capacity.plannedItems} />}
+            <div className="wb-cap-audit-total">合计 = 已排 <b>{capacity.planned}</b> min（其中今日投入已结束 <b>{capacity.doneMinutes}</b> min）</div>
           </div>
 
-          {overdueRows.length > 0 && (
-            <div className="wb-cap-overdue">
-              <div className="wb-cap-overdue-head">
-                逾期未完成 <b>{overdueRows.length}</b> 条 / <b>{overdueMinutes}</b> min —— 默认不计入「已排」
-              </div>
-              <AuditTable rows={overdueRows} defaultEstimateMinutes={defaultEstimateMinutes} />
+          <div className="wb-cap-unscheduled">
+            <div className="wb-cap-overdue-head">
+              未排入候选 <b>{capacity.unscheduledCount}</b> 条 / 建议投入合计 <b>{capacity.unscheduledSuggestedMinutes}</b> min —— 默认不计入「已排」
             </div>
-          )}
-
-          {unparseableRows.length > 0 && (
-            <div className="wb-cap-overdue">
-              {/* 脏 due 串：既不进"已排"也不进"逾期"，但绝不能消失 —— 列出来让用户知道有数据坏了 */}
-              <div className="wb-cap-overdue-head">
-                截止时间无法解析 <b>{unparseableRows.length}</b> 条 —— 既不计入「已排」，也不算逾期
-              </div>
-              <AuditTable rows={unparseableRows} defaultEstimateMinutes={defaultEstimateMinutes} />
-            </div>
-          )}
+            {capacity.unscheduledCount === 0
+              ? <div className="wb-cap-audit-empty">没有未排入的候选（今天到期的、在推进的、已排入的都已经在计划里，或者逾期开关没打开）。</div>
+              : <UnscheduledTable rows={capacity.unscheduled} defaultEstimateMinutes={defaultEstimateMinutes} onAddToPlan={onAddToPlan} addingTaskId={addingTaskId} />}
+          </div>
 
           <label className="wb-cap-switch">
             <input
@@ -157,12 +247,12 @@ export function CapacityRulePanel(props: CapacityRulePanelProps): JSX.Element {
               checked={includeOverdue}
               onChange={(e) => onIncludeOverdueChange(e.target.checked)}
             />
-            <span>把逾期任务计入今日容量</span>
-            <span className="hint" title={`打开后上面的「已排」会变成 ${capacity.planned + (includeOverdue ? 0 : overdueMinutes)} min`}>?</span>
+            <span>显示逾期待办候选</span>
+            <span className="hint" title="只影响逾期的未完成任务是否出现在候选里；不改「已排」，也不会自动排进计划">?</span>
           </label>
 
           <div className="wb-cap-foot">
-            默认耗时 {defaultEstimateMinutes} 分钟（在设置里改） · 口径说明见设计文档 docs/design/2026-09-25-capacity-rules.md
+            默认投入 {defaultEstimateMinutes} 分钟（在设置里改） · 口径见 docs/adr/0002-capacity-reads-daily-plan.md
           </div>
         </div>
       )}

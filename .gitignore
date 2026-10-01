@@ -1,8 +1,17 @@
 node_modules/
-lib/
+# 只忽略**构建产物** lib/（仓库根的）。写成裸 `lib/` 会连带忽略任意深度的 lib/ ——
+# 2026-10-01 实测踩到：新增的 `scripts/lib/tarReader.mjs`（check-tgz 的 tar 读取器）
+# 因此**永远不会被 git 提交**，而 `git status` 里也看不到它（静默丢件）。
+/lib/
 *.tgz
 .pwtest/
 test-results/
+
+# ── 验收链要进仓库（2026-10-01，plan.md V01/V02）─────────────────────────────
+# `scripts/verify/`（链、CDP 驱动、白名单 suites.json）是**研发侧能力**：换一台机器也必须还在，
+# 所以它必须被 git 跟踪。这与 `.pwtest/`（机-local 探针）是两回事 ——
+# 写这条不是因为它现在被忽略了，而是防止将来某条宽规则（`scripts/*`、`verify*`）把它静默吃掉。
+!scripts/verify/
 
 # ── 本地开发装盘包（scripts/dev-install.mjs 产出）─────────────────────────────
 # 每次构建落一个带构建戳的新 tgz：profile 依赖的身份就是它的**路径**，

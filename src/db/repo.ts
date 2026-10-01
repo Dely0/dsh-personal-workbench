@@ -56,6 +56,11 @@ export interface TaskInput {
   source?: string
   parentId?: string | null
   workspacePath?: string | null
+  /**
+   * 显式进度（0–99）。**只由 `repo/progress.ts#setTaskProgress` 写** ——
+   * 这里留给"建任务时就带进度"的极少数场景（迁移/导入），常规入口一律默认 0。
+   */
+  progressPercent?: number
   extra?: Record<string, unknown>
   children?: Array<Partial<TaskInput>>
   recurrenceCode?: string | null
@@ -75,6 +80,14 @@ export interface TaskPatch {
   estimatedMinutes?: number | null
   archived?: boolean
   workspacePath?: string | null
+  /**
+   * 显式进度（0–99）。
+   *
+   * ⚠️ 不在这里做范围/幂等判断：唯一权威入口是
+   * `repo/progress.ts#setTaskProgress`（同值不写事件、越界拒绝）。`updateTask` 只负责落库，
+   * 给它传 100 会被 DDL 的 CHECK 挡下来（那是"绕过守卫"的响铃）。
+   */
+  progressPercent?: number
   /** 改父任务：undefined = 不变；null = 移到顶层；字符串 = 挂到该父任务下（仓储层会做存在/归档/防环校验）。 */
   parentId?: string | null
   extra?: Record<string, unknown>
@@ -100,6 +113,8 @@ export interface TaskRow {
   workspacePath: string | null
   /** 动态有效工作区：优先自身 workspacePath，未设置时向上继承最近一个已设工作区的祖先。 */
   effectiveWorkspacePath: string | null
+  /** 显式进度 0–99（写入口只有 `repo/progress.ts`；DRL 的 CHECK 是最后防线）。 */
+  progressPercent: number
   archived: number
   extra: Record<string, unknown>
   recurrenceCode: string | null
@@ -188,11 +203,20 @@ export {
 } from './repo/reminder-queue.js'
 export type { ReminderQueueRow, ReminderQueueInput } from './repo/reminder-queue.js'
 
-// 每日计划域已抽到 repo/plans.ts
+// 进度 / 完成验收域已抽到 repo/progress.ts（显式进度唯一写入口 + 验收草稿唯一提交实现）
+export {
+  setTaskProgress, submitCompletionDraft, listPendingCompletions, getTaskPendingCompletion, readDraft,
+} from './repo/progress.js'
+export type { SetProgressResult, SubmitCompletionResult, SubmitCompletionOutcome } from './repo/progress.js'
+
+// 每日计划域已抽到 repo/plans.ts（T2/D05–D06：minutes 快照 + effortDone + 原子追加/项级更新）
 export {
   getDailyPlan, saveDailyPlan, updateDailyPlan, deleteDailyPlan, confirmDailyPlanDraft, getPendingDailyPlanDraft,
+  addDailyPlanItem, updateDailyPlanItem,
 } from './repo/plans.js'
-export type { DailyPlanItem, DailyPlanRow } from './repo/plans.js'
+export type {
+  DailyPlanItem, DailyPlanRow, DailyPlanInput, ManualPlanItemInput, PlanTaskView, AddPlanItemResult, UpdatePlanItemResult,
+} from './repo/plans.js'
 
 // 日报 / 周报域已抽到 repo/reports.ts
 export {

@@ -76,6 +76,7 @@ export function createTask(db: DatabaseSync, input: TaskInput, actor = 'user', a
     source: input.source ?? 'manual',
     workspacePath: input.workspacePath ?? null,
     effectiveWorkspacePath: null,
+    progressPercent: 0,
     archived: 0,
     extra: input.extra ?? {},
     recurrenceCode: input.recurrenceCode === undefined || input.recurrenceCode === 'none' ? null : input.recurrenceCode,
@@ -92,14 +93,14 @@ export function createTask(db: DatabaseSync, input: TaskInput, actor = 'user', a
   db.prepare(`
     INSERT INTO tasks
       (id, parent_id, title, description, type_code, status_code, priority_code,
-       ai_policy_code, due_at, all_day, estimated_minutes, source, workspace_path, archived, extra,
+       ai_policy_code, due_at, all_day, estimated_minutes, source, workspace_path, progress_percent, archived, extra,
        recurrence_code, recurrence_rule, recurrence_master_id, recurrence_last_generated,
        created_at, updated_at, completed_at, cancelled_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     task.id, task.parentId, task.title, task.description, task.typeCode,
     task.statusCode, task.priorityCode, task.aiPolicyCode, task.dueAt, task.allDay,
-    task.estimatedMinutes, task.source, task.workspacePath, JSON.stringify(task.extra),
+    task.estimatedMinutes, task.source, task.workspacePath, task.progressPercent, JSON.stringify(task.extra),
     task.recurrenceCode, JSON.stringify(task.recurrenceRule), task.recurrenceMasterId, task.recurrenceLastGenerated,
     task.createdAt, task.updatedAt, task.completedAt, task.cancelledAt,
   )
@@ -188,6 +189,7 @@ export function updateTask(db: DatabaseSync, id: string, patch: TaskPatch, actor
     estimatedMinutes: patch.estimatedMinutes === undefined ? before.estimatedMinutes : patch.estimatedMinutes,
     archived: patch.archived === undefined ? before.archived : patch.archived ? 1 : 0,
     workspacePath: patch.workspacePath === undefined ? before.workspacePath : patch.workspacePath,
+    progressPercent: patch.progressPercent === undefined ? before.progressPercent : patch.progressPercent,
     extra: patch.extra === undefined ? before.extra : patch.extra,
     recurrenceCode: patch.recurrenceCode === undefined ? before.recurrenceCode : patch.recurrenceCode === 'none' ? null : patch.recurrenceCode,
     recurrenceRule: patch.recurrenceRule === undefined ? before.recurrenceRule : patch.recurrenceRule,
@@ -202,12 +204,14 @@ export function updateTask(db: DatabaseSync, id: string, patch: TaskPatch, actor
       title = ?, description = ?, type_code = ?, status_code = ?, priority_code = ?,
       ai_policy_code = ?, due_at = ?, all_day = ?, estimated_minutes = ?, archived = ?,
       workspace_path = ?, parent_id = ?, extra = ?, recurrence_code = ?, recurrence_rule = ?,
+      progress_percent = ?,
       updated_at = ?, completed_at = ?, cancelled_at = ?
     WHERE id = ?
   `).run(
     next.title, next.description, next.typeCode, next.statusCode, next.priorityCode,
     next.aiPolicyCode, next.dueAt, next.allDay, next.estimatedMinutes, next.archived,
     next.workspacePath, next.parentId, JSON.stringify(next.extra), next.recurrenceCode, JSON.stringify(next.recurrenceRule),
+    next.progressPercent,
     next.updatedAt, next.completedAt, next.cancelledAt, id,
   )
   appendEvent(db, id, 'updated', { before, after: next, actor, at })
