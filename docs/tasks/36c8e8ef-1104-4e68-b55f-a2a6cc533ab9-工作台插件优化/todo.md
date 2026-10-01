@@ -60,13 +60,20 @@
 - [x] D14 日期来源判定与行标签的唯一实现（AX-T01/T02；`classifyTaskDay` + `dayPanelTreeSources`，2 处反向变异必红）
 - [x] D15 `DayPanel` 收敛：今日 = 日历 today 实例；**`index.tsx` 5743 → 5697 行**（-46）；数据层抽成 `dayPanelModel.ts`
 - [x] D16 受影响判据同步（`capacityWiring` 已按新结构改判）+ 新增 `suites/day-panel.mjs`（6/6）；`suites/daily-effort` 回归 13/13
-- [ ] D17 WorkbenchApp 拆分（**先重写** `docs/design/2026-09-09-client-split-backlog.md`）
 - [x] W01 工作区候选判定纯函数 + `components/WorkspacePicker.tsx`（AX-W01；`test/workspacePicker.test.mjs` 8 条）
 - [x] W02 快速录入 / 新建 / 编辑三入口接线（AX-W02；**B 层已跑通** `suites/workspace-picker.mjs` 8/8）
 - [x] W03 `LocalDocModal` 增加 `mode: 'dir'`，复用 `localDirRoute`（AX-W03；含"从对话框里打开会被盖住"的真实缺陷修复）
 - [x] H01 构建期类型源对齐（`devDependencies` 整族 → `0.2.0-rc.2` / cordis `^4.0.4` / timer `1.1.6`；peer 不动，AX-H02 四条判据）
-- [ ] #3 模型选择失效：只留复现记录 + 上报决策，**不改** `profiles/node_modules`
-- [ ] D17 WorkbenchApp 拆分（**评估：12–20 小时，建议新会话做**；度量见本节末尾）
+- [x] 发布收口：**v1.16.1 已发布**（`package.json` / tag / npm `latest` / GitHub Release 四者一致，包哈希 `46d61b7b…`）
+- [x] 发布门禁一键化：`scripts/release-preflight.mjs`（typecheck→单测→全探针→PII 两面→版本文档；`--phase post` 做 tarball/sha1 对账）
+- [x] `dsh-release` skill **落盘为项目级** `.dsh/skills/dsh-release/SKILL.md`（V1.3.0）
+- [ ] **#3 模型选择失效**：只留复现记录 + 上报决策，**不改** `profiles/node_modules`（**未做**）
+- [ ] **dev-verify 验收链未在批次2 之后重跑**：链里现役 **10 套**（批次2 新增 `workspace-picker` / `day-panel`），
+      上次端到端跑是 2026-10-01 00:32（批次2 之前）⇒ 需要跑一次并出证据包
+- [ ] **变异探针欠账**（本轮自留，不在原范围）：capacity 5 条真盲点（M11–M14、M19）+ 19 条探针重锚 ——
+      清单与复现在 [`docs/issues/2026-10-01-mutation-probe-maintenance.md`](../../issues/2026-10-01-mutation-probe-maintenance.md)；
+      `KNOWN_PROBE_DEBT` 未清空前 `release-preflight` 的探针门禁会一直红（这是刻意的）
+- [ ] **D17 WorkbenchApp 拆分**：**评估 12–20 小时，建议新会话做**；**先重写** `docs/design/2026-09-09-client-split-backlog.md`（度量见本节末尾）
 
 ### D17 的度量（2026-10-01 实测，供新会话开工）
 
