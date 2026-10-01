@@ -50,11 +50,28 @@ const KNOWN_TEST_FAILURES = [
   },
 ]
 
-/** 显式登记的**已知探针盲点**（还清了必须删掉，否则门禁会红）。 */
+/**
+ * 显式登记的**已知探针欠账**（还清了必须删掉，否则门禁会红）。
+ *
+ * ⚠️ 每条都要写清是**真盲点**（装回缺陷后仍全绿 → 要补判据）还是**探针失效**
+ *（变异点没匹配上 → 要重锚探针）。两者混在一起会让这份名单同时虚高与虚低 ——
+ * 详见 `docs/issues/2026-10-01-mutation-probe-maintenance.md`。
+ */
 const KNOWN_PROBE_DEBT = [
-  { probe: 'probe-capacity-mutations', reason: 'M7/M19 存活（unknown 优先级归 p0、逾期开关勾选态写死）；见 docs/issues/2026-10-01-mutation-probe-maintenance.md' },
-  { probe: 'probe-model-picker-notify-mutations', reason: '3/10 存活（含"发送失败被空 catch 吞掉"* 同类 P0）；同上' },
-  { probe: 'probe-quick-workspace-mutations', reason: '3/15 存活（含「不再记住」按钮渲染条件被静默摘掉）；同上' },
+  {
+    probe: 'probe-capacity-mutations',
+    reason: '真盲点 5 条（M11/M12/M13/M14/M19 —— 编辑耗时的保存与初值、就地校验、乐观更新、'
+      + '逾期开关变假控件）+ 失效 14 条（M1–M10/M15–M18：容量计算已迁出 src/client/capacity.ts）',
+  },
+  {
+    probe: 'probe-model-picker-notify-mutations',
+    reason: '失效 3 条（B7/B8/B10：selectionToApply / unavailableReason / clearExitReachable 的写法与位置变了）—— '
+      + '**无真盲点**，重锚即可',
+  },
+  {
+    probe: 'probe-quick-workspace-mutations',
+    reason: '真盲点 1 条（M10：调用点把 recent 传成空数组没有判据）+ 失效 2 条（M6/M14：调用点与按钮渲染条件已换位置）',
+  },
 ]
 
 /** PII 扫描的良性规则基线（逐条人工判断过）。 */
