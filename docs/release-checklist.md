@@ -48,7 +48,8 @@ node scripts/dev-install.mjs --apply    # 真装：自动备份 + 零增量 diff
 
 - [ ] **本地迭代不动 `package.json` 的 `version`**。profile 依赖的身份是 tarball **路径**，
       所以每次打包落到新路径（`_local-build/…-dev-<短hash>-<时间戳>.tgz`）就必然重新解包；
-      公开版本号只在**发布**时增长（下一个发布版本：**1.15.9**）。
+      公开版本号只在**发布**时增长（下一个版本号 = `package.json` 的现值 + 1，**在发布那一轮**决定并核对四者一致；
+      不要在这里写死数字 —— 本行曾经写着"下一个发布版本：1.15.9"，而实际早就发到 1.16.x 了）。
 - [ ] ⚠️ **绝不能用 `pnpm install` 代替 `dsh plugin add`**。实测口径（pnpm 11.7.0，
       与 profile 同配置的 `node-linker=hoisted`，2026-09-15）：覆盖同名同版本的 tarball 之后，
       `pnpm install` 与 `pnpm install --frozen-lockfile` **都不会刷新**装盘产物；
