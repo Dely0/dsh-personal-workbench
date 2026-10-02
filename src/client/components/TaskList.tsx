@@ -29,7 +29,7 @@ export function countTaskTree(roots: TaskTreeNode<Task>[]): number {
   return roots.reduce((sum, node) => sum + 1 + countTaskTree(node.children), 0)
 }
 
-export function TaskTreeRows({ roots, depth, expanded, toggle, dicts, onOpen, selectedId, contextIds, pending = null, childrenOf, sourceLabelOf }: {
+export function TaskTreeRows({ roots, depth, expanded, toggle, dicts, onOpen, selectedId, contextIds, pending = null, childrenOf, sourceLabelOf, onSchedule, scheduledIds, schedulingTaskId }: {
   roots: TaskTreeNode<Task>[]; depth: number; expanded: Set<string>; toggle: (id: string) => void
   dicts: Dict[]; onOpen: (task: Task) => void; selectedId?: string; contextIds?: Set<string>
   /** 待验收投影（一次取全量后传下来，绝不逐行发请求）。`null` = 服务端不支持。 */
@@ -42,6 +42,15 @@ export function TaskTreeRows({ roots, depth, expanded, toggle, dicts, onOpen, se
    * 这里只把父级给的字符串画成一个徽标 —— 组件不自己判。
    */
   sourceLabelOf?: (taskId: string) => string | null
+  /**
+   * 行内「排入今日」（2026-10-02）：只由日期面板的**逾期 / 未排期**页签在**今天**这一实例上传入。
+   * 组件不判"该不该显示" —— 缺省（undefined）就是不渲染，判定在父级。
+   */
+  onSchedule?: (taskId: string) => void
+  /** 已排进这一天的任务：按钮不渲染（点了只会得到"已经在计划里"，那种假入口是噪音）。 */
+  scheduledIds?: Set<string>
+  /** 正在排入的任务 id（禁用重复点击）。 */
+  schedulingTaskId?: string | null
 }): JSX.Element {
   return (
     <>
@@ -51,10 +60,21 @@ export function TaskTreeRows({ roots, depth, expanded, toggle, dicts, onOpen, se
             <button type="button" className="wb-btn" style={{ padding: '2px 6px', border: 'none', flex: 'none' }} onClick={(e) => { e.stopPropagation(); toggle(node.task.id) }}>
               {node.children.length > 0 ? (expanded.has(node.task.id) ? '▼' : '▶') : '·'}
             </button>
-            <TaskRow task={node.task} dicts={dicts} onOpen={onOpen} bare pending={pending} childrenOf={childrenOf} sourceLabel={sourceLabelOf?.(node.task.id) ?? null} />
+            <TaskRow
+              task={node.task}
+              dicts={dicts}
+              onOpen={onOpen}
+              bare
+              pending={pending}
+              childrenOf={childrenOf}
+              sourceLabel={sourceLabelOf?.(node.task.id) ?? null}
+              onSchedule={onSchedule === undefined ? undefined : () => onSchedule(node.task.id)}
+              alreadyScheduled={scheduledIds?.has(node.task.id) === true}
+              scheduling={schedulingTaskId === node.task.id}
+            />
           </div>
           {node.children.length > 0 && expanded.has(node.task.id) && (
-            <TaskTreeRows roots={node.children} depth={depth + 1} expanded={expanded} toggle={toggle} dicts={dicts} onOpen={onOpen} selectedId={selectedId} contextIds={contextIds} pending={pending} childrenOf={childrenOf} sourceLabelOf={sourceLabelOf} />
+            <TaskTreeRows roots={node.children} depth={depth + 1} expanded={expanded} toggle={toggle} dicts={dicts} onOpen={onOpen} selectedId={selectedId} contextIds={contextIds} pending={pending} childrenOf={childrenOf} sourceLabelOf={sourceLabelOf} onSchedule={onSchedule} scheduledIds={scheduledIds} schedulingTaskId={schedulingTaskId} />
           )}
         </div>
       ))}
@@ -62,12 +82,18 @@ export function TaskTreeRows({ roots, depth, expanded, toggle, dicts, onOpen, se
   )
 }
 
-export function TaskRow({ task, dicts, onOpen, selected, bare = false, pending = null, childrenOf, sourceLabel = null }: {
+export function TaskRow({ task, dicts, onOpen, selected, bare = false, pending = null, childrenOf, sourceLabel = null, onSchedule, alreadyScheduled = false, scheduling = false }: {
   task: Task; dicts: Dict[]; onOpen: (task: Task) => void; selected?: boolean; bare?: boolean
   pending?: PendingMap
   childrenOf?: (taskId: string) => readonly Task[] | undefined
   /** 该行在这一天命中的来源（已由父级拼好，可多来源如「到期 · 计划」）。 */
   sourceLabel?: string | null
+  /** 行内「排入今日」动作；缺省 = 不渲染按钮（是否显示由父级决定）。 */
+  onSchedule?: () => void
+  /** 已经排进这一天（父级告知）→ 不渲染按钮。 */
+  alreadyScheduled?: boolean
+  /** 正在排入 → 按钮禁用且文案变成「排入中…」（不许假成功、不许重复提交）。 */
+  scheduling?: boolean
 }): JSX.Element {
   const due = task.effectiveDueAt === null ? null : new Date(task.effectiveDueAt)
   const now = new Date()
@@ -119,11 +145,29 @@ export function TaskRow({ task, dicts, onOpen, selected, bare = false, pending =
       </div>
     </>
   )
-  if (bare) return <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8 }}>{content}</div>
+  /**
+   * 行内「排入今日」（2026-10-02）：只在日期面板的**逾期 / 未排期**页签、且**今天**这一实例上出现
+   *（父级通过 `onSchedule` 是否存在来表达"这里该不该有它"）。
+   *
+   * 三条纪律：
+   * - `alreadyScheduled` → **不渲染**（点了只会得到"已经在计划里"，那种假入口是噪音）；
+   * - `scheduling` → 禁用 + 文案「排入中…」（不许重复提交、不许假成功）；
+   * - 点击必须 `stopPropagation`（否则会连带打开右侧任务详情）。
+   */
+  const scheduleAction = onSchedule !== undefined && !alreadyScheduled ? (
+    <button
+      type="button"
+      className="wb-btn wb-schedule"
+      disabled={scheduling}
+      title="排进今天的计划（投入分钟按任务的预计耗时；没填则按设置里的默认投入）"
+      onClick={(event) => { event.stopPropagation(); onSchedule() }}
+    >{scheduling ? '排入中…' : '排入今日'}</button>
+  ) : null
+  if (bare) return <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8 }}>{content}{scheduleAction}</div>
   const closed = task.statusCode === 'done' || task.statusCode === 'cancelled'
   return (
     <div className={`wb-row ${selected === true ? 'selected' : ''} ${closed ? 'done' : ''}`} style={{ flex: 1, minWidth: 0 }} onClick={() => onOpen(task)}>
-      {content}
+      {content}{scheduleAction}
     </div>
   )
 }

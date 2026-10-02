@@ -2296,7 +2296,13 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
       })
       await refresh()
       setPlanRefreshKey((v) => v + 1)
-      setNotice(res.added ? '已排入今日计划' : '这条任务已经在今日计划里了（未改动原有投入与结束状态）')
+      /**
+       * 回执里**回显最终落库的投入分钟**（省略 `minutes` 时是服务端按"任务预计耗时 / 设置默认投入"
+       * 算出来的快照）。只写"已排入"不给数字，就是让用户去猜服务端替他决定了什么。
+       */
+      const landed = res.plan?.items.find((item) => item.taskId === taskId)
+      const minutesText = typeof landed?.minutes === 'number' ? `（投入 ${landed.minutes} 分钟）` : ''
+      setNotice(res.added ? `已排入今日计划${minutesText}` : '这条任务已经在今日计划里了（未改动原有投入与结束状态）')
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -2540,6 +2546,16 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
     childrenOf,
     busy,
     onOpen: openTask,
+    /**
+     * 行内「排入今日」（2026-10-02）：**复用同一个写入口** `addTaskToPlan`
+     *（唯一入口 = `POST /plans/:date/items`，原子追加，绝不本地拼整份计划再 PUT）。
+     *
+     * 省略 `minutes` → 服务端按"任务预计耗时 / 设置默认投入"取快照，再由回执把落库值说出来。
+     * 只在今天这一实例传；未来日期不传（现版本没有"未来排期"的入口，见 ADR0001 口径补充）。
+     */
+    onScheduleToday: dayPanel.isToday ? (taskId: string) => void addTaskToPlan(taskId) : undefined,
+    scheduledIds: dayPanel.plannedIds,
+    schedulingTaskId: addingPlanTaskId,
     onSort: () => void startAISession('plan', null, dayPanel.day),
     onComplete: completePlanTask,
     onDefer: deferPlanTask,

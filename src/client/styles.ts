@@ -150,6 +150,11 @@ ${panelContainerCss({ view: VIEW_ATTR, official: OFFICIAL_ATTR, active: ACTIVE_A
   background:color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 14%, transparent);
   color:var(--dsw-alias-state-business-primary, #8fa8c8);
   border:1px solid color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 38%, transparent); }
+/* 行内「排入今日」（2026-10-02）：只在日期面板的**逾期 / 未排期**页签、且**今天**这一实例上出现。
+   它是行内动作，必须比整行小一号且不与右侧固定列抢宽度（flex:none + 小字号内边距）。
+   ⚠️ 这段在 JS 模板串里，注释中**不能出现反引号**（会提前结束模板串 —— 本次已踩过一次）。 */
+.wb-schedule { flex:none; padding:3px 9px; font-size:11.5px; border-radius:8px; white-space:nowrap; }
+.wb-schedule:disabled { opacity:.5; cursor:default; }
 .wb-plan-add { max-width:220px; background:var(--dsw-alias-bg-base,#17171a); border:1px solid var(--dsw-alias-border-l1, rgba(255,255,255,.18)); color:inherit; border-radius:8px; padding:5px 8px; font-size:12px; }
 /* 文档/目录弹窗（LocalDocModal）的遮罩。
    ⚠️ z-index 必须夹在 .wb-overlay(300) 与对话框内浮层（.wb-model-scrim 329 / .wb-model-menu 330）之间。

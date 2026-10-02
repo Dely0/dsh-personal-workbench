@@ -63,6 +63,18 @@ export interface DayPanelProps {
   onToggleExpanded: (taskId: string) => void
   /** 行来源标签（来自 `dayPanelTabMembers`，界面不自己判）。 */
   sourceLabelOf?: (taskId: string) => string | null
+  /**
+   * 行内「排入今日」（2026-10-02）：只在**今天**这一实例 + **逾期 / 未排期**两个页签上传入。
+   *
+   * 未来日期**不传**：那一天要按"未来排期"语义另画（现版本只做今天，见 ADR0001 口径补充），
+   * 而 `POST /plans/:date/items` 的排入入口目前只服务今天 —— 给未来日渲染一个写着"排入今日"的按钮，
+   * 点了却排到今天，就是骗人。
+   */
+  onScheduleToday?: (taskId: string) => void
+  /** 已排进这一天（父级给出）→ 那些行不渲染「排入今日」。 */
+  scheduledIds?: Set<string>
+  /** 正在排入的任务 id（禁用重复点击）。 */
+  schedulingTaskId?: string | null
   tasks: Task[]
   dicts: Dict[]
   selectedId?: string
@@ -102,6 +114,7 @@ export function DayPanel(props: DayPanelProps): JSX.Element {
     expanded, onToggleExpanded, sourceLabelOf, tasks, dicts, selectedId, pending, childrenOf,
     busy, onOpen, onSort, onComplete, onDefer, onEffortChange, onMinutesChange, onProgressChange,
     onClearPlan, onSavePlan, report, emptyPlanAction,
+    onScheduleToday, scheduledIds, schedulingTaskId,
   } = props
 
   const reportAnchor = report.subTab === 'week' ? localDateString(startOfWeek(new Date(day))) : day
@@ -132,6 +145,12 @@ export function DayPanel(props: DayPanelProps): JSX.Element {
   const contextIds = activeTab === 'done'
     ? doneContextIds
     : activeTab === 'overdue' ? overdueContextIds : activeTab === 'unscheduled' ? unscheduledContextIds : undefined
+  /**
+   * 行内「排入今日」只在**今天** + **逾期 / 未排期**两个页签上（那两页里的行按定义都还没排进今天，
+   * 除"逾期∩计划"的事实重叠行 —— 那些由 `scheduledIds` 挡掉）。缺 `onScheduleToday` 就整列不出现。
+   */
+  const showScheduleAction = isToday && onScheduleToday !== undefined
+    && (activeTab === 'overdue' || activeTab === 'unscheduled')
 
   return (
     <>
@@ -233,6 +252,9 @@ export function DayPanel(props: DayPanelProps): JSX.Element {
             pending={pending}
             childrenOf={childrenOf}
             sourceLabelOf={activeTab === 'plan' ? sourceLabelOf : undefined}
+            onSchedule={showScheduleAction ? onScheduleToday : undefined}
+            scheduledIds={showScheduleAction ? scheduledIds : undefined}
+            schedulingTaskId={showScheduleAction ? schedulingTaskId : undefined}
           />
           {roots.length === 0 && (
             <div className="wb-empty" style={{ padding: '24px 18px' }} data-day-empty={activeTab}>

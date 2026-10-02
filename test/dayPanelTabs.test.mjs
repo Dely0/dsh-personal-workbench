@@ -279,3 +279,63 @@ test('渲染：计划页签逐条标来源（徽标来自 props，组件不自�
   })
   assert.ok(html.includes('data-task-source="计划 · 进行中"'), '来源徽标要渲染出来（ADR0001：逐条标来源）')
 })
+
+// ---------------------------------------------------------------------------
+// 行内「排入今日」（2026-10-02）
+// ---------------------------------------------------------------------------
+
+const withButton = { onScheduleToday: () => {}, scheduledIds: new Set() }
+
+test('排入今日：未排期页签 + 今天 → 行内有按钮', () => {
+  const html = render({
+    ...withButton,
+    tab: 'unscheduled',
+    unscheduledTree: node(task({ id: 'u1', title: '无截止的活' })),
+  })
+  assert.ok(html.includes('wb-schedule'), '行内动作按钮要渲染')
+  assert.ok(html.includes('排入今日'), '文案是「排入今日」')
+})
+
+test('排入今日：缺 onScheduleToday（未来日期不传）→ 一个按钮都不渲染', () => {
+  const html = render({ tab: 'unscheduled', unscheduledTree: node(task({ id: 'u1' })) })
+  assert.equal(html.includes('wb-schedule'), false, '没有动作就不该有按钮（未来排期另立项）')
+})
+
+test('排入今日：已是该日计划成员（逾期∩计划的事实重叠行）→ 不渲染按钮', () => {
+  const html = render({
+    ...withButton,
+    tab: 'overdue',
+    overdueTree: node(task({ id: 'o1', title: '逾期但已排入' })),
+    scheduledIds: new Set(['o1']),
+  })
+  assert.equal(html.includes('wb-schedule'), false, '点了只会得到"已经在计划里"——假入口是噪音')
+})
+
+test('排入今日：正在排入 → 按钮禁用且文案变成「排入中…」（不许重复提交）', () => {
+  const html = render({
+    ...withButton,
+    tab: 'overdue',
+    overdueTree: node(task({ id: 'o1' })),
+    schedulingTaskId: 'o1',
+  })
+  assert.ok(html.includes('排入中…'), '要有进行中的文案')
+  assert.match(html, /<button[^>]*wb-schedule[^>]*disabled/, '进行中必须 disabled')
+})
+
+test('排入今日：只在逾期/未排期两个页签出现（计划/已完成页签不给）', () => {
+  const planTab = render({ ...withButton, tab: 'plan', planTree: node(task({ id: 'p1' })) })
+  assert.equal(planTab.includes('wb-schedule'), false)
+  const doneTab = render({ ...withButton, tab: 'done', doneTree: node(task({ id: 'd1', statusCode: 'done', completedAt: iso(DAY_START + 3600_000) })) })
+  assert.equal(doneTab.includes('wb-schedule'), false)
+})
+
+test('排入今日：日历选中未来日期（isToday=false）即使传了回调也不出现', () => {
+  const html = render({
+    ...withButton,
+    tab: 'unscheduled',
+    isToday: false,
+    day: '2026-10-05',
+    unscheduledTree: node(task({ id: 'u1' })),
+  })
+  assert.equal(html.includes('wb-schedule'), false)
+})

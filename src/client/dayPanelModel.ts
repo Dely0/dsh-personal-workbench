@@ -68,6 +68,13 @@ export interface DayPanelModel {
   expanded: Set<string>
   onToggleExpanded: (taskId: string) => void
   sourceLabelOf: (taskId: string) => string | null
+  /**
+   * 已排进这一天的 taskId（= 「计划」页签成员）。
+   *
+   * 给「排入今日」用：逾期页签里"已在计划中"的行是**事实重叠**，不该再给一个只会返回
+   * "已经在计划里"的按钮 —— 这里给出集合，由组件决定隐藏。
+   */
+  plannedIds: Set<string>
 }
 
 /**
@@ -122,7 +129,7 @@ export function useDayPanelModel(input: DayPanelModelInput): DayPanelModel {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 用日键代替 Date（同 capacityTodayKey 的做法）
     [tasks, plan, day],
   )
-  const keep = useMemo(() => new Set(members.plan.map((entry) => entry.taskId)), [members])
+  const plannedIds = useMemo(() => new Set(members.plan.map((entry) => entry.taskId)), [members])
   const overdueKeep = useMemo(() => new Set(members.overdue), [members])
   const unscheduledKeep = useMemo(() => new Set(members.unscheduled), [members])
   const sourceLabelOf = useCallback((taskId: string): string | null => {
@@ -136,8 +143,8 @@ export function useDayPanelModel(input: DayPanelModelInput): DayPanelModel {
     return new Map(plan.items.map((item) => [item.taskId, item.order]))
   }, [plan])
   const planTree = useMemo(
-    () => filterTaskTree(buildTaskTree(tasks, planOrder), (task) => keep.has(task.id)),
-    [tasks, keep, planOrder],
+    () => filterTaskTree(buildTaskTree(tasks, planOrder), (task) => plannedIds.has(task.id)),
+    [tasks, plannedIds, planOrder],
   )
   /** 逾期 / 未排期两棵树不带计划顺序（它们不是"这一天要按什么顺序做"，而是清欠与待安排）。 */
   const overdueTree = useMemo(
@@ -171,6 +178,6 @@ export function useDayPanelModel(input: DayPanelModelInput): DayPanelModel {
     day, isToday, readOnly, extraTabsAvailable, plan, candidateRows, promptInfo,
     planTree, overdueTree, unscheduledTree, doneTree,
     doneContextIds, overdueContextIds, unscheduledContextIds,
-    expanded, onToggleExpanded, sourceLabelOf,
+    expanded, onToggleExpanded, sourceLabelOf, plannedIds,
   }
 }
