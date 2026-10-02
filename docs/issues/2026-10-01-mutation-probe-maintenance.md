@@ -1,5 +1,12 @@
 # 变异探针维护 + 判据盲点（2026-10-01 发 v1.16.1 时补跑发现；2026-10-02 精确分类）
 
+> **状态（2026-10-02 晚）**：`probe-capacity-mutations` 的欠账（**真盲点 5 条 + 失效 14 条**）已**全部销账** ——
+> 重锚 12 条共享模块变异（S1–S12）+ 保留接线/面板 6 条（I1–I5 / P1–P3），并为原先"装回缺陷仍全绿"的
+> 6 处**补了判据**（`capacityWiring.test.mjs` 4 条源码扫描 + `capacityPanel.test.mjs` 1 条勾选态判据，覆盖 I2–I5 / P2 / P3）。
+> 判据：探针 **20/20 全红、exit 0**；`KNOWN_PROBE_DEBT` 里那条容量条目已删除（双向断言要求"还清必须销账"）。
+> 现在名单只剩 `probe-model-picker-notify-mutations`（3 条失效，无真盲点）与 `probe-quick-workspace-mutations`（2 条失效）。
+> 详细经过见文末 [§A2](#a2-2026-10-02-销账记录probe-capacity-mutations)。
+>
 > 背景：`dsh-release` skill §3 的硬门禁里有一条「有变异探针的项目：**必须全红**」。
 > 发 v1.16.1 时**漏跑了这一条**（skill 里写的路径过时，照着敲找不到文件），事后补跑。
 > **不影响 v1.16.1 的代码质量结论** —— 探针红/绿说的是"判据能不能拦住未来回归"，
@@ -70,3 +77,35 @@ pnpm build; node scripts\repro\probe-capacity-mutations.mjs
 - 门禁**不能只写在 skill 里**：已接进 `scripts/release-preflight.mjs`，"漏跑"从此是可见的失败。
 - **教训**：变异探针的"存活"必须再分一层（装不上 vs 装上了没守住），否则欠账清单会同时**虚高**（假盲点）
   与**虚低**（失效探针掩盖了真实覆盖率的下降）。
+
+## A2. 2026-10-02 销账记录（probe-capacity-mutations）
+
+**触发**：发 v1.16.2 时 `release-preflight` 报 `probe-capacity-mutations：探针失效 —— 这条门禁此刻不在工作，
+必须先修探针`。门禁的立场是**刻意的**（`scripts/lib/releasePreflight.mjs#judgeProbes` 注释：
+"探针失效"与"基线没过"**不算欠账**，直接失败）—— 名单里的失效说明只算**记录**，不能解锁。
+
+**做法**（重锚 ≠ 把旧字符串贴到新位置）：
+
+1. **按当前策略重新表述**：容量计算在 ADR0002（T2/D09）已迁进 `src/shared/dailyPlanPolicy.ts#computeCapacityLedger`，
+   所以 12 条变异改锚到共享模块的真实口径：已排只累加计划项一次（S1）、重复项去重（S2）、
+   缺合法 minutes 的默认展示（S3）、`doneMinutes`（S4）、`taskClosed`（S5）、`free = max(0,·)`（S6）、
+   条形分母 `max(可投入, 已排, 1)`（S7）、`over`（S8）、`readable`（S9）、未排入是补集（S10）、
+   优先级档位（S11）、建议投入合计（S12）。
+2. **旧客户端口径直接作废**：那几个锚在 `src/client/capacity.ts` 的旧实现（按到期任务求和、
+   `fallbackCount` / `dueTodayCount` / `overdueExcluded` / 全天 480）已随 ADR0002 消失，**不再保留同名变异**
+   —— 保留一个装不上去的变异只会让门禁再次"看着有、其实没有"。
+3. **补判据（这才是真盲点的义务）**：原先 6 处"装回缺陷仍全绿"的位置补了会失败的断言 ——
+   `capacityWiring.test.mjs` 新增 4 条**源码扫描**（编辑耗时的保存 payload / 编辑框初值 / 就地校验 / 乐观更新，
+   对 I2–I5）+ 1 条"面板不许 reduce 自己求和"（对 P1）；
+   `capacityPanel.test.mjs` 新增 1 条**勾选态判据**（`includeOverdue` 来自 props，对 P2/P3）。
+   为什么用源码扫描：这四处都在 `index.tsx` 的事件处理器里，`react-dom/server` 渲染不到交互 ——
+   能搬进纯模块的就搬，搬不动的用扫描钉住，再用探针**反向验证"装回缺陷必须变红"**。
+
+**结果**：
+
+```text
+变异探针：20/20 条变异都变红          # exit 0
+```
+
+**同时销账**：`KNOWN_PROBE_DEBT` 里的 `probe-capacity-mutations` 条目已**删除** ——
+双向断言要求"名单里已经不红的必须删"，留着一跑就失败。

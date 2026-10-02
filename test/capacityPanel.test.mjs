@@ -139,3 +139,18 @@ test('已排明细逐条与纯函数一致（组件不许再算一遍）', () =>
   assert.equal(capacity.plannedItems.reduce((sum, row) => sum + row.minutes, 0), capacity.planned)
   assert.equal(capacity.planned, CAPACITY_EXPECTED.planA.planned)
 })
+
+/**
+ * 「显示逾期待办候选」开关的**勾选态必须来自 props**。
+ *
+ * 为什么单独钉一条（2026-10-02）：变异探针里"把开关取值换成常量 includeOverdue=false"
+ * 与"把 checked 写死 false"两种缺陷装回去时，**所有既有判据都是绿的** ——
+ * 也就是说"这个开关是不是真控件"没人守得住（用户可见的静默失效：点了不勾）。
+ * 这里用 SSR 出的 HTML 直接看 `checked` 属性：settings 说开就必须勾上。
+ */
+test('逾期开关的勾选态来自 props（不是写死的常量）—— 开关不许变成假控件', () => {
+  const on = render(ledger(), { includeOverdue: true })
+  assert.match(on, /type="checkbox"[^>]*checked/, 'props 说开 → 必须渲染成已勾选')
+  const off = render(ledger(), { includeOverdue: false })
+  assert.doesNotMatch(off, /type="checkbox"[^>]*checked/, 'props 说关 → 不许勾选')
+})

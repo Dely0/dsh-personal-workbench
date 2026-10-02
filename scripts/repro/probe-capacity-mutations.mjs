@@ -2,161 +2,190 @@
  * 变异探针：把本次新增/固化的每条策略逐个"装回缺陷版"，确认测试**必须变红**。
  *
  * 为什么需要它：一条策略如果没有任何测试守得住，撤掉它测试还是全绿 —— 那"有测试"就是假象。
- * 本探针刻意包含三类**接线类**变异（M10–M12）：它们不改纯函数、纯函数测试照样全绿，
- * 但功能确实坏了（memo 每帧失效 / payload 丢字段 / 编辑框初值恒空）。
- * 只有源码级断言才守得住它们，所以这三条是"接线有没有被测试锁住"的证据。
+ * 本探针刻意包含三类**接线类**变异（I2–I5）：它们不改纯函数、纯函数测试照样全绿，
+ * 但功能确实坏了（memo 每帧失效 / payload 丢字段 / 编辑框初值恒空 / 乐观更新被删）。
+ * 只有源码级断言才守得住它们，所以这几条是"接线有没有被测试锁住"的证据。
  *
  * 做法：备份源码 → 改一处 → 重新构建 → 只跑相关测试文件 → 记录红/绿 → 还原。
  * 全程 try/finally 还原，失败也会把工作区恢复原状（不留半改状态）。
  *
  * 用法：node scripts/repro/probe-capacity-mutations.mjs
  * 退出码 0 = 所有变异都变红（防线有效）；非 0 = 有变异仍然全绿（防线有洞）。
+ *
+ * ## 2026-10-02 重锚（本次改动的由来）
+ *
+ * 原探针的 M1–M9 锚的是 `src/client/capacity.ts` 里的**旧客户端容量实现**（按到期任务求和、
+ * `fallbackCount` / `dueTodayCount` / `overdueExcluded` / 全天 480 等口径）。容量计算在
+ * **ADR0002（T2/D09）**就迁进了共享模块 `src/shared/dailyPlanPolicy.ts#computeCapacityLedger`,
+ * 于是那 14 条锚点整段消失 → 探针把它报成"找不到替换片段"，而发布门禁
+ *（`scripts/lib/releasePreflight.mjs#judgeProbes`）把"探针失效"判为**阻塞项**（不算欠账）。
+ *
+ * 重锚原则：**按当前策略重新表述变异**，而不是把旧字符串贴到新位置 ——
+ * - 仍成立的口径（去重 / 缺 minutes 的默认展示 / free 的 max(0,·) / 分母 / 超支 / 可解析 /
+ *   未排入是补集 / 优先级档位 / 已结束投入）逐条改锚到共享模块；
+ * - 已随 ADR0002 消失的口径（客户端按到期求和那套）**直接作废**，不再保留同名变异；
+ * - 接线类缺口（I2–I5 / P2 / P3）改为**补判据**（`capacityWiring.test.mjs` 的 4 条源码扫描 +
+ *   `capacityPanel.test.mjs` 的勾选态判据），让它们从此真的能变红。
  */
 import { execFileSync } from 'node:child_process'
 import { readFileSync, writeFileSync } from 'node:fs'
 
 const ROOT = process.cwd()
-const CAPACITY = 'src/client/capacity.ts'
+/** 容量计算的唯一实现（ADR0002 起搬到这里；`src/client/capacity.ts` 只剩薄接线）。 */
+const SHARED = 'src/shared/dailyPlanPolicy.ts'
 const INDEX = 'src/client/index.tsx'
 const PANEL = 'src/client/components/CapacityRulePanel.tsx'
 
 const CAPACITY_TESTS = ['test/capacity.test.mjs']
 const WIRING_TESTS = ['test/capacityWiring.test.mjs']
+const PANEL_TESTS = ['test/capacityPanel.test.mjs']
 
 /** 每个变异：改哪个文件、怎么改、应该让哪些测试文件变红。 */
 const MUTATIONS = [
+  // ── 共享模块：容量账本的口径（S = shared）────────────────────────────────
   {
-    name: 'M1 兜底默认从「传入的默认耗时」改成写死 0（没填耗时的任务不再占时间）',
-    file: CAPACITY,
-    from: 'if (normalized === null) return { minutes: defaultMinutes, usedFallback: true }',
-    to: 'if (normalized === null) return { minutes: 0, usedFallback: true }',
+    name: 'S1 已排重复累加（`planned += minutes` 变成 ×2）',
+    file: SHARED,
+    from: '      forCandidates.push({ taskId: item.taskId, order: item.order, minutes })\n      planned += minutes',
+    to: '      forCandidates.push({ taskId: item.taskId, order: item.order, minutes })\n      planned += minutes * 2',
     tests: CAPACITY_TESTS,
   },
   {
-    name: 'M2 去掉 done/cancelled 过滤（完成/取消的任务也进「已排」）',
-    file: CAPACITY,
-    from: "    if (task.statusCode === 'done' || task.statusCode === 'cancelled') continue",
-    to: '    // 变异：过滤被删掉',
+    name: 'S2 计划里同一 taskId 重复出现时不再去重（静默多算）',
+    file: SHARED,
+    from: '      if (seen.has(item.taskId)) {',
+    to: '      if (false) {',
     tests: CAPACITY_TESTS,
   },
   {
-    name: 'M3 去掉 archived 过滤（归档任务也算进今日容量）',
-    file: CAPACITY,
-    from: '    if (task.archived === true) continue',
-    to: '    // 变异：归档过滤被删掉',
+    name: 'S3 计划项缺合法 minutes（旧数据）时按 0 计，不再给默认值展示',
+    file: SHARED,
+    from: '      const minutes = check.ok ? check.value : DEFAULT_PLAN_MINUTES',
+    to: '      const minutes = check.ok ? check.value : 0',
     tests: CAPACITY_TESTS,
   },
   {
-    name: 'M4 逾期改成默认计入（历史欠账混进"今天要做的事"）',
-    file: CAPACITY,
-    from: '    if (isOverdue) {\n      // 逾期与"今天到期"互斥（上面已经 continue 掉了），不会算两遍。\n      if (includeOverdue) {',
-    to: '    if (isOverdue) {\n      // 逾期与"今天到期"互斥（上面已经 continue 掉了），不会算两遍。\n      if (true) {',
+    name: 'S4 已结束投入不再累计（`doneMinutes` 丢）',
+    file: SHARED,
+    from: '      if (row.effortDone) doneMinutes += minutes',
+    to: '      // 变异：不统计已结束投入',
     tests: CAPACITY_TESTS,
   },
   {
-    name: 'M5 全天任务改按固定 480 分钟计（"全天"被误当成容量口径）',
-    file: CAPACITY,
-    from: '  const normalized = clampEstimatedMinutes(task.estimatedMinutes)',
-    to: '  const normalized = task.allDay === true ? 480 : clampEstimatedMinutes(task.estimatedMinutes)',
+    name: 'S5 关闭任务不再标记（taskClosed 恒 false，账本看不出已完成/已归档）',
+    file: SHARED,
+    from: '        taskClosed: task !== undefined && !isOpenTask({ statusCode: task.statusCode, archived: archivedFlag(task.archived) }),',
+    to: '        taskClosed: false,',
     tests: CAPACITY_TESTS,
   },
   {
-    name: 'M6 free 去掉 max(0, ·)（超支时「余」变成负数）',
-    file: CAPACITY,
+    name: 'S6 free 去掉 max(0, ·)（超支时「余」变成负数）',
+    file: SHARED,
     from: '  const free = Math.max(0, capacityMinutes - planned)',
     to: '  const free = capacityMinutes - planned',
     tests: CAPACITY_TESTS,
   },
   {
-    name: 'M7 未知优先级归 p0 而不是 p3（把"没识别"当成"最紧急"）',
-    file: CAPACITY,
-    from: "  return priorityCode === 'p0' || priorityCode === 'p1' || priorityCode === 'p2' ? priorityCode : 'p3'",
-    to: "  return priorityCode === 'p1' || priorityCode === 'p2' || priorityCode === 'p3' ? priorityCode : 'p0'",
+    name: 'S7 条形分母不看已排（`total` 只取可投入）',
+    file: SHARED,
+    from: '    total: Math.max(capacityMinutes, planned, 1),',
+    to: '    total: capacityMinutes,',
     tests: CAPACITY_TESTS,
   },
   {
-    name: 'M8 fallbackCount 漏算"继承截止且没填耗时"的那条',
-    file: CAPACITY,
-    from: '      dueTodayCount += 1\n      if (usedFallback) fallbackCount += 1',
-    to: '      dueTodayCount += 1\n      if (usedFallback && !inheritedDue) fallbackCount += 1',
+    name: 'S8 超支不再告警（`over` 恒 false）',
+    file: SHARED,
+    from: '    over: planned > capacityMinutes,',
+    to: '    over: false,',
     tests: CAPACITY_TESTS,
   },
   {
-    name: 'M9 默认耗时写死 30，不用传入值（设置页改了默认耗时也不生效）',
-    file: CAPACITY,
-    from: '    const { minutes, usedFallback } = minutesOf(task, defaultMinutes)',
-    to: '    const { minutes, usedFallback } = minutesOf(task, 30)',
+    name: 'S9 计划不可解析时仍报 readable=true（界面会假装 0，而不是"不可计算"）',
+    file: SHARED,
+    from: '    readable: input.planReadable,',
+    to: '    readable: true,',
     tests: CAPACITY_TESTS,
   },
   {
-    name: 'M10 memo 依赖数组塞回 now（每帧失效，memo 形同虚设）',
+    name: 'S10 未排入不再是补集（已排入的项也进未排入区）',
+    file: SHARED,
+    from: '  const unscheduled: CapacityUnscheduledRow[] = candidateResult.unscheduled.map((candidate) => ({',
+    to: '  const unscheduled: CapacityUnscheduledRow[] = candidateResult.candidates.map((candidate) => ({',
+    tests: CAPACITY_TESTS,
+  },
+  {
+    name: 'S11 计划行的优先级档位写死 p0（不再按任务真实优先级）',
+    file: SHARED,
+    from: "        band: candidateBand(task?.priorityCode ?? 'p3'),",
+    to: "        band: 'p0',",
+    tests: CAPACITY_TESTS,
+  },
+  {
+    name: 'S12 未排入的「建议投入合计」恒 0（读数少一块）',
+    file: SHARED,
+    from: '  const unscheduledSuggestedMinutes = unscheduled.reduce((sum, row) => sum + row.suggestedMinutes, 0)',
+    to: '  const unscheduledSuggestedMinutes = 0',
+    tests: CAPACITY_TESTS,
+  },
+
+  // ── 接线：memo 依赖（I1）与编辑耗时四个接线点（I2–I5）─────────────────────
+  {
+    name: 'I1 容量 memo 依赖数组塞回 now 对象（每帧失效，memo 形同虚设）',
     file: INDEX,
-    from: '    [tasks, archivedTasks, settings.dailyCapacityMinutes, settings.defaultEstimateMinutes, settings.dailyCapacityIncludeOverdue, capacityTodayKey(now)],',
-    to: '    [tasks, archivedTasks, settings.dailyCapacityMinutes, settings.defaultEstimateMinutes, settings.dailyCapacityIncludeOverdue, now],',
+    from: '    [tasks, archivedTasks, todayPlan, settings.dailyCapacityMinutes, settings.defaultEstimateMinutes, settings.dailyCapacityIncludeOverdue, capacityTodayKey(now)],',
+    to: '    [tasks, archivedTasks, todayPlan, settings.dailyCapacityMinutes, settings.defaultEstimateMinutes, settings.dailyCapacityIncludeOverdue, now],',
     tests: WIRING_TESTS,
   },
   {
-    name: 'M11 saveEditDraft 的 payload 删掉 estimatedMinutes（编辑耗时保存不进去）',
+    name: 'I2 保存 payload 删掉 estimatedMinutes（编辑耗时保存不进去）',
     file: INDEX,
     from: '        estimatedMinutes,\n        allDay: editDraft.allDay,',
     to: '        allDay: editDraft.allDay,',
     tests: WIRING_TESTS,
   },
   {
-    name: 'M12 editDraft 初值改回常量（打开编辑框永远显示空/30，看不见库里真实值）',
+    name: 'I3 editDraft 初值改回常量（打开编辑框永远显示空，看不见库里真实值）',
     file: INDEX,
     from: "estimatedMinutes: selected.task.estimatedMinutes === null ? '' : String(selected.task.estimatedMinutes)",
     to: "estimatedMinutes: ''",
     tests: WIRING_TESTS,
   },
   {
-    name: 'M13 客户端不再就地校验（非法耗时直接发请求，靠服务端 400 猜）',
+    name: 'I4 客户端不再就地校验（非法耗时直接发请求，靠服务端 400 猜）',
     file: INDEX,
     from: '    if (estimated !== null && (!Number.isFinite(estimated) || estimated < 1 || estimated > MAX_ESTIMATE_MINUTES)) {\n      pushToast(estimateRangeMessage(DEFAULT_ESTIMATE_MINUTES), \'error\')\n      return\n    }',
     to: '    // 变异：客户端校验被删掉',
     tests: WIRING_TESTS,
   },
   {
-    name: 'M14 乐观更新被删（改完必须刷新页面才看到「已排」变）',
+    name: 'I5 乐观更新被删（改完必须刷新页面才看到「已排」变）',
     file: INDEX,
     from: '      setTasks((prev) => prev.map((task) => (\n        task.id === selected.task.id ? { ...task, estimatedMinutes, allDay: editDraft.allDay } : task\n      )))',
     to: '      // 变异：乐观更新被删掉',
     tests: WIRING_TESTS,
   },
+
+  // ── 面板：只吃 props（P1–P3）──────────────────────────────────────────────
   {
-    name: 'M15 面板把逾期开关的取值换成常量（与 settings 脱钩 —— 第二权威源的典型形态）',
+    name: 'P1 面板自己 reduce 求和「已排」（第二份实现，与纯函数迟早不一致）',
     file: PANEL,
-    from: '  const { capacity, dailyCapacityMinutes, defaultEstimateMinutes, includeOverdue, onIncludeOverdueChange, expanded, onExpandedChange } = props',
-    to: '  const { capacity, dailyCapacityMinutes, defaultEstimateMinutes, onIncludeOverdueChange, expanded, onExpandedChange } = props\n  const includeOverdue = false',
-    tests: ['test/capacityPanel.test.mjs'],
-  },
-  {
-    name: 'M16 面板自己求和「已排」（第二份实现，和纯函数结果迟早不一致）',
-    file: PANEL,
-    from: '          已排 <b>{capacity.planned}</b> min · 可投入 <b>{dailyCapacityMinutes}</b> min ·',
-    to: '          已排 <b>{capacity.included.reduce((sum, row) => sum + row.minutes, 0)}</b> min · 可投入 <b>{dailyCapacityMinutes}</b> min ·',
+    from: '          已排 <b>{capacity.planned}</b> min（{capacity.plannedCount} 条，已结束 {capacity.doneMinutes} min） ·',
+    to: '          已排 <b>{capacity.plannedItems.reduce((sum, row) => sum + row.minutes, 0)}</b> min（{capacity.plannedCount} 条，已结束 {capacity.doneMinutes} min） ·',
     tests: WIRING_TESTS,
   },
   {
-    name: 'M17 逾期区读数把脏 due 串也算进去（读数虚高）',
+    name: 'P2 面板把逾期开关的取值换成常量（与 props 脱钩 —— 第二权威源的典型形态）',
     file: PANEL,
-    from: '  return `今日任务时间占比：紧急 ${capacity.byPriority.p0} 分钟、高 ${capacity.byPriority.p1} 分钟、`\n    + `普通 ${capacity.byPriority.p2} 分钟、低 ${capacity.byPriority.p3} 分钟、空闲 ${capacity.free} 分钟；`\n    + `今天到期 ${capacity.dueTodayCount} 条、无截止推进中 ${capacity.noDueDoingCount} 条、`\n    + `逾期未计入 ${capacity.overdueExcluded.filter((row) => !row.dueUnparseable).length} 条 / ${capacity.overdueMinutes} 分钟。`',
-    to: '  return `今日任务时间占比：紧急 ${capacity.byPriority.p0} 分钟、高 ${capacity.byPriority.p1} 分钟、`\n    + `普通 ${capacity.byPriority.p2} 分钟、低 ${capacity.byPriority.p3} 分钟、空闲 ${capacity.free} 分钟；`\n    + `今天到期 ${capacity.dueTodayCount} 条、无截止推进中 ${capacity.noDueDoingCount} 条、`\n    + `逾期未计入 ${capacity.overdueExcluded.length} 条 / ${capacity.overdueMinutes} 分钟。`',
-    tests: ['test/capacityPanel.test.mjs'],
+    from: '  const { capacity, dailyCapacityMinutes, defaultEstimateMinutes, includeOverdue, onIncludeOverdueChange, expanded, onExpandedChange, onAddToPlan, addingTaskId, inlineToggle = false } = props',
+    to: '  const { capacity, dailyCapacityMinutes, defaultEstimateMinutes, onIncludeOverdueChange, expanded, onExpandedChange, onAddToPlan, addingTaskId, inlineToggle = false } = props\n  const includeOverdue = false',
+    tests: PANEL_TESTS,
   },
   {
-    name: 'M18 面板把「全天任务按预计耗时算」写成按 480 算（口径被改但测试没锁）',
-    file: PANEL,
-    from: '全天任务同样按预计耗时算 —— 「全天」只影响显示与重复锚点，不改变容量计算。',
-    to: '全天任务按整天 480 分钟计入容量。',
-    tests: ['test/capacityPanel.test.mjs'],
-  },
-  {
-    name: 'M19 面板把逾期开关的勾选态写死成 false（开关变成假控件：点了不勾）',
+    name: 'P3 面板把逾期开关的勾选态写死 false（开关变成假控件：点了不勾）',
     file: PANEL,
     from: '              checked={includeOverdue}',
     to: '              checked={false}',
-    tests: ['test/capacityPanel.test.mjs'],
+    tests: PANEL_TESTS,
   },
 ]
 
@@ -192,7 +221,7 @@ if (!baselineBuild.ok) {
   console.error(`FAIL: 基线构建失败，先修构建。输出（尾部）：\n${baselineBuild.out.slice(-3000) || '(空输出)'}`)
   process.exit(1)
 }
-const baseline = run('node', ['--test', ...CAPACITY_TESTS, ...WIRING_TESTS])
+const baseline = run('node', ['--test', ...CAPACITY_TESTS, ...WIRING_TESTS, ...PANEL_TESTS])
 if (!baseline.ok) {
   console.error('FAIL: 未变异时测试就是红的，探针无意义。先修好测试再跑探针。')
   console.error(baseline.out.slice(-2000))

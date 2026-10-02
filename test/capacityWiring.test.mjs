@@ -163,3 +163,24 @@ test('逾期开关只影响候选：容量函数的 planned 与它无关（源�
   assert.match(code, /const candidateResult = planCandidates\(\{/)
   assert.equal((code.match(/planned \+= minutes/g) ?? []).length, 1, '已排只允许累加一次（在计划项循环里）')
 })
+
+/**
+ * 编辑耗时的四个**接线点**：保存 payload / 编辑框初值 / 就地校验 / 乐观更新。
+ *
+ * 为什么要源码扫描而不是行为测试（2026-10-02 补，来自变异探针的反向验证）：
+ * 这四处都在 `index.tsx` 的事件处理器里，而 `react-dom/server` 渲染不到交互 ——
+ * 变异探针把任一处装回缺陷版时，纯函数测试与组件渲染测试**全都是绿的**
+ *（实测 I2/I3/I4/I5 四条变异集体存活）。项目纪律：能搬进纯模块的就搬；
+ * 搬不动的（宿主交互接线）用源码扫描钉住，并用探针反向验证"装回缺陷必须变红"。
+ */
+test('AX-C07 编辑耗时的四个接线点都在（保存 payload / 编辑框初值 / 就地校验 / 乐观更新）', () => {
+  const code = stripComments(indexSource)
+  assert.match(code, /estimatedMinutes,\n\s+allDay: editDraft\.allDay,/,
+    '保存 payload 必须带上 estimatedMinutes —— 否则"编辑耗时"保存不进去（静默丢字段）')
+  assert.match(code, /estimatedMinutes: selected\.task\.estimatedMinutes === null \? '' : String\(selected\.task\.estimatedMinutes\)/,
+    '编辑框初值必须来自库里真实值 —— 写死空串等于打开编辑框看不见真实值')
+  assert.match(code, /estimated !== null && \(!Number\.isFinite\(estimated\) \|\| estimated < 1 \|\| estimated > MAX_ESTIMATE_MINUTES\)/,
+    '客户端必须就地校验非法耗时 —— 否则只能靠服务端 400 猜')
+  assert.match(code, /\{ \.\.\.task, estimatedMinutes, allDay: editDraft\.allDay \}/,
+    '乐观更新必须把新耗时写回列表 —— 否则要刷新页面才看到「已排」变')
+})

@@ -59,11 +59,6 @@ const KNOWN_TEST_FAILURES = [
  */
 const KNOWN_PROBE_DEBT = [
   {
-    probe: 'probe-capacity-mutations',
-    reason: '真盲点 5 条（M11/M12/M13/M14/M19 —— 编辑耗时的保存与初值、就地校验、乐观更新、'
-      + '逾期开关变假控件）+ 失效 14 条（M1–M10/M15–M18：容量计算已迁出 src/client/capacity.ts）',
-  },
-  {
     probe: 'probe-model-picker-notify-mutations',
     reason: '失效 3 条（B7/B8/B10：selectionToApply / unavailableReason / clearExitReachable 的写法与位置变了）—— '
       + '**无真盲点**，重锚即可',
@@ -72,6 +67,10 @@ const KNOWN_PROBE_DEBT = [
     probe: 'probe-quick-workspace-mutations',
     reason: '失效 2 条（M6/M14：调用点与按钮渲染条件已换位置，需重锚）—— 真盲点 M10 已于 2026-10-02 补判据并销账',
   },
+  // probe-capacity-mutations 的欠账（真盲点 5 条 + 失效 14 条）已于 2026-10-02 全部销账：
+  // 按 ADR0002 之后的真实口径重锚 12 条共享模块变异（S1–S12）+ 接线与面板 6 条（I1–I5 / P1–P3），
+  // 并为原先"装回缺陷仍全绿"的 6 处补了判据（capacityWiring 的 4 条源码扫描 + capacityPanel 的勾选态判据）。
+  // 判据是探针 20/20 全红；名单里若再留有它，双向断言会让门禁直接失败（"盲点已消除，请从名单删掉"）。
 ]
 
 /** PII 扫描的良性规则基线（逐条人工判断过）。 */
