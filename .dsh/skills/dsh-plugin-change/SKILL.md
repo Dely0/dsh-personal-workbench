@@ -54,6 +54,13 @@ whenToUse: 在本仓库（clone 下来的 DSH 插件源码树）里写代码、�
 - 客户端产物是**单文件 bundle**，`.tsx` 在本机没转译器也不易测 →
   **凡是想锁住的行为，都要先搬到纯 `.ts` 模块里**，"顺手写在组件里"等于放弃了它的测试。
 - 组件只做两件事：把快照喂给纯函数、把结果渲染出来。业务判定不进组件。
+- **想在 `node --test` 里真的渲染某个组件，必须把它加进 `tsconfig.build.json` 的 `include`**：
+  客户端 `.tsx` 默认只被 tsdown 打进 `lib/client.js`（单文件 bundle），**不会**产出
+  `lib/client/components/X.js` —— 于是 `import ... from '../lib/client/components/X.js'` 直接
+  ERR_MODULE_NOT_FOUND。已列的样板：`TaskList.tsx` / `KnowledgeList.tsx` / `CapacityRulePanel.tsx` /
+  `DayPanel.tsx`（2026-10-02 补）。tsc 会把它**传递依赖**的文件一并发射（如 DayPanel 带出 PlanPanel），
+  所以只加根组件那一行即可；代价是包里多几个小文件（无害，`files: ["lib"]` 照收）。
+  改完记得 `pnpm build` 才会出现新的 `lib/` 文件（测试脚本 `pnpm test` 已经先 build）。
 
 ## 3. 政策要变成"会失败的测试"，不要写成注释
 
