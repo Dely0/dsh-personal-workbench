@@ -219,18 +219,28 @@ test('层级：文档/目录弹窗必须盖得住打开它的对话框，且 por
 })
 
 /**
- * 日期面板三页签的间距（用户 2026-10-01 实测反馈：
+ * 日期面板任务页签的间距（用户 2026-10-01 实测反馈：
  * "计划/已完成/报告 这三个 Tab 切换控件和下面控件的间隔几乎没有，有点丑"）。
  *
- * 间距必须写在**页签的 margin-bottom** 上：三个页签下面跟的东西不一样
- *（计划 → 排序行 + 计划面板；已完成 → 列表；报告 → 卡片），
- * 写在内容一侧就会走出三种间距。这里是静态判据，真实几何由 `suites/day-panel.mjs` 量。
+ * 间距必须写在**页签的 margin-bottom** 上：页签下面跟的东西不一样
+ *（计划 → 排序行 + 计划面板；逾期/未排期/已完成 → 列表；报告 → 卡片），
+ * 写在内容一侧就会走出几种间距。这里是静态判据，真实几何由 `suites/day-panel.mjs` 量。
  */
-test('间距：日期面板三页签与下方内容必须留出间隔（写在页签上，而不是内容上）', () => {
+test('间距：日期面板任务页签与下方内容必须留出间隔（写在页签上，而不是内容上）', () => {
   const styles = readFileSync(new URL('../src/client/styles.ts', import.meta.url), 'utf8')
   assert.match(styles, /\.wb-segmented\[data-day-tabs\]\s*\{\s*margin-bottom:\s*(8|9|1\d)px/,
     '缺少 [data-day-tabs] 的 margin-bottom —— 页签会与下方内容挤在一起（用户已反馈过）')
+  /**
+   * 2026-10-02 加到五个页签（计划/逾期/未排期/已完成/报告）后必须允许换行：
+   * 窄面板上被挤出去的那一个会**整块消失**（用户看不到"报告"却不报错），换行只是变两行。
+   */
+  assert.match(styles, /\.wb-segmented\[data-day-tabs\][^}]*flex-wrap:\s*wrap/,
+    '五个页签必须允许换行，否则窄面板上最后一个页签会被挤掉且没有任何提示')
   const dayPanel = readFileSync(new URL('../src/client/components/DayPanel.tsx', import.meta.url), 'utf8')
   assert.match(dayPanel, /data-day-tabs/, '页签容器必须带 data-day-tabs（样式与判据都靠它定位）')
-  assert.match(dayPanel, /data-day-tree=\{tab\}/, '内容区必须带 data-day-tree（间距判据要能量到它）')
+  /**
+   * 内容区的定位点必须是**兜底之后**的页签（`activeTab`）：过去日期上 state 可能还停在
+   * 「逾期」，而真正渲染的是「计划」—— 用 state 会让几何判据量到一个不存在的区域。
+   */
+  assert.match(dayPanel, /data-day-tree=\{activeTab\}/, '内容区必须带 data-day-tree（间距判据要能量到它），且值取兜底后的页签')
 })

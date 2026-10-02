@@ -3,10 +3,15 @@
  *
  * 判据（B 层：真实鼠标 + DOM 重读 + 截图）：
  * - AX-T03：从「今日」进入与从「日历选中今天」进入得到**同一个面板** ——
- *   同一组页签（计划/已完成/报告）、同一批行（标题 + 来源徽标逐一相同）；
+ *   同一组页签（计划/逾期/未排期/已完成/报告）、同一批行（标题 + 来源徽标逐一相同）；
  * - AX-T04：逐条标来源（每行都有 `[data-task-source]`，取值只可能是到期/计划/进行中的组合）；
  * - AX-T05：旧口径的补丁文案「另有 N 个进行中任务未设置截止时间，暂列今天」**不再出现**，
  *   而「已完成」页签在**今日**视图里也拿得到（这是收敛带来的收益，原需求 #5）。
+ *
+ * 2026-10-02 追加（ADR0001 口径补充，仍归在 AX-T03「面板身份」下）：
+ * - 「逾期」/「未排期」两个页签点得开、内容区真的切换、行数与页签计数一致（上下文行不算成员）；
+ * - **过去日期**：两个新页签消失、页签兜底到「计划」—— 且刻意把 state 停在「逾期」再翻到过去日期，
+ *   证明不会出现"面板显示计划、列表却是空的"假空。
  *
  * 约定与其它套件一致：真实鼠标（坐标点击，滚进视口后**重新量一次**）、拿不到前置一律 fail。
  */
@@ -86,9 +91,10 @@ try {
   await browser.screenshot(`${suite.dir}/01-今日面板.png`)
 
   suite.check({
-    id: '今日有日期面板的三页签（计划 / 已完成 / 报告）—— 原需求 #5 的「已完成页签」由此获得',
+    id: '今日有日期面板的五个任务页签（计划 / 逾期 / 未排期 / 已完成 / 报告）—— 原需求 #5 的「已完成页签」由此获得',
     axId: 'AX-T03', layer: 'B',
-    ok: today.hasTabs === true && today.tabs.length === 3 && today.tabs.some((t) => t.includes('已完成')) && today.tabs.some((t) => t.includes('报告')),
+    ok: today.hasTabs === true && today.tabs.length === 5
+      && ['计划', '逾期', '未排期', '已完成', '报告'].every((label) => today.tabs.some((t) => t.includes(label))),
     detail: `tabs=${JSON.stringify(today.tabs)}`,
   })
   suite.check({
@@ -157,6 +163,44 @@ try {
   if (backToPlan === null) suite.require({ id: '切回「计划」页签（前置）', axId: 'AX-T03', layer: 'B', detail: '找不到计划页签' })
   await sleep(500)
 
+  // ── 「逾期」/「未排期」两个页签（2026-10-02 口径补充）──────────────────────
+  /**
+   * 读页签 + 内容区。`label` 只取按钮里的**文本节点**（图标是 svg、计数是 span.count），
+   * 计数与成员行必须对得上：`rows` 只数**非上下文行**（`.wb-row-context` 是父链旁证，不算成员）。
+   */
+  const readTabState = async () => browser.evaluate(`
+    const tabs = Array.from(document.querySelectorAll('[data-day-tabs] .wb-seg')).map((b) => ({
+      label: Array.from(b.childNodes).filter((n) => n.nodeType === 3).map((n) => n.textContent).join('').trim(),
+      count: b.querySelector('.count') === null ? null : Number((b.querySelector('.count').textContent || '').trim()),
+      on: b.classList.contains('on'),
+    }));
+    const tree = document.querySelector('[data-day-tree]');
+    const rows = Array.from(document.querySelectorAll('.wb-row:not(.wb-row-context) .wb-row-title-text'))
+      .map((e) => (e.textContent || '').trim()).filter((t) => t !== '');
+    return { tabs, active: tree === null ? null : tree.getAttribute('data-day-tree'), rows };
+  `)
+
+  const clickTab = async (label) => {
+    const clicked = await browser.clickByText(label, '[data-day-tabs] .wb-seg')
+    if (clicked === null) suite.require({ id: `点「${label}」页签（前置）`, axId: 'AX-T03', layer: 'B', detail: `找不到页签「${label}」` })
+    await sleep(500)
+  }
+
+  for (const [label, key, shot] of [['逾期', 'overdue', '04-逾期页签.png'], ['未排期', 'unscheduled', '05-未排期页签.png']]) {
+    await clickTab(label)
+    const state = await readTabState()
+    report[`${key}Tab`] = state
+    const badge = state.tabs.find((t) => t.label === label)?.count ?? -1
+    suite.check({
+      id: `「${label}」页签：点得开、内容区真的切过去、行数与页签计数一致（上下文行不计入）`,
+      axId: 'AX-T03', layer: 'B',
+      ok: state.active === key && state.rows.length === badge,
+      detail: JSON.stringify({ active: state.active, rows: state.rows.length, badge, tabs: state.tabs.map((t) => `${t.label}:${t.count}`) }),
+    })
+    suite.note(`「${label}」页签：${state.rows.length} 行 / 计数 ${badge}`)
+    await browser.screenshot(`${suite.dir}/${shot}`)
+  }
+
   // ── 日历（默认选中今天）──────────────────────────────────────────────────
   await browser.clickByText('日历', '.wb-seg')
   await waitFor(async () => (await browser.evaluate(`return document.querySelector('[data-day-tabs]') !== null;`)) === true,
@@ -181,6 +225,54 @@ try {
     detail: `stats=${cal.statsCard} cap=${cal.capCard}`,
   })
   await browser.screenshot(`${suite.dir}/03-并排依据.png`)
+
+  // ── 过去日期：两个新页签必须消失，且页签兜底到「计划」──────────────────────
+  /**
+   * 刻意先把页签停在「逾期」再翻到过去日期：这是"面板显示计划、列表却是空的"假空的唯一入口
+   *（该日计划的加载闸门是按旧页签关着的）。判据同时覆盖"藏掉两个页签"与"兜底到计划"。
+   *
+   * 过去的那一天怎么点：本周条里"今天"之前的那一格；若今天就是本周第一天，先翻到上一周，
+   * 再点那一周的最后一天（那一周全部是过去）—— 两条路径都不依赖运行日期，不会随机红。
+   */
+  await clickTab('逾期')
+  const probePast = await browser.evaluate(`
+    const cells = Array.from(document.querySelectorAll('.wb-day'));
+    if (cells.length === 0) return null;
+    const idx = cells.findIndex((c) => c.classList.contains('today'));
+    const pick = (cell) => { const r = cell.getBoundingClientRect(); return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) }; };
+    if (idx > 0) return { how: 'same-week', ...pick(cells[idx - 1]) };
+    return { how: 'prev-week' };
+  `)
+  let pastHow = probePast === null ? null : probePast.how
+  if (pastHow === 'same-week') {
+    await browser.clickAt(probePast.x, probePast.y)
+  } else if (pastHow === 'prev-week') {
+    const back = await browser.clickByText('◀', '.wb-cal-nav .wb-btn')
+    if (back === null) suite.require({ id: '翻到上一周（前置）', axId: 'AX-T03', layer: 'B', detail: '找不到上一周按钮' })
+    await sleep(400)
+    const last = await browser.evaluate(`
+      const cells = Array.from(document.querySelectorAll('.wb-day'));
+      if (cells.length === 0) return null;
+      const r = cells[cells.length - 1].getBoundingClientRect();
+      return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+    `)
+    if (last === null) pastHow = null
+    else await browser.clickAt(last.x, last.y)
+  } else {
+    pastHow = null
+  }
+  await sleep(800)
+  const pastState = await readTabState()
+  report.pastDay = { how: pastHow, tabs: pastState.tabs.map((t) => t.label), active: pastState.active }
+  suite.check({
+    id: '过去日期：不显示「逾期」/「未排期」，页签兜底到「计划」（state 停在逾期也不许假空）',
+    axId: 'AX-T03', layer: 'B',
+    ok: pastHow !== null && pastState.tabs.length === 3
+      && pastState.tabs.every((t) => ['计划', '已完成', '报告'].includes(t.label))
+      && pastState.active === 'plan',
+    detail: JSON.stringify(report.pastDay),
+  })
+  await browser.screenshot(`${suite.dir}/06-过去日期-两页签消失.png`)
 } catch (error) {
   suite.fatalError(error)
 } finally {

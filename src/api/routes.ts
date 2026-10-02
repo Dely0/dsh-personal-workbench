@@ -30,6 +30,8 @@ import { makeTaskRoutes } from './routes/tasks.js'
 import type { TeamMemoryService } from '../review-memory.js'
 import { teamMemoryAvailable } from '../review-memory.js'
 import { normalizeRecentWorkspaces } from '../shared/quickWorkspaceRecent.js'
+import { classifyTaskDay } from '../shared/dailyPlanPolicy.js'
+import { isOpenTask } from '../shared/taskProgress.js'
 import type { WorkbenchSettings } from '../shared/contracts.js'
 import { readPersonaSettings, writePersonaSettings } from '../db/repo/personas.js'
 
@@ -284,13 +286,26 @@ export function makeRoutes(db: DatabaseSync, deps: WorkbenchRouteDeps = {}): Web
         const { start, end } = todayRange(now)
         ensureRecurringInstances(db, localDateString(now))
         const tasks = listTasks(db)
-        const overdue = tasks.filter((task) =>
-          task.statusCode !== 'done' && task.statusCode !== 'cancelled' && task.effectiveDueAt !== null && Date.parse(task.effectiveDueAt) < now.getTime())
-        const todayDue = tasks.filter((task) =>
-          task.statusCode !== 'done' && task.statusCode !== 'cancelled' && task.effectiveDueAt !== null &&
-          Date.parse(task.effectiveDueAt) >= Date.parse(start) && Date.parse(task.effectiveDueAt) < Date.parse(end))
-        const doing = tasks.filter((task) => task.statusCode === 'doing' || task.statusCode === 'blocked')
         const plan = getDailyPlan(db, localDateString(now))
+        /**
+         * 统计卡用**与日期面板同一把尺子**（`classifyTaskDay`，日界 = 本地日 00:00）。
+         *
+         * 旧实现是两把尺子：逾期用 `now`（"今天 09:00 截止、现在 20:00" 算逾期），
+         * 今天到期用日界（同一条又算"今天到期"）—— 同一个任务在两张卡上同时计数。
+         * 2026-10-02 用户拍板统一（见 ADR0001 口径补充），判定只在共享纯函数里。
+         */
+        const dayStartMs = Date.parse(start)
+        const dayEndMs = Date.parse(end)
+        const planTaskIds = new Set((plan?.items ?? []).map((item) => item.taskId))
+        const openFacts = tasks
+          .filter((task) => isOpenTask({ statusCode: task.statusCode, archived: task.archived }))
+          .map((task) => classifyTaskDay({
+            effectiveDueAt: task.effectiveDueAt,
+            statusCode: task.statusCode,
+            planned: planTaskIds.has(task.id),
+            dayStartMs,
+            dayEndMs,
+          }))
         /**
          * 计划视图（T2/D06）：**原样保留**每一项的 `minutes`/`effortDone`/`taskStatusCode`。
          *
@@ -314,7 +329,12 @@ export function makeRoutes(db: DatabaseSync, deps: WorkbenchRouteDeps = {}): Web
         writeJson(res, 200, {
           ok: true,
           dictionaries: listDictionaries(db),
-          stats: { overdue: overdue.length, todayDue: todayDue.length, doing: doing.length, total: tasks.length },
+          stats: {
+            overdue: openFacts.filter((facts) => facts.overdue).length,
+            todayDue: openFacts.filter((facts) => facts.dueToday).length,
+            doing: openFacts.filter((facts) => facts.inProgress).length,
+            total: tasks.length,
+          },
           todayPlan: planView,
           now: now.toISOString(),
           /**

@@ -1,5 +1,5 @@
 /**
- * **日期面板**：承载「某一天」全部内容的唯一界面（计划 / 已完成 / 报告）。
+ * **日期面板**：承载「某一天」全部内容的唯一界面（计划 / 逾期 / 未排期 / 已完成 / 报告）。
  *
  * ## 为什么存在（ADR0001 口径冻结，批次2 D15）
  *
@@ -8,14 +8,16 @@
  * 同一个语义两处实现，于是两边看到的任务集永远对不上（本项目最大的 bug 类别）。
  *
  * 现在：**「今日」就是这个面板的 today 实例**（外层额外加统计卡与容量条），
- * 「日历」只是它的周/月容器。树的口径来自 `shared/dailyPlanPolicy.ts#dayPanelTreeSources`
- * （当日到期 ∪ 当日计划项 ∪ 进行中，逐条标来源）——**判定不在这份文件里**，
- * 组件只负责把父级算好的快照画出来（项目规范第 2 条）。
+ * 「日历」只是它的周/月容器。任务页签的成员口径来自
+ * `shared/dailyPlanPolicy.ts#dayPanelTabMembers`（计划 ∪ 逾期 ∪ 未排期，逐条标来源）
+ * ——**判定不在这份文件里**，组件只负责把父级算好的快照画出来（项目规范第 2 条）。
  *
  * ## 边界
  *
  * - 不读全局：页签状态、计划、树、报告都由 props 进来；
- * - 不做候选过滤、不拼请求：写入一律通过回调交给父级。
+ * - 不做候选过滤、不拼请求：写入一律通过回调交给父级；
+ * - 「逾期」/「未排期」是否可见由 `extraTabsAvailable` 决定（过去日期不显示，见 ADR0001 口径补充），
+ *   兜底落点用 `resolveDayPanelTab()`（与装配层同一份判定，不许各写一遍）。
  */
 import type { ReactNode } from 'react'
 import { Icon } from './Icon.js'
@@ -25,9 +27,10 @@ import { TaskTreeRows, countTaskTree, type PendingMap } from './TaskList.js'
 import type { DailyPlanView, Dict, Task, TaskReportView } from '../viewTypes.js'
 import { countTaskTreeBy, type TaskTreeNode } from '../taskFilterSort.js'
 import { localDateString, startOfWeek } from '../format.js'
+import { isDayPanelExtraTab, resolveDayPanelTab, type DayPanelTabCode } from '../../shared/dailyPlanPolicy.js'
 
-/** 面板的三个页签。 */
-export type DayTab = 'plan' | 'done' | 'report'
+/** 面板的页签（**类型定义在共享层**：装配层与组件引用同一份，不许各写一份字面量联合）。 */
+export type DayTab = DayPanelTabCode
 
 export interface DayPanelProps {
   /** 该日的本地日键（YYYY-MM-DD）——面包屑与只读判据都用它。 */
@@ -36,6 +39,8 @@ export interface DayPanelProps {
   isToday: boolean
   /** 过去日期只读（不能排序、不能改计划）。 */
   readOnly: boolean
+  /** 「逾期」/「未排期」在该日是否显示（过去日期不显示）。 */
+  extraTabsAvailable: boolean
   tab: DayTab
   onTabChange: (tab: DayTab) => void
   /** 该日计划（`null` = 还没有计划）。 */
@@ -44,14 +49,19 @@ export interface DayPanelProps {
   candidateRows: Array<{ id: string; title: string }>
   /** AI 提示词候选被截断时的告知（不许给"全量排序"的假印象）。 */
   promptInfo: { truncated: boolean; notice: string }
-  /** 计划树（**已经**按 `dayPanelTreeSources` 过滤过）。 */
+  /** 计划树（**已经**按 `dayPanelTabMembers` 过滤过）。 */
   planTree: TaskTreeNode<Task>[]
+  /** 逾期树 / 未排期树（同上，成员口径在共享层）。 */
+  overdueTree: TaskTreeNode<Task>[]
+  unscheduledTree: TaskTreeNode<Task>[]
   /** 已完成树。 */
   doneTree: TaskTreeNode<Task>[]
   doneContextIds?: Set<string>
+  overdueContextIds?: Set<string>
+  unscheduledContextIds?: Set<string>
   expanded: Set<string>
   onToggleExpanded: (taskId: string) => void
-  /** 行来源标签（来自 `dayPanelTreeSources`，界面不自己判）。 */
+  /** 行来源标签（来自 `dayPanelTabMembers`，界面不自己判）。 */
   sourceLabelOf?: (taskId: string) => string | null
   tasks: Task[]
   dicts: Dict[]
@@ -86,31 +96,55 @@ export interface DayPanelProps {
 
 export function DayPanel(props: DayPanelProps): JSX.Element {
   const {
-    day, isToday, readOnly, tab, onTabChange, plan, candidateRows, promptInfo, planTree, doneTree,
-    doneContextIds, expanded, onToggleExpanded, sourceLabelOf, tasks, dicts, selectedId, pending, childrenOf,
+    day, isToday, readOnly, extraTabsAvailable, tab, onTabChange, plan, candidateRows, promptInfo,
+    planTree, overdueTree, unscheduledTree, doneTree,
+    doneContextIds, overdueContextIds, unscheduledContextIds,
+    expanded, onToggleExpanded, sourceLabelOf, tasks, dicts, selectedId, pending, childrenOf,
     busy, onOpen, onSort, onComplete, onDefer, onEffortChange, onMinutesChange, onProgressChange,
     onClearPlan, onSavePlan, report, emptyPlanAction,
   } = props
 
   const reportAnchor = report.subTab === 'week' ? localDateString(startOfWeek(new Date(day))) : day
   const doneCount = countTaskTreeBy(doneTree, (task: Task) => task.completedAt !== null)
+  /**
+   * 当前真正生效的页签：过去日期上「逾期」/「未排期」不存在，兜底到「计划」。
+   * 用共享层的 `resolveDayPanelTab`（装配层把 state 收回来的落点与它**必须一致**）。
+   */
+  const activeTab = resolveDayPanelTab(tab, extraTabsAvailable)
+  /** 上下文行（父/祖父链）不计入计数 —— 与「已完成」页签同一条规矩。 */
+  const countMembers = (tree: TaskTreeNode<Task>[], contextIds: Set<string> | undefined): number =>
+    (contextIds === undefined ? countTaskTree(tree) : countTaskTreeBy(tree, (task: Task) => !contextIds.has(task.id)))
+
+  const tabDefs: Array<{ code: DayTab; label: string; icon: string; count: number }> = [
+    { code: 'plan', label: '计划', icon: 'list', count: countMembers(planTree, undefined) },
+    { code: 'overdue', label: '逾期', icon: 'bell', count: countMembers(overdueTree, overdueContextIds) },
+    { code: 'unscheduled', label: '未排期', icon: 'calendar', count: countMembers(unscheduledTree, unscheduledContextIds) },
+    { code: 'done', label: '已完成', icon: 'check', count: doneCount },
+    { code: 'report', label: '报告', icon: 'report', count: 0 },
+  ]
+  const visibleTabs = tabDefs.filter((def) => (isDayPanelExtraTab(def.code) ? extraTabsAvailable : true))
+
+  const roots = activeTab === 'plan'
+    ? planTree
+    : activeTab === 'overdue'
+      ? overdueTree
+      : activeTab === 'unscheduled' ? unscheduledTree : doneTree
+  const contextIds = activeTab === 'done'
+    ? doneContextIds
+    : activeTab === 'overdue' ? overdueContextIds : activeTab === 'unscheduled' ? unscheduledContextIds : undefined
 
   return (
     <>
-      {/* 三个页签：计划 / 已完成 / 报告 —— 今日与日历共用同一份（ADR0001：今日的「已完成」由此自动获得） */}
+      {/* 任务页签（计划/逾期/未排期）+ 已完成 + 报告 —— 今日与日历共用同一份（ADR0001） */}
       <div className="wb-segmented wb-sub-segmented" data-day-tabs>
-        <button className={`wb-seg ${tab === 'plan' ? 'on' : ''}`} onClick={() => onTabChange('plan')}>
-          <Icon name="list" />计划 <span className="count">{countTaskTree(planTree)}</span>
-        </button>
-        <button className={`wb-seg ${tab === 'done' ? 'on' : ''}`} onClick={() => onTabChange('done')}>
-          <Icon name="check" />已完成 <span className="count">{doneCount}</span>
-        </button>
-        <button className={`wb-seg ${tab === 'report' ? 'on' : ''}`} onClick={() => onTabChange('report')}>
-          <Icon name="report" />报告
-        </button>
+        {visibleTabs.map((def) => (
+          <button key={def.code} className={`wb-seg ${activeTab === def.code ? 'on' : ''}`} onClick={() => onTabChange(def.code)}>
+            <Icon name={def.icon} />{def.label}{def.code !== 'report' && <span className="count">{def.count}</span>}
+          </button>
+        ))}
       </div>
 
-      {tab === 'plan' && (
+      {activeTab === 'plan' && (
         <>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
             {readOnly
@@ -143,12 +177,11 @@ export function DayPanel(props: DayPanelProps): JSX.Element {
             * 那是旧口径的补丁：无截止的进行中任务当时不在树的判据里，只好"暂列"。
             * 冻结口径下它们由**进行中**这个来源正式承接（ADR0001），所以这句话连同
             * 判据一起删掉了（留着会让用户以为这是特例）。
-            */
-          }
+            */}
         </>
       )}
 
-      {tab === 'report' ? (
+      {activeTab === 'report' ? (
         <div className="wb-card">
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
             <div className="wb-segmented wb-sub-segmented">
@@ -187,34 +220,69 @@ export function DayPanel(props: DayPanelProps): JSX.Element {
           )}
         </div>
       ) : (
-        <div className="wb-list" data-day-tree={tab}>
+        <div className="wb-list" data-day-tree={activeTab}>
           <TaskTreeRows
-            roots={tab === 'plan' ? planTree : doneTree}
+            roots={roots}
             depth={0}
             expanded={expanded}
             toggle={onToggleExpanded}
             dicts={dicts}
             onOpen={onOpen}
             selectedId={selectedId}
-            contextIds={tab === 'done' ? doneContextIds : undefined}
+            contextIds={contextIds}
             pending={pending}
             childrenOf={childrenOf}
-            sourceLabelOf={tab === 'plan' ? sourceLabelOf : undefined}
+            sourceLabelOf={activeTab === 'plan' ? sourceLabelOf : undefined}
           />
-          {(tab === 'plan' ? planTree : doneTree).length === 0 && (
-            <div className="wb-empty" style={{ padding: '24px 18px' }} data-day-empty={tab}>
-              {tab === 'plan' && emptyPlanAction !== undefined
-                ? emptyPlanAction
-                : (
-                  <>
-                    <div style={{ fontWeight: 600, marginBottom: 4 }}>{day} 没有{tab === 'plan' ? '计划任务' : '完成记录'}</div>
-                    <div style={{ fontSize: 12, opacity: .8, marginTop: 4 }}>切换到其他日期查看计划/记录</div>
-                  </>
-                )}
+          {roots.length === 0 && (
+            <div className="wb-empty" style={{ padding: '24px 18px' }} data-day-empty={activeTab}>
+              {planEmptyNode(activeTab, day, emptyPlanAction)}
             </div>
           )}
         </div>
       )}
+    </>
+  )
+}
+
+/**
+ * 空态文案（每个页签说清"为什么这里是空的"）。
+ *
+ * 「逾期」/「未排期」必须解释判据 —— 否则用户会以为"任务丢了"（这次需求就是这么来的）。
+ */
+function planEmptyNode(tab: DayTab, day: string, emptyPlanAction: ReactNode): ReactNode {
+  if (tab === 'plan') {
+    return emptyPlanAction !== undefined
+      ? emptyPlanAction
+      : (
+        <>
+          <div style={{ fontWeight: 600, marginBottom: 4 }}>{day} 没有计划任务</div>
+          <div style={{ fontSize: 12, opacity: .8, marginTop: 4 }}>切换到其他日期查看计划/记录</div>
+        </>
+      )
+  }
+  if (tab === 'overdue') {
+    return (
+      <>
+        <div style={{ fontWeight: 600, marginBottom: 4 }}>没有逾期任务</div>
+        <div style={{ fontSize: 12, opacity: .8, marginTop: 4 }}>截止时间早于 {day} 的未完成任务会出现在这里（已完成 / 已取消 / 已归档不算）。</div>
+      </>
+    )
+  }
+  if (tab === 'unscheduled') {
+    return (
+      <>
+        <div style={{ fontWeight: 600, marginBottom: 4 }}>没有未排期的任务</div>
+        <div style={{ fontSize: 12, opacity: .8, marginTop: 4 }}>
+          既没逾期、也没排进这一天、状态也不是进行中的未完成任务会出现在这里 —— 想安排它们请先给任务设截止时间，或把状态改成「进行中」。
+        </div>
+      </>
+    )
+  }
+  return (
+    <>
+      <div style={{ fontWeight: 600, marginBottom: 4 }}>{day} 没有完成记录</div>
+      <div style={{ fontSize: 12, opacity: .8, marginTop: 4 }}>切换到其他日期查看计划/记录</div>
     </>
   )
 }

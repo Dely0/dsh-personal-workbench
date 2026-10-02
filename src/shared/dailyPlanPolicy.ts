@@ -520,6 +520,119 @@ export function dayPanelTreeSources(input: DayPanelSourceInput): DayPanelSourceR
   }
 }
 
+// ---------------------------------------------------------------------------
+// 日期面板的页签成员（逾期 / 未排期，2026-10-02 用户拍板）
+// ---------------------------------------------------------------------------
+
+/**
+ * 日期面板的页签（**唯一类型定义处**：装配层与组件都引用它，不许各写一份字面量联合）。
+ *
+ * 前三个是"任务视图"，`done` 按 `completedAt` 落在该日，`report` 是报告卡。
+ */
+export type DayPanelTabCode = 'plan' | 'overdue' | 'unscheduled' | 'done' | 'report'
+
+/** 「只对今天/未来有意义」的两个页签（过去日期不显示它们，见 ADR0001 口径补充）。 */
+export function isDayPanelExtraTab(tab: DayPanelTabCode): boolean {
+  return tab === 'overdue' || tab === 'unscheduled'
+}
+
+/**
+ * 该日能不能显示「逾期」/「未排期」：**过去日期不显示**。
+ *
+ * 为什么不做历史快照：真正的"截至 9/20 的逾期"要回放 `task_events` 的状态历史，
+ * 而库里只有**当前状态** —— 把今天的欠账画到 9/20 上就是编造（比"没有这一页"更糟）。
+ * 未来日显示的是"到那天为止"的投影，与"当日到期"同属排期语义，可以给。
+ *
+ * 日键是 `localDateString()` 产出的 `YYYY-MM-DD` **定宽**串，词典序 == 日期序。
+ */
+export function dayPanelExtraTabsAvailable(day: string, todayAnchor: string): boolean {
+  return day >= todayAnchor
+}
+
+/**
+ * 页签在"不可用"时的落点 —— **唯一实现**。
+ *
+ * 两个消费点必须用同一份判定，否则会出现"组件显示计划、装配层以为在看某页签"的错位：
+ * 1. 组件渲染前兜底（过去日期只剩三个页签）；
+ * 2. 装配层把 state 收回 `plan`（否则"该日计划"的加载闸门按旧页签关着，计划列表会是空的）。
+ */
+export function resolveDayPanelTab(tab: DayPanelTabCode, extraTabsAvailable: boolean): DayPanelTabCode {
+  return extraTabsAvailable || !isDayPanelExtraTab(tab) ? tab : 'plan'
+}
+
+export interface DayPanelTabMembers {
+  /** 「计划」页签成员（= `dayPanelTreeSources` 的输出，含逐条命中来源）。 */
+  plan: DayPanelSourceEntry[]
+  /**
+   * 「逾期」的 taskId：open 且截止早于该日 00:00。
+   *
+   * ⚠️ **允许与 `plan` 重叠**（事实重叠）：逾期不会因为它同时被排进今天/正在进行中而消失。
+   */
+  overdue: string[]
+  /** 「未排期」的 taskId：open 且**既不逾期、也不命中「计划」**（补集，不留死角）。 */
+  unscheduled: string[]
+  /** 计划项指向但任务已不存在（沿用 `dayPanelTreeSources` 的语义，界面负责说清为什么少了）。 */
+  missingTaskIds: string[]
+  /** 全部诊断（脏 due 等），界面必须显示而不是静默吞掉。 */
+  diagnostics: PlanCandidateDiagnostic[]
+}
+
+/**
+ * 三个任务页签（计划 / 逾期 / 未排期）的成员判定 —— **唯一实现**。
+ *
+ * 与 `dayPanelTreeSources` 的分工：那个回答"这一天的**计划**树里该有谁"（口径冻结，未改动）；
+ * 本函数在它之上补齐另外两个页签，构成 **open 任务的一个划分**：
+ *
+ * - `plan`：当日到期 ∪ 当日计划项 ∪ 进行中；
+ * - `overdue`：`effectiveDueAt < 该日 00:00`（**可与 plan 重叠**）；
+ * - `unscheduled`：`open − plan − overdue`（补集）。
+ *
+ * 性质（`test/dayPanelTabs.test.mjs` 逐条断言）：
+ * 1. 三者并集 == 全部 open 任务（**没有任务会没有归宿**）；
+ * 2. `unscheduled` 与另两者**不相交**；
+ * 3. `plan ∩ overdue` 可以非空（事实重叠，刻意允许）。
+ *
+ * 判定全部经 `classifyTaskDay`（唯一口径），本函数里**没有**一处 `Date.parse` 或状态比较。
+ */
+export function dayPanelTabMembers(input: DayPanelSourceInput): DayPanelTabMembers {
+  const plan = dayPanelTreeSources(input)
+  const planIds = new Set(plan.entries.map((entry) => entry.taskId))
+  const overdue: string[] = []
+  const unscheduled: string[] = []
+  const diagnostics = [...plan.diagnostics]
+  const reported = new Set(diagnostics.map((entry) => entry.taskId))
+
+  for (const task of input.tasks) {
+    if (!isOpenTask({ statusCode: task.statusCode, archived: archivedFlag(task.archived) })) continue
+    const facts = classifyTaskDay({
+      effectiveDueAt: task.effectiveDueAt,
+      statusCode: task.statusCode,
+      planned: planIds.has(task.id),
+      dayStartMs: input.dayStartMs,
+      dayEndMs: input.dayEndMs,
+    })
+    if (facts.dueUnparseable && !reported.has(task.id)) {
+      /**
+       * 脏截止串既不是"无截止"也不是"逾期"：它仍要有归宿（否则就是静默丢件），
+       * 所以落进「未排期」，同时把原因说出来。
+       */
+      reported.add(task.id)
+      diagnostics.push({
+        code: 'due-unparseable',
+        taskId: task.id,
+        message: `任务「${task.title}」的截止时间无法解析（${task.effectiveDueAt ?? ''}）：既不算"逾期"也没有"当日到期"可言，按"未排期"处理`,
+      })
+    }
+    if (facts.overdue) {
+      overdue.push(task.id)
+      continue
+    }
+    if (!planIds.has(task.id)) unscheduled.push(task.id)
+  }
+
+  return { plan: plan.entries, overdue, unscheduled, missingTaskIds: plan.missingTaskIds, diagnostics }
+}
+
 /**
  * 当日候选全集（需求 §5.1）——**唯一实现**。
  *

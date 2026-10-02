@@ -23,8 +23,8 @@ import {
 } from './taskFilterSort.js'
 import { isWslStylePath, joinPath, normalizeWindowsPathToWsl } from './workspacePath.js'
 import { DEFAULT_ESTIMATE_MINUTES, MAX_ESTIMATE_MINUTES, capacityDayRange, capacityTodayKey, computeTodayCapacity, todayPlanCandidates } from './capacity.js'
-import { dayPanelSourceLabel, dayPanelTreeSources } from '../shared/dailyPlanPolicy.js'
-import { DayPanel } from './components/DayPanel.js'
+import { resolveDayPanelTab } from '../shared/dailyPlanPolicy.js'
+import { DayPanel, type DayTab } from './components/DayPanel.js'
 import { useDayPanelModel } from './dayPanelModel.js'
 import { buildPlanPrompt } from './dailyPlanPrompt.js'
 import { WORKBENCH_CSS } from './styles.js'
@@ -2403,7 +2403,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   // 周/月日历
   const [cursor, setCursor] = useState<Date>(startOfWeek(now))
   const [calMode, setCalMode] = useState<'week' | 'month'>('week')
-  const [dayTab, setDayTab] = useState<'plan' | 'done' | 'report'>('plan')
+  const [dayTab, setDayTab] = useState<DayTab>('plan')
   /**
    * 报告锚点跟着**当前面板选中的那一天**走（批次2 D15）：
    * 今日视图看今天的报告，日历视图看选中那天的报告 —— 与树的锚点是同一个来源。
@@ -2510,6 +2510,18 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
     pickedDate: picked,
     todayDate: now,
   })
+
+  /**
+   * 切到过去日期时把页签收回「计划」。
+   *
+   * 为什么必须有（不是"顺手兜底"）：上面两个 effect 的闸门按**当前页签**决定要不要加载
+   * 该日计划；`dayPanel.extraTabsAvailable` 为假时组件已经兜底渲染「计划」，
+   * 若 state 还停在「逾期」，就会出现"面板显示计划、列表却是空的"的**假空**。
+   * 复位落点用共享的 `resolveDayPanelTab`（与组件兜底**同一份判定**）。
+   */
+  useEffect(() => {
+    setDayTab((prev) => resolveDayPanelTab(prev, dayPanel.extraTabsAvailable))
+  }, [dayPanel.extraTabsAvailable])
 
   /**
    * 两个入口**共用的一份面板 props**（今日与日历只差"哪一天"，而那已由 `dayPanel` 给出）。

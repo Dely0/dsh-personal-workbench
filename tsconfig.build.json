@@ -24,6 +24,7 @@
     "src/client/buildId.ts",
     "src/client/components/TaskProgress.tsx",
     "src/client/components/PersonaPicker.tsx",
+    "src/client/components/DayPanel.tsx",
     "src/shared/taskProgress.ts",
     "src/shared/dailyPlanPolicy.ts",
     "src/shared/persona.ts",
