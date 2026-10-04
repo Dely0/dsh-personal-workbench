@@ -201,6 +201,19 @@ try {
     await browser.screenshot(`${suite.dir}/${shot}`)
   }
 
+  /**
+   * **切回「计划」再进日历**（与上面 L160 那条同一个坑，2026-10-04 补）。
+   *
+   * 页签状态是**今日/日历共用的**（`dayTab` 一份 state，见 `useDayWorkspace`），上面这轮
+   * 刚把 state 停在「未排期」——而「未排期」是补集页签，今天恰好 0 行。不归位就切视图，
+   * 下面的主判据会拿"今日的计划行(2)"去比"日历的未排期行(0)"，得到一条毫无意义的假红。
+   *
+   * 实测复现（2026-10-04，3080 / v1.16.2）：受控顺序下 `今日(计划)` 与 `日历(计划)` 的行
+   * 逐字相同（2 行，来源均为「进行中」）；只有把 state 停在「未排期」时才是 0 行。
+   * 判据本身一字未改 —— 这里只是把**被测量前的前置状态**归一。
+   */
+  await clickTab('计划')
+
   // ── 日历（默认选中今天）──────────────────────────────────────────────────
   await browser.clickByText('日历', '.wb-seg')
   await waitFor(async () => (await browser.evaluate(`return document.querySelector('[data-day-tabs]') !== null;`)) === true,

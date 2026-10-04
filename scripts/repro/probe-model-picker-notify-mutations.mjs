@@ -26,6 +26,13 @@ const MODEL = join(ROOT, 'lib', 'client', 'modelCapability.js')
 const NOTIFY = join(ROOT, 'lib', 'client', 'notificationCapability.js')
 /** 变异 `src/` 源码（"接线"类断言扫的是它）。 */
 const COMPONENT = join(ROOT, 'src', 'client', 'index.tsx')
+/**
+ * D17/P6-3：提交路径（`selectionToApply(` / `clearExitReachable:`）随 `startAISession` 搬进 AI 会话域；
+ * D17 之前它就在 `components/ModelPicker.tsx`（门禁与成因的调用点）。
+ * 判据跟着 owner 走：B7/B10 锚 AI 会话域，B8 锚门禁组件 —— 不再锚入口。
+ */
+const AI_HOOK = join(ROOT, 'src', 'client', 'hooks', 'useWorkbenchAISessions.ts')
+const GATE = join(ROOT, 'src', 'client', 'components', 'ModelPicker.tsx')
 
 const TEST_FILES = ['test/modelPickerDegrade.test.mjs', 'test/quickIntakeClient.test.mjs']
 
@@ -74,14 +81,14 @@ const MUTATIONS = [
   },
   {
     name: 'B7 接线复辟：提交路径不再走 selectionToApply（判定对但没接上）',
-    file: COMPONENT,
-    from: /sel?ectionApplication = selectionToApply\(quickModelSelection, outcome, \{/,
+    file: AI_HOOK,
+    from: /selectionApplication = selectionToApply\(modelSelection, outcome, \{/,
     to: 'selectionApplication = { kind: `follow-default`, notice: `` }; void ({',
     expect: '提交路径必须真的用纯判据决定换不换模型',
   },
   {
     name: 'B8 接线复辟：门禁的成因改成硬编码（审查 F1：同一个事实又被拼成"接口没提供"）',
-    file: COMPONENT,
+    file: GATE,
     from: /unavailableReason: reason,/,
     to: "unavailableReason: '当前 DSH 未提供模型选择接口（modelDirectories），无法读取模型列表',",
     expect: '门禁的成因必须来自 modelDirectoryUnavailableReason（唯一实现）',
@@ -95,8 +102,8 @@ const MUTATIONS = [
   },
   {
     name: 'B10 接线复辟：提交路径不再把"出口可达"告诉提示（用户被叫去点不存在的出口）',
-    file: COMPONENT,
-    from: /clearExitReachable: quickModelSelection !== null,/,
+    file: AI_HOOK,
+    from: /clearExitReachable: modelSelection !== null,/,
     to: 'clearExitReachable: false,',
     expect: '有残留选择时提示必须告诉用户出口在哪',
   },

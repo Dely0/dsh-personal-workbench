@@ -18,6 +18,16 @@ import { dirname, join } from 'node:path'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
 const COMPONENT = join(ROOT, 'src', 'client', 'index.tsx')
+/** D17/P5-1：`saveSettings` 已随设置域搬进这个 hook —— M12/M13 的锚点跟着 owner 走。 */
+const SETTINGS_HOOK = join(ROOT, 'src', 'client', 'hooks', 'useWorkbenchSettings.ts')
+/**
+ * D17/P6-2：快速录入域的 8 项状态 / 预填判定调用点 / 投影 / 两个写设置的动作 / 「不再记住」的
+ * 删除基准**全部搬进了这个 hook** —— M1/M6/M11/M15 的锚点跟着 owner 走。
+ * D17/P7-2：快速录入弹窗的 JSX 搬进 app/WorkbenchDialogs.tsx —— M2（提交闸门）与 M14
+ *（「不再记住」按钮的渲染条件）的锚点也跟着 owner 走（原先锚入口）。
+ */
+const QUICK_HOOK = join(ROOT, 'src', 'client', 'hooks', 'useWorkbenchQuickIntake.ts')
+const DIALOGS = join(ROOT, 'src', 'client', 'app', 'WorkbenchDialogs.tsx')
 const MODULE = join(ROOT, 'lib', 'client', 'quickWorkspaceDefault.js')
 const SHARED = join(ROOT, 'lib', 'shared', 'quickWorkspaceRecent.js')
 const TEST_FILES = ['test/quickWorkspaceDefault.test.mjs', 'test/quickIntakeDefaultWiring.test.mjs']
@@ -31,11 +41,11 @@ const TEST_FILES = ['test/quickWorkspaceDefault.test.mjs', 'test/quickIntakeDefa
 const MUTATIONS = [
   {
     name: 'M1 还原成"从当前选中任务派生默认值"（本次事故的原形态）',
-    file: COMPONENT,
-    from: /applyQuickWorkspaceDecision\(decideQuickWorkspaceDefault\(\{[\s\S]*?\n    \}\), settings\.autoCreateTypeFolders\)/,
+    file: QUICK_HOOK,
+    from: /applyDecision\(decideQuickWorkspaceDefault\(\{[\s\S]*?\n    \}\), settings\.autoCreateTypeFolders\)/,
     to: [
       "const legacyInherited = selected?.task.effectiveWorkspacePath ?? ''",
-      "applyQuickWorkspaceDecision(legacyInherited !== ''",
+      "applyDecision(legacyInherited !== ''",
       "  ? { path: legacyInherited, source: 'last-manual' }",
       "  : { path: settings.defaultWorkspace, source: 'system-default' }, settings.autoCreateTypeFolders)",
     ].join('\n'),
@@ -43,7 +53,7 @@ const MUTATIONS = [
   },
   {
     name: 'M2 去掉 touched 闸门：自动预填的值也记进「最近手动选择」',
-    file: COMPONENT,
+    file: DIALOGS,
     from: /shouldRememberQuickWorkspace\(quickWorkspaceTouched, chosen\)/,
     to: "chosen !== ''",
     expect: 'rememberQuickWorkspace 的调用必须先问 shouldRememberQuickWorkspace',
@@ -70,11 +80,11 @@ const MUTATIONS = [
     expect: 'WSL 下把 Windows 形态归一化',
   },
   {
-    name: 'M6 在 openQuickEntry **之外**补一句"跟随任务工作区"的写入（换个入口重新引入污染）',
-    file: COMPONENT,
-    from: /setQuickWorkspace\(e\.target\.value\)/,
-    to: "setQuickWorkspace(selected?.task.effectiveWorkspacePath ?? e.target.value)",
-    expect: 'setQuickWorkspace 的实参只允许是判定结果或用户输入',
+    name: 'M6 在用户交互路径里补一句"跟随任务工作区"的写入（换个入口重新引入污染）',
+    file: QUICK_HOOK,
+    from: /    setQuickWorkspace\(path\)\n/,
+    to: "    setQuickWorkspace(selected?.task.effectiveWorkspacePath ?? path)\n",
+    expect: 'setQuickWorkspace 的实参只允许是判定结果或用户交互',
   },
   {
     name: 'M7 建任务资料夹的默认勾选改成恒 false（等于静默丢掉 v1.15.1 的任务资料夹保证）',
@@ -106,38 +116,45 @@ const MUTATIONS = [
   },
   {
     name: 'M11 调用点把 isWsl 写死 false（判定对、喂错了）',
-    file: COMPONENT,
+    file: QUICK_HOOK,
     from: /isWsl: detectWslHost\(runtime\),/,
     to: 'isWsl: false,',
     expect: '调用点真的把 isWsl 传对了（行为级接线）',
   },
   {
     name: 'M12 设置弹窗整表回传 recent（陈旧快照会把并发记下的顶掉）',
-    file: COMPONENT,
+    file: SETTINGS_HOOK,
     from: /const \{ quickWorkspaceRecent: _ignored, \.\.\.editable \} = settings/,
     to: 'const editable = settings',
     expect: 'saveSettings 必须把 quickWorkspaceRecent 摘掉再提交',
   },
   {
     name: 'M13 摘了字段却又把整表 settings 发出去（形态扫描满意、行为照旧）',
-    file: COMPONENT,
+    file: SETTINGS_HOOK,
     from: /body: JSON\.stringify\(editable\)/,
     to: 'body: JSON.stringify(settings)',
     expect: '发出去的必须是摘掉 quickWorkspaceRecent 的 editable',
   },
   {
     name: 'M14 「不再记住」按钮的渲染条件改成恒 false（F1 的用户出口被静默摘掉）',
-    file: COMPONENT,
-    from: /\{quickWorkspaceSource === 'last-manual' && quickWorkspace\.trim\(\) !== '' && !quickWorkspaceTouched && \(/,
-    to: '{false && (',
+    file: DIALOGS,
+    from: /showForget=\{quickWorkspaceSource === 'last-manual' && !quickWorkspaceTouched\}/,
+    to: 'showForget={false}',
     expect: '「不再记住」按钮必须真的接在界面上',
   },
   {
     name: 'M15 删除时用弹窗打开那刻的本地快照当基准（会抹掉别的窗口刚记下的）',
-    file: COMPONENT,
+    file: QUICK_HOOK,
     from: /forgetRecentWorkspace\(snapshot\.settings\.quickWorkspaceRecent, path\)/,
     to: 'forgetRecentWorkspace(settings.quickWorkspaceRecent, path)',
     expect: '删除前要现读服务端的当前列表',
+  },
+  {
+    name: 'M16 快速录入域的判定调用点把 recent 传成空数组（预填永远落到系统默认）',
+    file: QUICK_HOOK,
+    from: /recent: settings\.quickWorkspaceRecent,/,
+    to: 'recent: [],',
+    expect: '预填值真的来自「最近手动选择」（行为级接线）',
   },
 ]
 

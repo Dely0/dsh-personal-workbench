@@ -58,15 +58,16 @@ const KNOWN_TEST_FAILURES = [
  * 详见 `docs/issues/2026-10-01-mutation-probe-maintenance.md`。
  */
 const KNOWN_PROBE_DEBT = [
-  {
-    probe: 'probe-model-picker-notify-mutations',
-    reason: '失效 3 条（B7/B8/B10：selectionToApply / unavailableReason / clearExitReachable 的写法与位置变了）—— '
-      + '**无真盲点**，重锚即可',
-  },
-  {
-    probe: 'probe-quick-workspace-mutations',
-    reason: '失效 2 条（M6/M14：调用点与按钮渲染条件已换位置，需重锚）—— 真盲点 M10 已于 2026-10-02 补判据并销账',
-  },
+  // probe-model-picker-notify-mutations 的欠账已于 2026-10-04（D17/P7）全部销账：B7/B8/B10 三条
+  // 不是真盲点而是**探针失效**（锚点还停在 `index.tsx`，而提交路径随 D17/P6-3 搬进
+  // `src/client/hooks/useWorkbenchAISessions.ts`、门禁成因的调用点一直在 `components/ModelPicker.tsx`），
+  // 已按「判据跟着 owner 走」重锚（并把失效变量名 `quickModelSelection` 改成现名 `modelSelection`）。
+  // 现在 10/10 全红，名单里若再留有它，双向断言会让门禁直接失败（"盲点已消除，请从名单删掉"）。
+  // probe-quick-workspace-mutations 的欠账已于 2026-10-04 全部销账：D17/P6-2 把快速录入域搬进
+  // `src/client/hooks/useWorkbenchQuickIntake.ts` 时按「判据跟着 owner 走」重锚了 M6
+  //（从失效的 `setQuickWorkspace(e.target.value)` 改成用户交互唯一写点 `setQuickWorkspace(path)`）
+  // 与 M14（从失效的内联三元改成 `showForget={...}`），并新增 M16 盯 hook 里判定调用点的 `recent`。
+  // 现在 16/16 全红，名单里若再留有它，双向断言会让门禁直接失败（"盲点已消除，请从名单删掉"）。
   // probe-capacity-mutations 的欠账（真盲点 5 条 + 失效 14 条）已于 2026-10-02 全部销账：
   // 按 ADR0002 之后的真实口径重锚 12 条共享模块变异（S1–S12）+ 接线与面板 6 条（I1–I5 / P1–P3），
   // 并为原先"装回缺陷仍全绿"的 6 处补了判据（capacityWiring 的 4 条源码扫描 + capacityPanel 的勾选态判据）。

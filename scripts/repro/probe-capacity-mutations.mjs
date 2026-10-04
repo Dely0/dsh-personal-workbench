@@ -35,6 +35,10 @@ const ROOT = process.cwd()
 const SHARED = 'src/shared/dailyPlanPolicy.ts'
 const INDEX = 'src/client/index.tsx'
 const PANEL = 'src/client/components/CapacityRulePanel.tsx'
+/** D17/P3-2 起，任务详情面板（含编辑耗时初值）搬进视图层。 */
+const TASK_DETAIL_PANE = 'src/client/views/TaskDetailPane.tsx'
+/** D17/P4 起，日期域（候选快照 / 容量账本 / 报告锚点）搬进这个 hook。 */
+const DAY_WORKSPACE = 'src/client/hooks/useDayWorkspace.ts'
 
 const CAPACITY_TESTS = ['test/capacity.test.mjs']
 const WIRING_TESTS = ['test/capacityWiring.test.mjs']
@@ -131,9 +135,11 @@ const MUTATIONS = [
   // ── 接线：memo 依赖（I1）与编辑耗时四个接线点（I2–I5）─────────────────────
   {
     name: 'I1 容量 memo 依赖数组塞回 now 对象（每帧失效，memo 形同虚设）',
-    file: INDEX,
-    from: '    [tasks, archivedTasks, todayPlan, settings.dailyCapacityMinutes, settings.defaultEstimateMinutes, settings.dailyCapacityIncludeOverdue, capacityTodayKey(now)],',
-    to: '    [tasks, archivedTasks, todayPlan, settings.dailyCapacityMinutes, settings.defaultEstimateMinutes, settings.dailyCapacityIncludeOverdue, now],',
+    // D17/P4 重锚：memo 本体搬进 `hooks/useDayWorkspace.ts`（设计文档 §「后续批次预计假红」明令重锚），
+    // 入参名从 `taskList.archivedTasks` / `settings.*` 变成 hook 的解构名，口径一字未改。
+    file: DAY_WORKSPACE,
+    from: '    [tasks, archivedTasks, todayPlan, dailyCapacityMinutes, defaultEstimateMinutes, dailyCapacityIncludeOverdue, capacityTodayKey(now)],',
+    to: '    [tasks, archivedTasks, todayPlan, dailyCapacityMinutes, defaultEstimateMinutes, dailyCapacityIncludeOverdue, now],',
     tests: WIRING_TESTS,
   },
   {
@@ -145,7 +151,8 @@ const MUTATIONS = [
   },
   {
     name: 'I3 editDraft 初值改回常量（打开编辑框永远显示空，看不见库里真实值）',
-    file: INDEX,
+    // D17/P3-2 重锚：编辑框初值随任务详情面板搬进视图（`views/` 里，判据同步改指它）
+    file: TASK_DETAIL_PANE,
     from: "estimatedMinutes: selected.task.estimatedMinutes === null ? '' : String(selected.task.estimatedMinutes)",
     to: "estimatedMinutes: ''",
     tests: WIRING_TESTS,
