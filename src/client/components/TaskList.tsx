@@ -29,7 +29,7 @@ export function countTaskTree(roots: TaskTreeNode<Task>[]): number {
   return roots.reduce((sum, node) => sum + 1 + countTaskTree(node.children), 0)
 }
 
-export function TaskTreeRows({ roots, depth, expanded, toggle, dicts, onOpen, selectedId, contextIds, pending = null, childrenOf, sourceLabelOf, onSchedule, scheduledIds, schedulingTaskId }: {
+export function TaskTreeRows({ roots, depth, expanded, toggle, dicts, onOpen, selectedId, contextIds, pending = null, childrenOf, sourceLabelOf, groupSummaryOf, onSchedule, scheduledIds, schedulingTaskId }: {
   roots: TaskTreeNode<Task>[]; depth: number; expanded: Set<string>; toggle: (id: string) => void
   dicts: Dict[]; onOpen: (task: Task) => void; selectedId?: string; contextIds?: Set<string>
   /** 待验收投影（一次取全量后传下来，绝不逐行发请求）。`null` = 服务端不支持。 */
@@ -42,6 +42,12 @@ export function TaskTreeRows({ roots, depth, expanded, toggle, dicts, onOpen, se
    * 这里只把父级给的字符串画成一个徽标 —— 组件不自己判。
    */
   sourceLabelOf?: (taskId: string) => string | null
+  /**
+   * **分组行**的合计（ADR0010）：父任务今天不能作为计划项，它在「计划」页签里以灰行出现，
+   * 这行文案（`已排 2 / 共 5 个子任务 · 合计 60 分钟`）由父级从共享纯函数算好传下来。
+   * 缺省 = 不渲染（组件不自己判"这是不是分组行"）。
+   */
+  groupSummaryOf?: (taskId: string) => string | null
   /**
    * 行内「排入今日」（2026-10-02）：只由日期面板的**逾期 / 未排期**页签在**今天**这一实例上传入。
    * 组件不判"该不该显示" —— 缺省（undefined）就是不渲染，判定在父级。
@@ -68,13 +74,14 @@ export function TaskTreeRows({ roots, depth, expanded, toggle, dicts, onOpen, se
               pending={pending}
               childrenOf={childrenOf}
               sourceLabel={sourceLabelOf?.(node.task.id) ?? null}
+              groupSummary={groupSummaryOf?.(node.task.id) ?? null}
               onSchedule={onSchedule === undefined ? undefined : () => onSchedule(node.task.id)}
               alreadyScheduled={scheduledIds?.has(node.task.id) === true}
               scheduling={schedulingTaskId === node.task.id}
             />
           </div>
           {node.children.length > 0 && expanded.has(node.task.id) && (
-            <TaskTreeRows roots={node.children} depth={depth + 1} expanded={expanded} toggle={toggle} dicts={dicts} onOpen={onOpen} selectedId={selectedId} contextIds={contextIds} pending={pending} childrenOf={childrenOf} sourceLabelOf={sourceLabelOf} onSchedule={onSchedule} scheduledIds={scheduledIds} schedulingTaskId={schedulingTaskId} />
+            <TaskTreeRows roots={node.children} depth={depth + 1} expanded={expanded} toggle={toggle} dicts={dicts} onOpen={onOpen} selectedId={selectedId} contextIds={contextIds} pending={pending} childrenOf={childrenOf} sourceLabelOf={sourceLabelOf} groupSummaryOf={groupSummaryOf} onSchedule={onSchedule} scheduledIds={scheduledIds} schedulingTaskId={schedulingTaskId} />
           )}
         </div>
       ))}
@@ -82,12 +89,14 @@ export function TaskTreeRows({ roots, depth, expanded, toggle, dicts, onOpen, se
   )
 }
 
-export function TaskRow({ task, dicts, onOpen, selected, bare = false, pending = null, childrenOf, sourceLabel = null, onSchedule, alreadyScheduled = false, scheduling = false }: {
+export function TaskRow({ task, dicts, onOpen, selected, bare = false, pending = null, childrenOf, sourceLabel = null, groupSummary = null, onSchedule, alreadyScheduled = false, scheduling = false }: {
   task: Task; dicts: Dict[]; onOpen: (task: Task) => void; selected?: boolean; bare?: boolean
   pending?: PendingMap
   childrenOf?: (taskId: string) => readonly Task[] | undefined
   /** 该行在这一天命中的来源（已由父级拼好，可多来源如「到期 · 计划」）。 */
   sourceLabel?: string | null
+  /** 分组行合计（ADR0010，父级从共享纯函数算好）；缺省 = 不渲染。 */
+  groupSummary?: string | null
   /** 行内「排入今日」动作；缺省 = 不渲染按钮（是否显示由父级决定）。 */
   onSchedule?: () => void
   /** 已经排进这一天（父级告知）→ 不渲染按钮。 */
@@ -126,6 +135,9 @@ export function TaskRow({ task, dicts, onOpen, selected, bare = false, pending =
         <span className="wb-row-title-text">{task.title}</span>
         {sourceLabel !== null && sourceLabel !== '' && (
           <span className="wb-src" data-task-source={sourceLabel} title={`为什么在这一天：${sourceLabel}`}>{sourceLabel}</span>
+        )}
+        {groupSummary !== null && groupSummary !== '' && (
+          <span className="wb-src wb-group-sum" data-group-summary={groupSummary} title="分组行：今天要做的活是它下面的子任务（它自己不占今日投入）">{groupSummary}</span>
         )}
       </div>
       {/**

@@ -59,6 +59,10 @@ export interface DayPanelProps {
   doneContextIds?: Set<string>
   overdueContextIds?: Set<string>
   unscheduledContextIds?: Set<string>
+  /** 「计划」页签的分组行（ADR0010）：灰化、不计入计划条数。 */
+  planContextIds?: Set<string>
+  /** 分组行合计文案（父级从共享纯函数算好；缺省 = 不画）。 */
+  groupSummaryOf?: (taskId: string) => string | null
   expanded: Set<string>
   onToggleExpanded: (taskId: string) => void
   /** 行来源标签（来自 `dayPanelTabMembers`，界面不自己判）。 */
@@ -110,7 +114,7 @@ export function DayPanel(props: DayPanelProps): JSX.Element {
   const {
     day, isToday, readOnly, extraTabsAvailable, tab, onTabChange, plan, candidateRows, promptInfo,
     planTree, overdueTree, unscheduledTree, doneTree,
-    doneContextIds, overdueContextIds, unscheduledContextIds,
+    doneContextIds, overdueContextIds, unscheduledContextIds, planContextIds, groupSummaryOf,
     expanded, onToggleExpanded, sourceLabelOf, tasks, dicts, selectedId, pending, childrenOf,
     busy, onOpen, onSort, onComplete, onDefer, onEffortChange, onMinutesChange, onProgressChange,
     onClearPlan, onSavePlan, report, emptyPlanAction,
@@ -129,7 +133,11 @@ export function DayPanel(props: DayPanelProps): JSX.Element {
     (contextIds === undefined ? countTaskTree(tree) : countTaskTreeBy(tree, (task: Task) => !contextIds.has(task.id)))
 
   const tabDefs: Array<{ code: DayTab; label: string; icon: string; count: number }> = [
-    { code: 'plan', label: '计划', icon: 'list', count: countMembers(planTree, undefined) },
+    /**
+     * 「计划」页签的计数 = **真计划项**条数：分组行（父/祖先链）只作上下文，不计入
+     *（ADR0010：父任务自己不是计划项）。
+     */
+    { code: 'plan', label: '计划', icon: 'list', count: countMembers(planTree, planContextIds) },
     { code: 'overdue', label: '逾期', icon: 'bell', count: countMembers(overdueTree, overdueContextIds) },
     { code: 'unscheduled', label: '未排期', icon: 'calendar', count: countMembers(unscheduledTree, unscheduledContextIds) },
     { code: 'done', label: '已完成', icon: 'check', count: doneCount },
@@ -144,7 +152,7 @@ export function DayPanel(props: DayPanelProps): JSX.Element {
       : activeTab === 'unscheduled' ? unscheduledTree : doneTree
   const contextIds = activeTab === 'done'
     ? doneContextIds
-    : activeTab === 'overdue' ? overdueContextIds : activeTab === 'unscheduled' ? unscheduledContextIds : undefined
+    : activeTab === 'overdue' ? overdueContextIds : activeTab === 'unscheduled' ? unscheduledContextIds : activeTab === 'plan' ? planContextIds : undefined
   /**
    * 行内「排入今日」只在**今天** + **逾期 / 未排期**两个页签上（那两页里的行按定义都还没排进今天，
    * 除"逾期∩计划"的事实重叠行 —— 那些由 `scheduledIds` 挡掉）。缺 `onScheduleToday` 就整列不出现。
@@ -252,6 +260,7 @@ export function DayPanel(props: DayPanelProps): JSX.Element {
             pending={pending}
             childrenOf={childrenOf}
             sourceLabelOf={activeTab === 'plan' ? sourceLabelOf : undefined}
+            groupSummaryOf={activeTab === 'plan' ? groupSummaryOf : undefined}
             onSchedule={showScheduleAction ? onScheduleToday : undefined}
             scheduledIds={showScheduleAction ? scheduledIds : undefined}
             schedulingTaskId={showScheduleAction ? schedulingTaskId : undefined}

@@ -323,7 +323,8 @@ export function proposeDailyPlanTool(db: DatabaseSync) {
       'items 为扁平顺序数组（1 号最重要），每项 {task_id, order, note, minutes?}；note 解释排位理由或建议时间块。' +
       'minutes 是“今天在这条上计划投入多少分钟”（1–1440，可选），**不是任务的总耗时**（总耗时看任务自己的 estimatedMinutes）。' +
       '省略 minutes 时按住手的证据取值：该任务此前已排入本日计划则沿用原值，否则取任务预计耗时，再否则取设置里的默认投入。' +
-      '同一父子链上不要同时列入父任务与其子任务；不要传 effortDone（今日投入是否结束只能由用户操作）；不要修改任何任务字段，不要执行任务。',
+      '只能排**可执行叶子**（下面没有未完成子任务的节点）：父任务本身不是计划项，要排它的活就排它下面的叶子；items 里出现父任务会被**整份拒绝**（ADR0010，不会替你展开）。' +
+      '不要传 effortDone（今日投入是否结束只能由用户操作）；不要修改任何任务字段，不要执行任务。',
     parameters: {
       draft_id: { type: 'string', description: '已有计划草稿 id；用户提出修改意见后再次提交时传，更新同一份草稿' },
       plan_date: { type: 'string', description: '计划日期 YYYY-MM-DD，默认今天（服务器本地日期）' },

@@ -123,7 +123,11 @@ test('manual plan editing PUT saves added task instead of returning not found', 
     assert.equal(get.body.plan.items.length, 2)
     assert.equal(get.body.plan.items[1].note, 'added manually')
 
-    // 同一父子链不能同时入计划（POST/PUT 都拦，且无部分生效）
+    /**
+     * ADR0010：`task` 已在计划里（上面那份 PUT），现在给它加了一个子任务。
+     * 「已在计划里的父任务 + 新增它的子任务」是**历史脏数据**那一种，必须给可读原因
+     * （告诉用户先移除旧项），并且不许有部分生效。
+     */
     const child = createTask(db, { title: 'manual plan child', typeCode: 'code_impl', priorityCode: 'p2', parentId: task.id })
     const chainPut = await request('PUT', `/api/workbench/plans/${planDate}`, {
       items: [
@@ -132,13 +136,47 @@ test('manual plan editing PUT saves added task instead of returning not found', 
       ],
     })
     assert.equal(chainPut.status, 400)
-    assert.match(chainPut.body.error, /同一父子链/)
+    assert.match(chainPut.body.error, /上级任务/)
+    assert.match(chainPut.body.error, /先移除/)
     const afterChain = await request('GET', `/api/workbench/plans?date=${planDate}`)
     assert.equal(afterChain.body.plan.items.length, 2, '被拒的 PUT 不得有部分生效')
 
     const chainPost = await request('POST', `/api/workbench/plans/${planDate}/items`, { taskId: child.id })
     assert.equal(chainPost.status, 400)
-    assert.match(chainPost.body.error, /同一父子链/)
+    assert.match(chainPost.body.error, /先移除/)
+
+    /**
+     * ADR0010 的核心动作（路由层）：一键排入在**非叶子**上 = 展开它下面所有未完成叶子，
+     * 并在回执里如实给出 `addedTaskIds`；PUT（全量保存）**不展开**，非叶子新增整份拒绝。
+     */
+    const proj = createTask(db, { title: 'route 项目', typeCode: 'code_impl', priorityCode: 'p2' })
+    const projA = createTask(db, { title: 'route 叶子A', typeCode: 'code_impl', priorityCode: 'p2', parentId: proj.id })
+    const projB = createTask(db, { title: 'route 叶子B', typeCode: 'code_impl', priorityCode: 'p2', parentId: proj.id })
+
+    const nonLeafPut = await request('PUT', `/api/workbench/plans/${planDate}`, {
+      items: [
+        { taskId: proj.id, order: 1 },
+        { taskId: projA.id, order: 2 },
+      ],
+    })
+    assert.equal(nonLeafPut.status, 400, 'PUT 不展开：非叶子新增整份拒绝')
+    assert.match(nonLeafPut.body.error, /不是可执行的叶子/)
+
+    const expandPost = await request('POST', `/api/workbench/plans/${planDate}/items`, { taskId: proj.id })
+    assert.equal(expandPost.status, 200)
+    assert.equal(expandPost.body.added, true)
+    assert.deepEqual(expandPost.body.addedTaskIds, [projA.id, projB.id], '回执要如实给出展开了哪几条（按树序）')
+    const planAfter = await request('GET', `/api/workbench/plans?date=${planDate}`)
+    const idsAfter = planAfter.body.plan.items.map((item) => item.taskId)
+    assert.ok(idsAfter.includes(projA.id) && idsAfter.includes(projB.id), '父任务下的叶子都进了计划')
+    assert.equal(idsAfter.includes(proj.id), false, '父任务自己不是计划项（它不是可执行叶子）')
+    const projRowA = planAfter.body.plan.items.find((item) => item.taskId === projA.id)
+    assert.equal(projRowA.minutes, 30, '叶子取自己的投入（没估时 → 设置默认值）')
+
+    const again = await request('POST', `/api/workbench/plans/${planDate}/items`, { taskId: proj.id })
+    assert.equal(again.status, 200)
+    assert.equal(again.body.added, false, '再点一次是幂等的')
+    assert.deepEqual(again.body.addedTaskIds, [])
   })
 })
 

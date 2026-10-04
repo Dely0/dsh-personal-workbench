@@ -127,3 +127,25 @@ test('AX-T02: 清除某日计划只有一处实现，且写完之后必须重新
       `${fn} 写完之后必须 await refresh()（漏一处就是"清除了、页面却还在"）`)
   }
 })
+
+/**
+ * ADR0010：AI 侧的排期口径必须与写入校验同一句话 —— **只能排可执行叶子**。
+ *
+ * 为什么用扫描锁住：这句话在四个地方各写了一遍（工具体 description、系统提示词、
+ * 客户端计划提示词、提示词构造器）。它们漂移的方式很隐蔽 —— 模型照旧被教"父子二选一"，
+ * 于是提交的提案里带父任务、被校验整份拒绝，用户看到的是"AI 排不出计划"。
+ */
+test('ADR0010: AI 侧四处口径都只说「只能排可执行叶子」，不再教「同一父子链」', () => {
+  const files = {
+    'src/tools.ts': read('src/tools.ts'),
+    'src/index.ts': read('src/index.ts'),
+    'src/client/dailyPlanPrompt.ts': read('src/client/dailyPlanPrompt.ts'),
+    'src/client/hooks/useWorkbenchAISessions.ts': read('src/client/hooks/useWorkbenchAISessions.ts'),
+  }
+  for (const [name, source] of Object.entries(files)) {
+    assert.equal(source.includes('同一父子链'), false, `${name} 里不许再教"同一父子链二选一"（ADR0010 已改口径）`)
+    assert.ok(source.includes('可执行叶子'), `${name} 必须把新口径说清：只能排可执行叶子`)
+  }
+  assert.match(files['src/tools.ts'], /整份拒绝/, '工具描述要写明代价：非叶子提案会被整份拒绝')
+  assert.match(files['src/client/dailyPlanPrompt.ts'], /整份拒绝/, '提示词构造器同样要说清代价')
+})

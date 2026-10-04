@@ -196,6 +196,8 @@ function panelProps(over = {}) {
     doneContextIds: new Set(),
     overdueContextIds: new Set(),
     unscheduledContextIds: new Set(),
+    planContextIds: new Set(),
+    groupSummaryOf: undefined,
     expanded: new Set(),
     onToggleExpanded: () => {},
     sourceLabelOf: () => null,
@@ -338,4 +340,56 @@ test('排入今日：日历选中未来日期（isToday=false）即使传了回�
     unscheduledTree: node(task({ id: 'u1' })),
   })
   assert.equal(html.includes('wb-schedule'), false)
+})
+
+/**
+ * ADR0010（2026-10-05 用户拍板）：「已安排」按**子树继承** —— 非叶子任务要它子树内的
+ * 可执行叶子**全部**排进该日才算已安排。
+ *
+ * 于是：只排了一部分 → 父任务仍留在「未排期」（那里才有"补齐剩余叶子"的入口）；
+ * 全排完 → 它进「计划」当成员（界面上渲染成分组行）。
+ * 划分性质（并集 = 全部 open）必须仍然成立。
+ */
+test('ADR0010：部分叶子已排的父任务留在「未排期」，叶子全排完才进「计划」', () => {
+  const tasks = [
+    task({ id: 'proj', title: '项目' }),
+    task({ id: 'p-a', parentId: 'proj', title: '子 A' }),
+    task({ id: 'p-b', parentId: 'proj', title: '子 B' }),
+  ]
+  const run = (planItems) => dayPanelTabMembers({ tasks, planItems, dayStartMs: DAY_START, dayEndMs: DAY_END })
+
+  const partial = run([{ taskId: 'p-a' }])
+  assert.ok(partial.unscheduled.includes('proj'), '只排了一条子任务 → 父任务仍在「未排期」（一键补齐的入口在那里）')
+  assert.equal(partial.plan.some((entry) => entry.taskId === 'proj'), false, '还没算「计划」成员')
+  assert.ok(partial.plan.some((entry) => entry.taskId === 'p-a'), '已排的叶子在「计划」里')
+  assert.ok(partial.unscheduled.includes('p-b'), '没排的叶子也还在「未排期」')
+
+  const full = run([{ taskId: 'p-a' }, { taskId: 'p-b' }])
+  assert.equal(full.unscheduled.includes('proj'), false, '叶子全排 → 父任务离开「未排期」')
+  const projEntry = full.plan.find((entry) => entry.taskId === 'proj')
+  assert.ok(projEntry !== undefined, '叶子全排 → 父任务以「计划」成员身份出现（界面渲染成分组行）')
+  assert.deepEqual(projEntry.sources, ['plan'], '来源只有「计划」（它自己没有投入分钟）')
+
+  const union = new Set([...full.plan.map((entry) => entry.taskId), ...full.overdue, ...full.unscheduled])
+  for (const t of tasks) assert.ok(union.has(t.id), `${t.id} 必须有归宿（划分性质不许破）`)
+})
+
+/**
+ * ADR0010（分组行渲染）：「计划」页签里父任务是**上下文行**（灰化）—— 它写合计文案、
+ * 不渲染「排入今日」按钮、也不计入计划条数（条数只数真计划项）。
+ */
+test('ADR0010：分组行渲染合计文案 + 灰化 + 不计入计划条数 + 不给「排入今日」按钮', () => {
+  const container = task({ id: 'container', title: '项目' })
+  const leaf = task({ id: 'leaf', parentId: 'container', title: '子任务' })
+  const html = render({
+    ...withButton,
+    tab: 'plan',
+    planTree: [{ task: container, children: [{ task: leaf, children: [] }] }],
+    planContextIds: new Set(['container']),
+    groupSummaryOf: (taskId) => (taskId === 'container' ? '已排 1 / 共 2 个子任务 · 合计 30 分钟' : null),
+  })
+  assert.ok(html.includes('data-group-summary="已排 1 / 共 2 个子任务 · 合计 30 分钟"'), '分组行必须写出合计')
+  assert.match(html, /wb-row-context/, '分组行要灰化（与「已完成」页签同一条规矩）')
+  assert.equal(/class="count">1</.test(html), true, '计划条数只数真计划项（分组行不算）')
+  assert.equal(html.includes('wb-schedule'), false, '「计划」页签本来就不该有「排入今日」按钮')
 })

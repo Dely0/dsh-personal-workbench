@@ -182,13 +182,13 @@ test('db migrations, dictionaries and task tree', () => {
     assert.equal(updatedPlan.items[0].note, '改到前面')
     assert.equal(updatedPlan.items[1].note, '手动备注')
     assert.equal(getDailyPlan(db, planDate).sourceCode, 'manual')
-    // 同一父子链（根 + 它的子任务）不能同时在计划里 —— 显式给出中文原因，不部分生效
+    // 同一父子链：新增的那条必须与既有计划项不同链（ADR0010）—— 显式给出中文原因，不部分生效
     assert.throws(
       () => updateDailyPlan(db, planDate, { items: [
         { taskId: planTask.id, order: 1, note: '' },
         { taskId: task.id, order: 2, note: '' },
       ] }),
-      /同一父子链/,
+      /已在同一天的计划里.*先移除/s,
     )
     assert.equal(getDailyPlan(db, planDate).items.length, 2, '被拒的写入不得有部分生效')
     // validation: empty items and unknown task still throw; archived/closed tasks are allowed as plan records

@@ -9,7 +9,7 @@
  * - `POST /plans/:date/items` —— 一键排入的唯一入口，事务内读最新计划后按末尾 order 追加；
  * - `PATCH /plans/:date/items/:taskId` —— 项级更新，只动目标项，不写回整份计划。
  *
- * 所有写入都在仓储层（`db/repo/plans.ts`）做共同校验（任务存在/关闭/父子链），
+ * 所有写入都在仓储层（`db/repo/plans.ts`）做共同校验（任务存在/关闭/**新增项必须是可执行叶子**），
  * 路由层只管 HTTP 语义：日期合法性、过去只读、未来不得结束投入、404 与 400 的区分。
  */
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
@@ -135,7 +135,12 @@ export function makePlanRoutes(db: DatabaseSync): WebRoute[] {
             return writeJson(res, status, { error: result.error })
           }
           const payload = planResponse(db, result.plan) as { plan: unknown }
-          return writeJson(res, 200, { ok: true, plan: payload.plan, added: result.added })
+          /**
+           * `addedTaskIds` = 本次**真正落库**的那几条（ADR0010：在父任务上点一键排入会展开成
+           * 它下面所有未完成叶子）。回执必须回显它，界面才能说清"替用户排了哪几条"，
+           * 不许只说一句"已排入"。
+           */
+          return writeJson(res, 200, { ok: true, plan: payload.plan, added: result.added, addedTaskIds: result.addedTaskIds })
         }
 
         // PATCH /plans/:date/items/:taskId —— 项级更新

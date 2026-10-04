@@ -22,6 +22,7 @@ import { buildTaskTree, filterTaskTree, type TaskTreeNode } from './taskFilterSo
 import { sameDay } from './format.js'
 import {
   dayPanelExtraTabsAvailable, dayPanelSourceLabel, dayPanelTabMembers,
+  planGroupSummaries, planGroupSummaryLabel,
 } from '../shared/dailyPlanPolicy.js'
 import type { DailyPlanView, Task } from './viewTypes.js'
 
@@ -65,6 +66,16 @@ export interface DayPanelModel {
   doneContextIds: Set<string>
   overdueContextIds: Set<string>
   unscheduledContextIds: Set<string>
+  /**
+   * 「计划」页签里的**分组行**（ADR0010）：真正是计划项的叶子是成员，父/祖先链只是上下文行
+   *（灰化、不计入计划条数、不占投入）。
+   */
+  planContextIds: Set<string>
+  /**
+   * 分组行合计文案（`已排 2 / 共 5 个子任务 · 合计 60 分钟`）。**唯一算法**在
+   * `shared/dailyPlanPolicy.ts#planGroupSummaries`，组件只画字符串。
+   */
+  groupSummaryOf: (taskId: string) => string | null
   expanded: Set<string>
   onToggleExpanded: (taskId: string) => void
   sourceLabelOf: (taskId: string) => string | null
@@ -146,6 +157,27 @@ export function useDayPanelModel(input: DayPanelModelInput): DayPanelModel {
     () => filterTaskTree(buildTaskTree(tasks, planOrder), (task) => plannedIds.has(task.id)),
     [tasks, plannedIds, planOrder],
   )
+  /**
+   * 「计划」页签的**分组行**判据必须用 `planItemIds`（真计划项），不能用 `plannedIds`
+   * —— 后者含"子树全排完"的父任务（它按 `dayPlaced` 算已安排，但**不是计划项**、
+   * 不计投入，要用分组行画出来）。
+   */
+  const planItemIds = useMemo(() => new Set((plan?.items ?? []).map((item) => item.taskId)), [plan])
+  const planContextIds = useMemo(
+    () => contextIdsOf(planTree, (task) => !planItemIds.has(task.id)),
+    [planTree, planItemIds],
+  )
+  const groupSummaries = useMemo(
+    () => planGroupSummaries(tasks, (plan?.items ?? []).map((item) => ({ taskId: item.taskId, minutes: item.minutes }))),
+    [tasks, plan],
+  )
+  const groupSummaryOf = useCallback(
+    (taskId: string): string | null => {
+      const summary = groupSummaries.get(taskId)
+      return summary === undefined ? null : planGroupSummaryLabel(summary)
+    },
+    [groupSummaries],
+  )
   /** 逾期 / 未排期两棵树不带计划顺序（它们不是"这一天要按什么顺序做"，而是清欠与待安排）。 */
   const overdueTree = useMemo(
     () => filterTaskTree(buildTaskTree(tasks), (task) => overdueKeep.has(task.id)),
@@ -178,6 +210,7 @@ export function useDayPanelModel(input: DayPanelModelInput): DayPanelModel {
     day, isToday, readOnly, extraTabsAvailable, plan, candidateRows, promptInfo,
     planTree, overdueTree, unscheduledTree, doneTree,
     doneContextIds, overdueContextIds, unscheduledContextIds,
+    planContextIds, groupSummaryOf,
     expanded, onToggleExpanded, sourceLabelOf, plannedIds,
   }
 }

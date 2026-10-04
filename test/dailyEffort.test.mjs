@@ -176,7 +176,7 @@ test('AX-D03 显式给 minutes 才更改；非法 minutes 整份拒绝且不部�
 // AX-D04：共同校验
 // ---------------------------------------------------------------------------
 
-test('AX-D04 新增未知/关闭任务、父子同链整份拒绝；既有缺失项原样保留也不妨碍追加合法项', async () => {
+test('AX-D04 新增未知/关闭任务、非叶子整份拒绝；既有缺失项原样保留也不妨碍追加合法项', async () => {
   await withEnv(async ({ db, newTask }) => {
     const parent = newTask('父任务')
     const child = newTask('子任务', { parentId: parent.id })
@@ -187,11 +187,15 @@ test('AX-D04 新增未知/关闭任务、父子同链整份拒绝；既有缺失
 
     assert.throws(() => updateDailyPlan(db, date, { items: [{ taskId: 'ghost', order: 1 }] }), /不存在/)
     assert.throws(() => updateDailyPlan(db, date, { items: [{ taskId: archived.id, order: 1 }] }), /已归档/)
+    // ADR0010：PUT（全量保存）**不展开** —— 非叶子直接整份拒绝，并告诉调用方改排子任务
     assert.throws(
       () => updateDailyPlan(db, date, { items: [{ taskId: parent.id, order: 1 }, { taskId: child.id, order: 2 }] }),
-      /同一父子链/,
+      /不是可执行的叶子/,
     )
     assert.equal(getDailyPlan(db, date), undefined, '被拒的写入不许留下半份计划')
+    // 它下面的叶子自己可以排（这就是"改排子任务"）
+    const leafOnly = updateDailyPlan(db, date, { items: [{ taskId: child.id, order: 1 }] })
+    assert.equal(leafOnly.items.length, 1)
     // 兄弟叶子允许
     const siblingA = newTask('叶子A', { parentId: parent.id })
     const siblingB = newTask('叶子B', { parentId: parent.id })

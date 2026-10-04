@@ -281,7 +281,7 @@ export function useDayWorkspace(input: UseDayWorkspaceInput): UseDayWorkspaceRes
   const addTaskToPlan = async (taskId: string, minutes?: number): Promise<void> => {
     setAddingPlanTaskId(taskId)
     try {
-      const res = await api<{ plan: DailyPlanView | null; added: boolean }>(`/api/workbench/plans/${localDateString()}/items`, {
+      const res = await api<{ plan: DailyPlanView | null; added: boolean; addedTaskIds?: string[] }>(`/api/workbench/plans/${localDateString()}/items`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(minutes === undefined ? { taskId } : { taskId, minutes }),
@@ -289,12 +289,30 @@ export function useDayWorkspace(input: UseDayWorkspaceInput): UseDayWorkspaceRes
       await refresh()
       setPlanRefreshKey((v) => v + 1)
       /**
-       * 回执里**回显最终落库的投入分钟**（省略 `minutes` 时是服务端按"任务预计耗时 / 设置默认投入"
-       * 算出来的快照）。只写"已排入"不给数字，就是让用户去猜服务端替他决定了什么。
+       * 回执必须说清服务端**实际落库了哪几条**（ADR0010：在非叶子任务上点一键排入会展开成
+       * 它下面所有未完成叶子）。只说"已排入"就是让用户去猜服务端替他决定了什么 ——
+       * 这也是"服务端静默展开"唯一被允许的形态：展开照做，但**必须回显**。
        */
-      const landed = res.plan?.items.find((item) => item.taskId === taskId)
-      const minutesText = typeof landed?.minutes === 'number' ? `（投入 ${landed.minutes} 分钟）` : ''
-      onNotice(res.added ? `已排入今日计划${minutesText}` : '这条任务已经在今日计划里了（未改动原有投入与结束状态）')
+      const addedIds = res.addedTaskIds ?? []
+      const planItems = res.plan?.items ?? []
+      const landedOf = (id: string) => planItems.find((item) => item.taskId === id)
+      const sumMinutes = (ids: string[]): number => ids.reduce((sum, id) => {
+        const value = landedOf(id)?.minutes
+        return sum + (typeof value === 'number' ? value : 0)
+      }, 0)
+      if (!res.added || addedIds.length === 0) {
+        onNotice('这条任务（或它下面的子任务）已经在今日计划里了（未改动原有投入与结束状态）')
+      } else if (addedIds.length === 1) {
+        const landed = landedOf(addedIds[0])
+        const minutesText = typeof landed?.minutes === 'number' ? `（投入 ${landed.minutes} 分钟）` : ''
+        onNotice(`已排入今日计划${minutesText}`)
+      } else {
+        // 展开出来的条数不多时把标题也列出来（多了就只给条数与合计，别把提示条挤爆）
+        const titles = addedIds.length <= 3
+          ? ` —— ${addedIds.map((id) => landedOf(id)?.title ?? id).join('、')}`
+          : ''
+        onNotice(`已排入今日计划：${addedIds.length} 条子任务（合计 ${sumMinutes(addedIds)} 分钟）${titles}`)
+      }
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e))
     } finally {

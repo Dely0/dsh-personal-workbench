@@ -103,7 +103,8 @@ test('无计划时：已排 0，但未排入区仍在，并说清"已排 = 0"', 
   const html = render(ledger({ planItems: [], planExists: false }))
   assert.match(html, /已排 <b>0<\/b> min（0 条，已结束 0 min）/)
   assert.match(html, /今天还没有排入任何计划投入/)
-  assert.match(html, /未排入候选 <b>8<\/b> 条/)
+  assert.match(html, /未排入候选 <b>7<\/b> 条/)
+  assert.match(html, /建议投入合计 <b>870<\/b> min/, 'ADR0010 起非叶子任务 S6 不进候选池（原先含它自己 60 分钟的 930 已作废）')
 })
 
 test('计划不可解析：显式报"不可计算"并说明原数据未改动，不画账本合计', () => {

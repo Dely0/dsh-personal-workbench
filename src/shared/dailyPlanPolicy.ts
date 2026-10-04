@@ -172,7 +172,13 @@ export interface PlanTaskRef {
   parentId: string | null
   title: string
   statusCode: string
-  archived: number | boolean
+  /** 归档标记：仓储行是 `0|1`，客户端 `Task` 是布尔，**可选**（`PlanCandidateTask` 就省略它）。 */
+  archived?: number | boolean
+  /**
+   * 同级排序键（ADR0010 的子树展开要用）。**可选**：省略时退化成只按 id 词典序，
+   * 与 `planCandidates` / 日期面板树的"`createdAt` 升序、再 id"口径一致。
+   */
+  createdAt?: string
 }
 
 export type PlanValidation = { ok: true } | { ok: false; reason: string }
@@ -207,6 +213,255 @@ export function isTaskWithinSubtree(
   return false
 }
 
+// ---------------------------------------------------------------------------
+// 可执行叶子（ADR0010）：一个任务什么时候有资格成为某日计划项
+// ---------------------------------------------------------------------------
+
+/** 树深度硬上限（与 `isTaskWithinSubtree` 的环保护同一个数量级）。 */
+const MAX_TREE_DEPTH = 64
+
+interface LeafWalk {
+  byId: ReadonlyMap<string, PlanTaskRef>
+  byParent: ReadonlyMap<string | null, PlanTaskRef[]>
+}
+
+/** 同级排序：`createdAt` 升序、再 id 词典序（与 `planCandidates` / 日期面板树同口径）。 */
+function compareSiblings(a: PlanTaskRef, b: PlanTaskRef): number {
+  const left = a.createdAt ?? ''
+  const right = b.createdAt ?? ''
+  if (left !== right) return left < right ? -1 : 1
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0
+}
+
+function buildLeafWalk(tasks: readonly PlanTaskRef[]): LeafWalk {
+  const byId = new Map<string, PlanTaskRef>()
+  const byParent = new Map<string | null, PlanTaskRef[]>()
+  for (const task of tasks) {
+    byId.set(task.id, task)
+    const siblings = byParent.get(task.parentId)
+    if (siblings === undefined) byParent.set(task.parentId, [task])
+    else siblings.push(task)
+  }
+  for (const siblings of byParent.values()) siblings.sort(compareSiblings)
+  return { byId, byParent }
+}
+
+/** 未完成（open）= 未终结状态且未归档 —— **唯一判据** `isOpenTask` 的本地包装。 */
+function isOpenRef(task: PlanTaskRef): boolean {
+  return isOpenTask({ statusCode: task.statusCode, archived: archivedFlag(task.archived) })
+}
+
+/** 该任务有没有**未完成的直接子任务**。 */
+function hasOpenChild(walk: LeafWalk, taskId: string): boolean {
+  return (walk.byParent.get(taskId) ?? []).some(isOpenRef)
+}
+
+/**
+ * 一个任务是不是**可执行叶子**：自己未完成，且下面没有未完成子任务。
+ *
+ * 为什么要有这个判定（ADR0010）：计划项必须是可执行叶子 —— 父子同时入列会把同一份工作
+ * 在容量里算两遍；而在父任务上点「排入今日」的正确含义是**展开它下面的叶子**（见
+ * `expandPlanLeaves`）。判定只在这里实现一份：写入校验、候选池、页签成员、容量未排入区
+ * 全部消费它，任何"在别处再判一次叶子"的写法都是下一个同类 bug。
+ *
+ * 输入是**全量任务**（含归档/终结），open 过滤在函数内做。
+ */
+export function executableLeafIds(tasks: readonly PlanTaskRef[]): Set<string> {
+  const walk = buildLeafWalk(tasks)
+  const leaves = new Set<string>()
+  for (const task of walk.byId.values()) {
+    if (isOpenRef(task) && !hasOpenChild(walk, task.id)) leaves.add(task.id)
+  }
+  return leaves
+}
+
+/**
+ * 把"排入这个任务"展开成**要落库的叶子 id 列表**（ADR0010 的核心动作）。
+ *
+ * 规则：
+ * - 目标是叶子 → `[它自己]`；
+ * - 目标是非叶子 → 它下面**全部未完成叶子**，按**树序**（先父后子；同级 `createdAt` 升序、
+ *   再 id 词典序）—— 与日期面板树看到的顺序一致，叶子随其父成组；
+ * - 终结/归档的后代**跳过**（今天不做已完成的活）；
+ * - 目标未知或自己不是 open → `[]`。
+ *
+ * ⚠️ **返回空数组不等于成功**：成环的脏数据也会得到 `[]`（两个节点各有一个"未完成子任务"，
+ * 没有叶子可言）。调用方必须让写入校验去拒绝它并给出可读原因，**不许**把"什么都没加"当成
+ * 排入成功（那是静默丢件）。
+ */
+export function expandPlanLeaves(tasks: readonly PlanTaskRef[], rootId: string): string[] {
+  const walk = buildLeafWalk(tasks)
+  const root = walk.byId.get(rootId)
+  if (root === undefined || !isOpenRef(root)) return []
+  const out: string[] = []
+  const visited = new Set<string>()
+  const visit = (task: PlanTaskRef, depth: number): void => {
+    if (depth > MAX_TREE_DEPTH || visited.has(task.id)) return
+    visited.add(task.id)
+    const children = (walk.byParent.get(task.id) ?? []).filter(isOpenRef)
+    if (children.length === 0) {
+      out.push(task.id)
+      return
+    }
+    for (const child of children) visit(child, depth + 1)
+  }
+  visit(root, 0)
+  return out
+}
+
+/**
+ * 某一天「**已安排**」的任务集合（ADR0010 的口径，**唯一实现**）。
+ *
+ * 两种情形都算已安排：
+ * 1. **自己是**该日计划项（叶子）；
+ * 2. 它是**非叶子任务**，且它子树内的**全部可执行叶子**都已是该日计划项 —— 即
+ *    "排期状态按子树继承"。只排了一部分叶子 → **不算**已安排（它还欠着活），于是它留在
+ *    「未排期」页签，一键排入 = 把剩下的叶子补齐。
+ *
+ * 为什么不"排了任意一条就算"：那样父任务会在还剩 3 个子任务没排时就跳进「计划」，
+ * 「未排期」页签里再也找不到那个补齐入口（用户 2026-10-05 拍板选"全部排完才算"）。
+ *
+ * 「未排期」因此仍然是**补集**（`open − 已安排 − 逾期`），三页签划分性质不变。
+ */
+export function dayPlacedIds(
+  tasks: readonly PlanTaskRef[],
+  planItems: readonly { taskId: string }[],
+): Set<string> {
+  const walk = buildLeafWalk(tasks)
+  const planIds = new Set(planItems.map((item) => item.taskId))
+  const placed = new Set<string>()
+  for (const task of walk.byId.values()) {
+    if (planIds.has(task.id)) placed.add(task.id)
+  }
+
+  /** 子树内的「可执行叶子总数 / 其中已排数」——自底向上算一次，避免每个任务各遍历一遍。 */
+  const stats = new Map<string, { total: number; planned: number }>()
+  const visiting = new Set<string>()
+  const statsOf = (id: string): { total: number; planned: number } => {
+    const cached = stats.get(id)
+    if (cached !== undefined) return cached
+    if (visiting.has(id)) return { total: 0, planned: 0 } // 成环：按"没有叶子"处理，不死循环
+    visiting.add(id)
+    let total = 0
+    let planned = 0
+    for (const child of walk.byParent.get(id) ?? []) {
+      if (!isOpenRef(child)) continue
+      const childStats = statsOf(child.id)
+      total += childStats.total
+      planned += childStats.planned
+    }
+    // 它自己是可执行叶子才算一条（非叶子任务自己不占叶子名额）
+    const self = walk.byId.get(id)
+    if (self !== undefined && isOpenRef(self) && !hasOpenChild(walk, id)) {
+      total += 1
+      if (planIds.has(id)) planned += 1
+    }
+    visiting.delete(id)
+    const result = { total, planned }
+    stats.set(id, result)
+    return result
+  }
+
+  for (const task of walk.byId.values()) {
+    if (!isOpenRef(task)) continue
+    const own = statsOf(task.id)
+    if (own.total > 0 && own.planned === own.total) placed.add(task.id)
+  }
+  return placed
+}
+
+/** 一个**非叶子任务**在日期面板「计划」页签里当分组行时显示的合计。 */
+export interface PlanGroupSummary {
+  /** 它子树内的可执行叶子总数。 */
+  totalLeaves: number
+  /** 其中已是该日计划项的条数。 */
+  plannedLeaves: number
+  /** 这些已排叶子的计划投入合计（分钟）。 */
+  plannedMinutes: number
+}
+
+/**
+ * 分组行的合计（ADR0010，**唯一实现**）—— 只给**非叶子任务**产出条目。
+ *
+ * 为什么放共享层：它是"这条父任务今天排了多少"的口径，界面（日期面板）与将来的调用方
+ * 必须共用同一份；散在组件里就是"同一语义两处实现"。
+ */
+export function planGroupSummaries(
+  tasks: readonly PlanTaskRef[],
+  planItems: ReadonlyArray<{ taskId: string; minutes?: number }>,
+): Map<string, PlanGroupSummary> {
+  const walk = buildLeafWalk(tasks)
+  const itemMinutes = new Map<string, number>()
+  for (const item of planItems) {
+    if (itemMinutes.has(item.taskId)) continue
+    itemMinutes.set(item.taskId, typeof item.minutes === 'number' && Number.isFinite(item.minutes) ? item.minutes : 0)
+  }
+
+  const summaries = new Map<string, PlanGroupSummary>()
+  const visiting = new Set<string>()
+  const summaryOf = (id: string): PlanGroupSummary => {
+    const cached = summaries.get(id)
+    if (cached !== undefined) return cached
+    if (visiting.has(id)) return { totalLeaves: 0, plannedLeaves: 0, plannedMinutes: 0 } // 成环：不死循环
+    visiting.add(id)
+    let totalLeaves = 0
+    let plannedLeaves = 0
+    let minutes = 0
+    for (const child of walk.byParent.get(id) ?? []) {
+      if (!isOpenRef(child)) continue
+      const childSummary = summaryOf(child.id)
+      totalLeaves += childSummary.totalLeaves
+      plannedLeaves += childSummary.plannedLeaves
+      minutes += childSummary.plannedMinutes
+    }
+    const self = walk.byId.get(id)
+    if (self !== undefined && isOpenRef(self) && !hasOpenChild(walk, id) && itemMinutes.has(id)) {
+      totalLeaves += 1
+      plannedLeaves += 1
+      minutes += itemMinutes.get(id) ?? 0
+    } else if (self !== undefined && isOpenRef(self) && !hasOpenChild(walk, id)) {
+      totalLeaves += 1
+    }
+    visiting.delete(id)
+    const summary = { totalLeaves, plannedLeaves, plannedMinutes: minutes }
+    summaries.set(id, summary)
+    return summary
+  }
+
+  for (const task of walk.byId.values()) {
+    if (!isOpenRef(task)) continue
+    if (hasOpenChild(walk, task.id)) summaryOf(task.id) // 只有非叶子任务需要分组行
+  }
+  return summaries
+}
+
+/** 分组行文案（**唯一实现**）：`已排 2 / 共 5 个子任务 · 合计 60 分钟`。 */
+export function planGroupSummaryLabel(summary: PlanGroupSummary): string {
+  return `已排 ${summary.plannedLeaves} / 共 ${summary.totalLeaves} 个子任务 · 合计 ${summary.plannedMinutes} 分钟`
+}
+
+/**
+ * 新增项与既有计划项同链时的"对方"（先判它是不是在别人的子树里 = 上级，再判别人在不在它子树里）。
+ *
+ * 方向只影响文案（"先移除上级"还是"先移除那条子任务"）。两个方向都**复用**
+ * `isTaskWithinSubtree` —— 不另写第二份链判定，是这条规则的唯一实现。
+ */
+function relatedPlannedRef(
+  byId: ReadonlyMap<string, PlanTaskRef>,
+  taskId: string,
+  preexistingIds: ReadonlySet<string>,
+): { ref: PlanTaskRef; direction: 'up' | 'down' } | undefined {
+  let down: { ref: PlanTaskRef; direction: 'down' } | undefined
+  for (const other of preexistingIds) {
+    if (other === taskId) continue
+    const ref = byId.get(other)
+    if (ref === undefined) continue
+    if (isTaskWithinSubtree(byId, taskId, other)) return { ref, direction: 'up' }
+    if (down === undefined && isTaskWithinSubtree(byId, other, taskId)) down = { ref, direction: 'down' }
+  }
+  return down
+}
+
 /**
  * 校验一份**最终**计划项集合（需求 §4.1 的"共同链校验"）。
  *
@@ -215,8 +470,9 @@ export function isTaskWithinSubtree(
  * 2. 任务必须存在 —— **但只对新增项强制**：事务里读到既有计划中的缺失任务时，
  *    允许原样保留（"未知任务只拒绝新增"）；缺失/已关闭的项不能操作任务与结束投入；
  * 3. 新增项的任务必须未归档、未 done/cancelled（既有关闭项允许保留为历史记录）；
- * 4. 同一父子链不能同时入计划（同一祖先下的不同兄弟叶子允许）。
- *    **两项都在既有计划里**的历史脏数据不因本次无关写入被拒（不擅自替用户改历史决定）。
+ * 4. **新增项必须是可执行叶子**（ADR0010），且不得与**任何既有计划项**同链 —— 同链时
+ *    给可读原因（"先移除它"），不静默替换。
+ *    历史脏数据（"父任务作为计划项"那一类）不因本次无关写入被拒（不擅自替用户改历史决定）。
  *
  * @param items 最终集合（顺序即展示顺序）
  * @param byId 全量任务索引
@@ -249,18 +505,32 @@ export function checkPlanTaskSet(
     }
   }
 
-  const ids = [...seen]
-  for (let i = 0; i < ids.length; i += 1) {
-    for (let j = i + 1; j < ids.length; j += 1) {
-      const a = ids[i]
-      const b = ids[j]
-      const related = isTaskWithinSubtree(byId, a, b) || isTaskWithinSubtree(byId, b, a)
-      if (!related) continue
-      // 两项都在既有计划里 → 历史脏数据，不因本次写入被拒（用户可自行移除）。
-      if (preexistingIds.has(a) && preexistingIds.has(b)) continue
-      const nameA = byId.get(a)?.title ?? a
-      const nameB = byId.get(b)?.title ?? b
-      return { ok: false, reason: `任务「${nameA}」与「${nameB}」在同一父子链上，不能同时列入计划` }
+  /**
+   * 第 4 条（ADR0010）：新增项必须是**可执行叶子**，且不得与既有计划项同链。
+   *
+   * 为什么不再是"同链互斥"：那条规则的前提是"计划项可以是父任务"，它的目的是防重复计数；
+   * 现在计划项只能是叶子，父子同时入列在结构上不可能。剩下两种要拦的形态：
+   * ① 新增了一条**非叶子**（AI 草稿/全量保存直接塞了父任务）→ 告诉它改排子任务；
+   * ② 新增的叶子与**历史脏数据**里的计划项同链（库里早有"父任务作为计划项"）→ 让用户先移除它。
+   */
+  const refs = [...byId.values()]
+  const leaves = executableLeafIds(refs)
+  for (const taskId of seen) {
+    if (preexistingIds.has(taskId)) continue
+    const task = byId.get(taskId)
+    if (task === undefined) continue
+    if (!leaves.has(taskId)) {
+      const pending = expandPlanLeaves(refs, taskId).length
+      const detail = pending > 0 ? `它下面还有 ${pending} 个未完成任务` : '它的子任务里没有一个可执行的叶子'
+      return { ok: false, reason: `任务「${task.title}」不是可执行的叶子（${detail}），不能新增进该日计划，请改排它下面的子任务` }
+    }
+    const blocker = relatedPlannedRef(byId, taskId, preexistingIds)
+    if (blocker !== undefined) {
+      const direction = blocker.direction === 'up' ? '上级任务' : '子任务'
+      return {
+        ok: false,
+        reason: `任务「${task.title}」的${direction}「${blocker.ref.title}」已在同一天的计划里，请先移除它再把这条排进来`,
+      }
     }
   }
   return { ok: true }
@@ -343,8 +613,14 @@ export interface PlanCandidate {
   dueToday: boolean
   overdue: boolean
   inProgress: boolean
-  planned: boolean
-  /** 已排入该日计划时的**计划投入快照**；未排入为 undefined。 */
+  /** **自己就是**该日计划项（带 `plannedMinutes`/`plannedOrder`）。 */
+  selfPlanned: boolean
+  /**
+   * 该日**已安排**：自己是计划项，**或者**它是非叶子任务且子树内的可执行叶子全都已排
+   *（判定唯一实现在 `dayPlacedIds`）。账本/提示词/标签读这个，不要读 `selfPlanned`。
+   */
+  dayPlaced: boolean
+  /** 已排入该日计划时的**计划投入快照**；不是"自己是计划项"（见 `selfPlanned`）时为 undefined。 */
   plannedMinutes: number | undefined
   /** 该日计划里的顺序；未排入为 undefined。 */
   plannedOrder: number | undefined
@@ -407,7 +683,7 @@ export interface TaskDayFacts {
   overdue: boolean
   /** 状态是 `doing` / `blocked`（"在推进"）。 */
   inProgress: boolean
-  /** 已排入该日计划。 */
+  /** 该日**已安排**（自己的计划项，或非叶子任务的全部叶子都已排 —— 见 `dayPlacedIds`）。 */
   planned: boolean
   /** 截止串存在但无法解析（脏值）—— 它不是"无截止"，必须能被观测到。 */
   dueUnparseable: boolean
@@ -416,6 +692,7 @@ export interface TaskDayFacts {
 export interface TaskDayFactsInput {
   effectiveDueAt: string | null
   statusCode: string
+  /** 传入前必须过 `dayPlacedIds`（"已安排"的唯一口径），不要自己判 `planIds.has(id)`。 */
   planned: boolean
   dayStartMs: number
   dayEndMs: number
@@ -484,6 +761,8 @@ export interface DayPanelSourceResult {
  */
 export function dayPanelTreeSources(input: DayPanelSourceInput): DayPanelSourceResult {
   const planIds = new Set(input.planItems.map((item) => item.taskId))
+  /** 「已安排」走 ADR0010 的子树继承口径：非叶子任务的全部叶子都排了才算。 */
+  const placed = dayPlacedIds(input.tasks, input.planItems)
   const entries: DayPanelSourceEntry[] = []
   const diagnostics: PlanCandidateDiagnostic[] = []
   const seen = new Set<string>()
@@ -493,7 +772,7 @@ export function dayPanelTreeSources(input: DayPanelSourceInput): DayPanelSourceR
     const facts = classifyTaskDay({
       effectiveDueAt: task.effectiveDueAt,
       statusCode: task.statusCode,
-      planned: planIds.has(task.id),
+      planned: placed.has(task.id),
       dayStartMs: input.dayStartMs,
       dayEndMs: input.dayEndMs,
     })
@@ -597,6 +876,8 @@ export interface DayPanelTabMembers {
 export function dayPanelTabMembers(input: DayPanelSourceInput): DayPanelTabMembers {
   const plan = dayPanelTreeSources(input)
   const planIds = new Set(plan.entries.map((entry) => entry.taskId))
+  /** 与 `dayPanelTreeSources` 同一份「已安排」判定（不许这里再算一遍）。 */
+  const placed = dayPlacedIds(input.tasks, input.planItems)
   const overdue: string[] = []
   const unscheduled: string[] = []
   const diagnostics = [...plan.diagnostics]
@@ -607,7 +888,7 @@ export function dayPanelTabMembers(input: DayPanelSourceInput): DayPanelTabMembe
     const facts = classifyTaskDay({
       effectiveDueAt: task.effectiveDueAt,
       statusCode: task.statusCode,
-      planned: planIds.has(task.id),
+      planned: placed.has(task.id),
       dayStartMs: input.dayStartMs,
       dayEndMs: input.dayEndMs,
     })
@@ -646,11 +927,24 @@ export function dayPanelTabMembers(input: DayPanelSourceInput): DayPanelTabMembe
  */
 export function planCandidates(input: PlanCandidateInput): PlanCandidateResult {
   const planByTask = new Map(input.planItems.map((item) => [item.taskId, item]))
+  /** 该日"已安排"全集（含"非叶子任务的全部叶子都已排"）—— 判定唯一实现在 `dayPlacedIds`。 */
+  const placed = dayPlacedIds(input.tasks, input.planItems)
+  /** 叶子判定要用的树索引（候选池只收可执行叶子，见循环里的跳过）。 */
+  const walk = buildLeafWalk(input.tasks)
   const candidates: PlanCandidate[] = []
   const diagnostics: PlanCandidateDiagnostic[] = []
 
   for (const task of input.tasks) {
     if (!isOpenTask({ statusCode: task.statusCode, archived: archivedFlag(task.archived) })) continue
+    /**
+     * **非叶子任务不进候选池**（ADR0010）：它不是"可以排进今天的东西" —— 排它的含义是
+     * **展开它下面的叶子**（那件事由日期面板的父任务行 + 一键排入做）。
+     *
+     * 三个消费者都因此变干净：AI 提示词不再可能收到"排父任务"的提案（否则整份被拒）、
+     * 手动"添加任务"下拉只列可排项、容量"未排入"区不再给出一行按它自己估时算的假数字。
+     * 它在日期面板里照旧以**分组行**出现（那条路径吃 `dayPanelTabMembers`，不看候选池）。
+     */
+    if (hasOpenChild(walk, task.id)) continue
 
     const planned = planByTask.get(task.id)
     /**
@@ -660,7 +954,7 @@ export function planCandidates(input: PlanCandidateInput): PlanCandidateResult {
     const facts = classifyTaskDay({
       effectiveDueAt: task.effectiveDueAt,
       statusCode: task.statusCode,
-      planned: planned !== undefined,
+      planned: placed.has(task.id),
       dayStartMs: input.dayStartMs,
       dayEndMs: input.dayEndMs,
     })
@@ -686,6 +980,8 @@ export function planCandidates(input: PlanCandidateInput): PlanCandidateResult {
       && task.estimatedMinutes >= MIN_PLAN_MINUTES && task.estimatedMinutes <= MAX_PLAN_MINUTES
       ? task.estimatedMinutes
       : null
+    /** 建议投入 = 它自己的合法估时，否则设置里的默认值（非叶子任务已在上面被跳过）。 */
+    const suggestion = { minutes: resolveDefaultPlanMinutes(estimate, input.defaultEstimateMinutes), usedDefault: estimate === null }
 
     candidates.push({
       taskId: task.id,
@@ -696,11 +992,12 @@ export function planCandidates(input: PlanCandidateInput): PlanCandidateResult {
       dueToday,
       overdue,
       inProgress,
-      planned: planned !== undefined,
+      selfPlanned: planned !== undefined,
+      dayPlaced: placed.has(task.id),
       plannedMinutes: planned?.minutes,
       plannedOrder: planned?.order,
-      suggestedMinutes: resolveDefaultPlanMinutes(estimate, input.defaultEstimateMinutes),
-      usedDefaultEstimate: estimate === null,
+      suggestedMinutes: suggestion.minutes,
+      usedDefaultEstimate: suggestion.usedDefault,
       dueUnparseable,
       statusCode: task.statusCode,
       effectiveDueAt: task.effectiveDueAt,
@@ -721,7 +1018,7 @@ export function planCandidates(input: PlanCandidateInput): PlanCandidateResult {
 
   return {
     candidates,
-    unscheduled: candidates.filter((candidate) => !candidate.planned),
+    unscheduled: candidates.filter((candidate) => !candidate.dayPlaced),
     diagnostics,
     total: candidates.length,
   }

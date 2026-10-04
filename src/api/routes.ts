@@ -30,7 +30,7 @@ import { makeTaskRoutes } from './routes/tasks.js'
 import type { TeamMemoryService } from '../review-memory.js'
 import { teamMemoryAvailable } from '../review-memory.js'
 import { normalizeRecentWorkspaces } from '../shared/quickWorkspaceRecent.js'
-import { classifyTaskDay } from '../shared/dailyPlanPolicy.js'
+import { classifyTaskDay, dayPlacedIds } from '../shared/dailyPlanPolicy.js'
 import { isOpenTask } from '../shared/taskProgress.js'
 import type { WorkbenchSettings } from '../shared/contracts.js'
 import { readPersonaSettings, writePersonaSettings } from '../db/repo/personas.js'
@@ -297,12 +297,19 @@ export function makeRoutes(db: DatabaseSync, deps: WorkbenchRouteDeps = {}): Web
         const dayStartMs = Date.parse(start)
         const dayEndMs = Date.parse(end)
         const planTaskIds = new Set((plan?.items ?? []).map((item) => item.taskId))
+        /**
+         * 「已安排」走 ADR0010 的子树继承口径（`dayPlacedIds`，全项目唯一判定）：
+         * 非叶子任务要它子树内的叶子全排了才算已安排。这里虽然当前只用于统计卡的
+         * 到期/逾期/进行中，但**判定口径必须与日期面板、候选池同一份** ——
+         * 各自再写一遍 `planTaskIds.has(id)` 就是下一个"同一语义两处实现"。
+         */
+        const placed = dayPlacedIds(tasks, plan?.items ?? [])
         const openFacts = tasks
           .filter((task) => isOpenTask({ statusCode: task.statusCode, archived: task.archived }))
           .map((task) => classifyTaskDay({
             effectiveDueAt: task.effectiveDueAt,
             statusCode: task.statusCode,
-            planned: planTaskIds.has(task.id),
+            planned: placed.has(task.id),
             dayStartMs,
             dayEndMs,
           }))

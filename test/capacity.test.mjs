@@ -246,7 +246,7 @@ test('AX-C01 候选表驱动：未来 doing 入候选、未来 todo 不入、归
   assert.equal(byId.get('S8').dueToday, true)
   assert.equal(byId.get('S8').overdue, false)
   assert.deepEqual(byId.get('S2').reasons, ['in-progress'])
-  assert.deepEqual(byId.get('S6').reasons, ['in-progress'])
+  assert.ok(!byId.has('S6'), 'S6 是 S7 的父任务（非叶子任务）→ 不进候选池（ADR0010）；排它 = 展开到 S7')
   assert.deepEqual(byId.get('S7').reasons, ['due-today'])
   assert.deepEqual(byId.get('S10').reasons, ['in-progress'])
   assert.equal(byId.get('S10').dueUnparseable, true)
@@ -275,7 +275,8 @@ test('AX-C01 已在计划中的任务永远进候选（不会被开关或截止�
     defaultEstimateMinutes: CAPACITY_FIXTURE.defaultEstimateMinutes,
   })
   const planned = candidates.candidates.find((row) => row.taskId === 'S2')
-  assert.ok(planned.planned)
+  assert.ok(planned.selfPlanned, '已在计划里的候选必须是 selfPlanned（ADR0010：selfPlanned=自己是计划项）')
+  assert.ok(planned.dayPlaced, '已安排（dayPlaced）由 selfPlanned 派生')
   assert.equal(planned.plannedMinutes, 120, '已排入的候选要带计划投入快照（界面要显示它）')
 })
 

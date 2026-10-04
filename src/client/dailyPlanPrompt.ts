@@ -59,7 +59,8 @@ function statusLabel(statusCode: string): string {
 
 function reasonLabel(candidate: PlanCandidate): string {
   const labels: string[] = []
-  if (candidate.planned) labels.push(`已排入（第 ${candidate.plannedOrder ?? '?'} 位，计划投入 ${candidate.plannedMinutes ?? '?'} min）`)
+  if (candidate.selfPlanned) labels.push(`已排入（第 ${candidate.plannedOrder ?? '?'} 位，计划投入 ${candidate.plannedMinutes ?? '?'} min）`)
+  else if (candidate.dayPlaced) labels.push('它的子任务已全部排入（它是分组行，本身不占今日投入）')
   if (candidate.dueToday) labels.push('今天到期')
   if (candidate.overdue) labels.push('已逾期')
   if (candidate.inProgress) labels.push('在推进')
@@ -93,8 +94,12 @@ export function buildPlanPrompt(input: BuildPlanPromptInput): PlanPromptPayload 
     lines.push('（没有候选任务：没有今天到期的、也没有在推进的、也没有已排入该日计划的）')
   }
   for (const candidate of listed) {
-    const minutes = candidate.planned ? candidate.plannedMinutes : candidate.suggestedMinutes
-    const minutesLabel = candidate.planned ? `计划投入 ${minutes} min` : `建议投入 ${minutes} min${candidate.usedDefaultEstimate ? '（按默认）' : ''}`
+    const minutes = candidate.selfPlanned ? candidate.plannedMinutes : candidate.suggestedMinutes
+    const minutesLabel = candidate.selfPlanned
+      ? `计划投入 ${minutes} min`
+      : candidate.dayPlaced
+        ? '子任务已全部排入（分组行，不占今日投入）'
+        : `建议投入 ${minutes} min${candidate.usedDefaultEstimate ? '（按默认）' : ''}`
     lines.push(`- #${candidate.rank} [${candidate.band.toUpperCase()}] ${candidate.title}（${statusLabel(candidate.statusCode)}，${dueLabel(candidate)}，${minutesLabel}）— ${reasonLabel(candidate)}`)
   }
   const diagnostics = input.diagnostics ?? []
@@ -105,6 +110,7 @@ export function buildPlanPrompt(input: BuildPlanPromptInput): PlanPromptPayload 
   }
   lines.push('')
   lines.push('提交提案时每项给 {task_id, order, note, minutes?}：minutes 是“今天在这条上计划投入多少分钟”（1–1440），不是任务总耗时；不要传 effortDone（今日投入是否结束只能由用户操作）。')
+  lines.push('另外：**只能排可执行叶子**（下面没有未完成子任务的节点）。父任务本身不是计划项 —— 要排它的活就排它下面的叶子；提案里出现父任务会被**整份拒绝**（ADR0010）。')
 
   return { listed, total, omitted, truncated, notice, text: lines.join('\n') }
 }

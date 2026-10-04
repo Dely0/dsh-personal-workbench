@@ -22,6 +22,7 @@ import {
   DEFAULT_PLAN_MINUTES,
   checkPlanMinutes,
   checkPlanTaskSet,
+  expandPlanLeaves,
   mergePlanItems,
   parsePlanItems,
   type PlanItemShape,
@@ -280,7 +281,7 @@ export function deleteDailyPlan(db: DatabaseSync, planDate: string): boolean {
 }
 
 export type AddPlanItemResult =
-  | { ok: true; plan: DailyPlanRow; added: boolean }
+  | { ok: true; plan: DailyPlanRow; added: boolean; addedTaskIds: string[] }
   | { ok: false; error: string }
 
 /**
@@ -318,33 +319,63 @@ export function addDailyPlanItem(
     const already = previousItems.find((item) => item.taskId === input.taskId)
     if (already !== undefined && existing !== undefined) {
       db.exec('ROLLBACK')
-      return { ok: true, plan: existing, added: false }
+      return { ok: true, plan: existing, added: false, addedTaskIds: [] }
     }
     if (existing !== undefined && !existing.readable) {
       db.exec('ROLLBACK')
       return { ok: false, error: `计划 ${planDate} 的数据无法解析，不能追加（原数据未改动，请先备份后修复或清空）` }
     }
-    const task = getTask(db, input.taskId)
+    const tasks = loadPlanTasks(db)
+    const task = tasks.get(input.taskId)
     if (task === undefined) {
       db.exec('ROLLBACK')
       return { ok: false, error: `计划里的任务不存在：${input.taskId}` }
     }
 
-    const minutes = input.minutes !== undefined
-      ? input.minutes
-      : resolveTaskMinutes(task.estimatedMinutes, defaultEstimateMinutes(db))
-    const nextOrder = previousItems.reduce((max, item) => Math.max(max, item.order), 0) + 1
-    const appended: DailyPlanItem[] = [...previousItems, {
-      taskId: input.taskId,
-      order: nextOrder,
-      title: task.title,
-      note: '',
-      minutes,
-      effortDone: false,
-    }]
+    /**
+     * **展开到可执行叶子**（ADR0010）：在非叶子任务上点「排入今日」= 把它下面所有未完成
+     * 叶子补齐；在叶子上 = 就排它自己。
+     *
+     * `expandPlanLeaves` 对"自己不是 open / 成环"返回空数组 —— 那**不是成功**：
+     * 退回按"就排它自己"交给 `checkPlanTaskSet` 给出可读原因，绝不静默什么都不加。
+     */
+    const expanded = expandPlanLeaves([...tasks.values()], input.taskId)
+    const targets = expanded.length > 0 ? expanded : [input.taskId]
+    if (input.minutes !== undefined && targets.length > 1) {
+      db.exec('ROLLBACK')
+      return {
+        ok: false,
+        error: `这条任务会展开成 ${targets.length} 条子任务，不能给它们指定同一个投入分钟：请分别调整各自的计划投入`,
+      }
+    }
 
-    const tasks = loadPlanTasks(db)
-    const check = checkPlanTaskSet(appended, new Map([...tasks].map(([id, item]) => [id, toPlanTaskRef(item)])), new Set(previousItems.map((item) => item.taskId)))
+    const preexistingIds = new Set(previousItems.map((item) => item.taskId))
+    const defaultMinutes = defaultEstimateMinutes(db)
+    let nextOrder = previousItems.reduce((max, item) => Math.max(max, item.order), 0)
+    const additions: DailyPlanItem[] = []
+    for (const targetId of targets) {
+      // 已在计划里的叶子**原样保留**（minutes/effortDone 都不动）：重复点父任务只补齐缺口。
+      if (preexistingIds.has(targetId)) continue
+      const leaf = tasks.get(targetId)
+      if (leaf === undefined) continue
+      nextOrder += 1
+      additions.push({
+        taskId: targetId,
+        order: nextOrder,
+        title: leaf.title,
+        note: '',
+        minutes: input.minutes !== undefined ? input.minutes : resolveTaskMinutes(leaf.estimatedMinutes, defaultMinutes),
+        effortDone: false,
+      })
+    }
+    if (additions.length === 0) {
+      // 展开出来的叶子**全都在计划里**了（例如父任务第二次被点）→ 幂等回执，不写库。
+      db.exec('ROLLBACK')
+      return { ok: true, plan: existing!, added: false, addedTaskIds: [] }
+    }
+
+    const appended: DailyPlanItem[] = [...previousItems, ...additions]
+    const check = checkPlanTaskSet(appended, new Map([...tasks].map(([id, item]) => [id, toPlanTaskRef(item)])), preexistingIds)
     if (!check.ok) {
       db.exec('ROLLBACK')
       return { ok: false, error: check.reason }
@@ -357,7 +388,7 @@ export function addDailyPlanItem(
         .run(JSON.stringify(appended), 'manual', at, planDate)
     }
     db.exec('COMMIT')
-    return { ok: true, plan: getDailyPlan(db, planDate)!, added: true }
+    return { ok: true, plan: getDailyPlan(db, planDate)!, added: true, addedTaskIds: additions.map((item) => item.taskId) }
   } catch (error) {
     try { db.exec('ROLLBACK') } catch { /* 已经回滚过就不能再回滚 */ }
     throw error

@@ -66,7 +66,7 @@ const WORKBENCH_GUIDANCE = [
   'V1.5 已提供任务“执行”：任意节点（含父任务）均可执行，执行会话完成后应调用 workbench_request_completion 提交验收申请，由用户验收后完成；父任务验收通过时未完成子任务会级联完成。AI 不得直接把任务标记为完成/取消。',
   '任务进度（进度是显式值，不由子任务比例派生）：执行过程中**阶段性推进后请主动调用 workbench_update_progress 报一次进度**（0–99 直接生效，不需要用户确认）；这部分工作全部做完时调用 workbench_update_progress progress=100 并给出 summary —— 100 不是可存储的进度，它等同于提交完成验收申请（与 workbench_request_completion 同一条路径），AI 永远不能直接把任务标记为已完成/已取消。咨询/拆解/排序会话不得被这条提示诱导去执行任务。',
   '任务共享记忆：执行/拆解/咨询过程中有关键上下文、阶段性结论或决策时，请调用 workbench_save_task_memory 保存到任务共享记忆；同一任务/子树下的后续会话会自动加载这些记忆。',
-  'V2 AI 智能排序：请调用 workbench_propose_daily_plan(plan_date, summary, items) 提交指定日期的执行顺序提案（只写草稿，用户确认后生效），不要修改任务字段；同一父子链不要同时入列。',
+  'V2 AI 智能排序：请调用 workbench_propose_daily_plan(plan_date, summary, items) 提交指定日期的执行顺序提案（只写草稿，用户确认后生效），不要修改任务字段；只能排可执行叶子（下面没有未完成子任务的节点）—— 父任务本身不是计划项，提案里出现它会整份被拒绝。',
   'V2 日报/周报：请在报告会话中调用 workbench_submit_report(period_code, period_start, title, summary_md) 提交报告草稿，用户确认后才保存。',
   'V2 提醒：任务到期提醒由工作台自动弹出页面横幅与桌面通知；不要用其他方式重复提醒。',
   '知识库：值得沉淀的经验教训/决策/笔记请调用 workbench_submit_knowledge 提交知识草稿（kind_code/tags）；如来自本地文档，应同时传入 file_link（file:// 或绝对路径）用于追溯；用户确认后入库；复盘时优先考虑。注意本工具按会话去重：一个会话只产生 1 条知识草稿，不带 draft_id 的重复提交是覆盖（回执会写明"已更新本会话已有草稿"，请照实转述，不要说成新建）；要在同一会话沉淀多条，走 POST /api/workbench/drafts。',
