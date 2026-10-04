@@ -1336,7 +1336,7 @@ knowledge-recall 46/46、model-picker 7/10）。
 | **13 个出口自检全部复跑** | **全部退出 0**：P1 **32** / P2 **49** / P3a **47** / P3b **57** / P3c **67** / P3d **103** / P4 **161** / P5a **135** / P5b **152** / P5c **152** / P6b **153** / P6c **198** / P6d **94** |
 | `npx tsc --noEmit` | **退出码 0** |
 | `pnpm build` | **退出码 0**，buildId **`wb-171198408fbddb4d`**，inputs **179**，`lib/client.js` **545.95 kB** |
-| `pnpm test` | **993 tests / 992 通过 / 1 失败**（P6 开工时 **992/991/1** ⇒ **0 回归**；唯一失败＝既有 `test/db.test.mjs` 的 Windows `rmSync` EPERM：`Error: EPERM, Permission denied: \\?\C:\Users\ADMINI~1\AppData\Local\Temp\dsh-personal-workbench-db-*`） |
+| `pnpm test` | **993 tests / 992 通过 / 1 失败**（P6 开工时 **992/991/1** ⇒ **0 回归**；唯一失败＝既有 `test/db.test.mjs` 的 Windows `rmSync` EPERM：`Error: EPERM, Permission denied: \\?\<TEMP>\dsh-personal-workbench-db-*`） |
 | 六个变异探针（P6-4 收尾复跑） | capacity **20/20**、listview **17/17**、knowledge-draft-overwrite **19/19**、knowledge-recall **46/46**、quick-workspace **16/16**、model-picker **7/10**（**3 条未捕获**：B7/B8/B10 锚点失效） |
 
 ### 既有判据被打回 → 已重锚（判据跟着 owner 走）
@@ -1438,7 +1438,7 @@ P7 是**纯结构收口**批次：不加功能、不改行为，只把入口剩�
 - `pnpm build` 退出 **0**：`lib/client.js` **549.00 kB**（gzip 162.69 kB）。
 - `pnpm test`：**993 tests / 992 通过 / 1 失败**（与 P6 收尾同值 ⇒ **0 回归**；唯一失败＝既有
   `db migrations, dictionaries and task tree` 的 Windows `rmSync` EPERM：
-  `Error: EPERM, Permission denied: \\?\C:\Users\ADMINI~1\AppData\Local\Temp\dsh-personal-workbench-db-*`）。
+  `Error: EPERM, Permission denied: \\?\<TEMP>\dsh-personal-workbench-db-*`）。
 - `python scripts/lib/d17-measure3.py`：入口 **1972 行**；`WorkbenchApp` 第 **92–722 行 = 631 行**。
 - `node scripts/release-preflight.mjs --phase pre` **退出 0**（门禁通过；剩 3 条登记在案的警告：db EPERM 与两条 PII 良性命中）。
 
@@ -1541,16 +1541,16 @@ P7 三次搬家把"锚在入口的判据"逐批打红，改法是同一条：
 | 项 | 值 |
 |---|---|
 | 目标实例 | **3080**（独立实例：`node …/@deepseek-ai/dsh/lib/bin.js web --port 3080 --no-open`，由 `~/.dsh/launchers/open-dsh.ps1` 拉起） |
-| 目标 profile | `C:\Users\Administrator\.dsh\profiles\web` |
-| 目标库（隔离证明） | `C:\Users\Administrator\.dsh\workbench\verify-web.db`（该 profile 的 `cordis.patch.yml` 显式声明了 `dbPath`；与正式库 `workbench.db` **不是同一个物理文件**） |
+| 目标 profile | `%USERPROFILE%\.dsh\profiles\web` |
+| 目标库（隔离证明） | `%USERPROFILE%\.dsh\workbench\verify-web.db`（该 profile 的 `cordis.patch.yml` 显式声明了 `dbPath`；与正式库 `workbench.db` **不是同一个物理文件**） |
 | 本会话所在实例 | profile `desktop` / 19387 —— 与目标**不同实例、不同库**（自锁判据不触发；链的 preflight 独立复核了这条） |
 
 ### 链路阶段（真跑，退出码 0）
 
 ```
 node scripts/dev-verify.mjs --url http://127.0.0.1:3080 --profile web \
-  --profile-dir "C:\Users\Administrator\.dsh\profiles\web" \
-  --db-path "C:\Users\Administrator\.dsh\workbench\verify-web.db"
+  --profile-dir "%USERPROFILE%\.dsh\profiles\web" \
+  --db-path "%USERPROFILE%\.dsh\workbench\verify-web.db"
 ```
 
 preflight ✅ → version-before ✅ → build ✅（**buildId `wb-27d63c3bb09513e1`**，184 个输入）→ install ✅ →
@@ -1621,7 +1621,7 @@ health ✅（version **1.16.2** / buildId 包·host·client **三者一致** / s
   `setInterval(`/`setTimeout(`/`fetch(` 均 **0**；单个顶层块 **41 个、超限 0 个**。
   `npx tsc --noEmit` 退出 0；`pnpm build` 退出 0（`lib/client.js` **549.00 kB** / gzip 162.69 kB）；
   `pnpm test` **993 / 992 通过 / 1 失败**（与 P6 收尾同值 ⇒ **0 回归**；唯一失败＝既有 `test/db.test.mjs` 的
-  Windows `rmSync` EPERM：`Error: EPERM, Permission denied: \\?\C:\Users\ADMINI~1\AppData\Local\Temp\dsh-personal-workbench-db-*`）。
+  Windows `rmSync` EPERM：`Error: EPERM, Permission denied: \\?\<TEMP>\dsh-personal-workbench-db-*`）。
   **15 个出口自检全部退出 0**（P5a 138 / P5b 152 / P5c 152 / P6b 155 / P6c 198 / P6d 96 / **P7a 72** / **P7b 220** 项；
   P1–P4 四个脚本只打印「结果：全部通过」不打印计数）；**15 个变异脚本全部真跑 N/N 且还原后逐字节一致**；
   六个探针 **0 存活**；`node scripts/release-preflight.mjs --phase pre` **退出 0**（`KNOWN_PROBE_DEBT` 已清空）。
@@ -1635,7 +1635,7 @@ health ✅（version **1.16.2** / buildId 包·host·client **三者一致** / s
   `WorkbenchApp` 体内直接 `useState(` **0**、`api(` **6**（P7 欠账）、`useEffect(` **3**、`setInterval(`/`setTimeout(`/`fetch(` 均 **0**。
   `npx tsc --noEmit` 退出 0；`pnpm build` 退出 0（buildId **`wb-171198408fbddb4d`**、inputs **179**、`lib/client.js` **545.95 kB**）；
   `pnpm test` **993 / 992 通过 / 1 失败**（P6 开工时 **992/991/1** ⇒ **0 回归**；唯一失败＝既有 `test/db.test.mjs` 的
-  Windows `rmSync` EPERM：`Error: EPERM, Permission denied: \\?\C:\Users\ADMINI~1\AppData\Local\Temp\dsh-personal-workbench-db-*`）。
+  Windows `rmSync` EPERM：`Error: EPERM, Permission denied: \\?\<TEMP>\dsh-personal-workbench-db-*`）。
   13 个出口自检全部退出 0：**32 / 49 / 47 / 57 / 67 / 103 / 161 / 135 / 152 / 152 / 153 / 198 / 94**
   （P1/P2/P3a/P3b/P3c/P3d/P4/P5a/P5b/P5c/P6b/P6c/P6d；其中 P3b 由 56→57、P5a 由 137→135、P5c 由 151→152 是 P6 期间的重锚结果）。
 - P6-4 新增/改动：新增 `src/client/hooks/useWorkbenchDirectoryPicker.ts`、

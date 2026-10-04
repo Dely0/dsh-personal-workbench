@@ -768,7 +768,7 @@ P7-2 之前唯一一条「单个顶层块 >80 行」的违例（**676 行的 `re
 | 反向变异 | **15 个脚本全部真跑 N/N**、还原后逐字节一致（P7a 6/6、P7b 13/13） |
 | 探针 | 六个全部 **0 存活**：capacity 20/20、listview 17/17、knowledge-draft-overwrite 19/19、knowledge-recall 46/46、quick-workspace 16/16、model-picker 10/10 |
 | preflight | `node scripts/release-preflight.mjs --phase pre` 退出 **0**；`scripts/release-preflight.mjs:60` 的 `KNOWN_PROBE_DEBT` 名单**已清空** |
-| 全量 | `npx tsc --noEmit` **0**；`pnpm build` **0**（`lib/client.js` **549.00 kB** / gzip **162.69 kB**）；`pnpm test` **993 / 992 通过 / 1 失败**（唯一失败＝既有 Windows `rmSync` EPERM：`Error: EPERM, Permission denied: \\?\C:\Users\ADMINI~1\AppData\Local\Temp\dsh-personal-workbench-db-*`） |
+| 全量 | `npx tsc --noEmit` **0**；`pnpm build` **0**（`lib/client.js` **549.00 kB** / gzip **162.69 kB**）；`pnpm test` **993 / 992 通过 / 1 失败**（唯一失败＝既有 Windows `rmSync` EPERM：`Error: EPERM, Permission denied: \\?\<TEMP>\dsh-personal-workbench-db-*`） |
 
 > **model-picker 的 B7/B8/B10 是探针失效、不是真盲点**：锚点还停在 `src/client/index.tsx`，而提交路径已随 P6-3
 > 搬进 `hooks/useWorkbenchAISessions.ts`，门禁成因的调用点在 `src/client/components/ModelPicker.tsx`，变量名从

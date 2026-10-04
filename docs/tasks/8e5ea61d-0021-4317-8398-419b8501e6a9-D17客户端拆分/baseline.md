@@ -7,7 +7,7 @@
 
 | 项目 | 值 |
 |---|---|
-| 仓库 | `D:\Code\Linksight\dsh-workbench` |
+| 仓库 | `<仓库根>`（本机绝对路径已脱敏，公开仓库不外发） |
 | 施工起点提交 | `f99bf77`（"专家功能升级调研文档"，2026-10-03） |
 | HEAD 当时工作区状态 | `index.tsx` 与设计文档**无未提交改动**（`git status --short` 只有本轮新增的 `scripts/lib/d17-*.py`） |
 | 包版本 | `package.json` = `1.16.2` |

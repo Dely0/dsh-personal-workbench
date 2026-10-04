@@ -2,7 +2,7 @@
 
 ---
 
-接着做 D17「WorkbenchApp 拆分」的 **P6**。工作区 `D:\Code\Linksight\dsh-workbench`，任务 id `8e5ea61d-0021-4317-8398-419b8501e6a9`（个人工作台任务「D17 客户端 WorkbenchApp 拆分」）。
+接着做 D17「WorkbenchApp 拆分」的 **P6**。工作区 `<仓库根>`（本机绝对路径已脱敏），任务 id `8e5ea61d-0021-4317-8398-419b8501e6a9`（个人工作台任务「D17 客户端 WorkbenchApp 拆分」）。
 
 ## 0. 先读这四份，再动手（不要跳过）
 
