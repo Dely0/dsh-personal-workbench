@@ -1,10 +1,18 @@
 # 变异探针维护 + 判据盲点（2026-10-01 发 v1.16.1 时补跑发现；2026-10-02 精确分类）
 
-> **状态（2026-10-02 晚）**：`probe-capacity-mutations` 的欠账（**真盲点 5 条 + 失效 14 条**）已**全部销账** ——
+> **状态（2026-10-04，本单已关闭）**：**全部销账，`KNOWN_PROBE_DEBT` 现为空表** ——
+> ① `probe-capacity-mutations`（真盲点 5 条 + 失效 14 条）于 2026-10-02 销账；
+> ② 剩下的 `probe-model-picker-notify-mutations`（B7/B8/B10）与 `probe-quick-workspace-mutations`（M6/M14）
+> 于 2026-10-04 随客户端拆分（D17）**重锚到新 owner** 并逐条实测变红。
+> 判据：`node scripts/release-preflight.mjs` 的探针项 **10/10、名单无欠账、`--phase pre` 退出 0**。
+> 详细经过见 [§A2](#a2-2026-10-02-销账记录probe-capacity-mutations)（容量）与
+> [§A3](#a3-2026-10-04-销账记录probe-quick-workspace-mutations-的-m6m14-probe-model-picker-notify-mutations-的-b7b8b10)（后两条）。
+>
+> 历史状态（2026-10-02 晚）：`probe-capacity-mutations` 的欠账（**真盲点 5 条 + 失效 14 条**）已**全部销账** ——
 > 重锚 12 条共享模块变异（S1–S12）+ 保留接线/面板 6 条（I1–I5 / P1–P3），并为原先"装回缺陷仍全绿"的
 > 6 处**补了判据**（`capacityWiring.test.mjs` 4 条源码扫描 + `capacityPanel.test.mjs` 1 条勾选态判据，覆盖 I2–I5 / P2 / P3）。
 > 判据：探针 **20/20 全红、exit 0**；`KNOWN_PROBE_DEBT` 里那条容量条目已删除（双向断言要求"还清必须销账"）。
-> 现在名单只剩 `probe-model-picker-notify-mutations`（3 条失效，无真盲点）与 `probe-quick-workspace-mutations`（2 条失效）。
+> 当时名单只剩 `probe-model-picker-notify-mutations`（3 条失效，无真盲点）与 `probe-quick-workspace-mutations`（2 条失效）。
 > 详细经过见文末 [§A2](#a2-2026-10-02-销账记录probe-capacity-mutations)。
 >
 > 背景：`dsh-release` skill §3 的硬门禁里有一条「有变异探针的项目：**必须全红**」。
@@ -109,3 +117,24 @@ pnpm build; node scripts\repro\probe-capacity-mutations.mjs
 
 **同时销账**：`KNOWN_PROBE_DEBT` 里的 `probe-capacity-mutations` 条目已**删除** ——
 双向断言要求"名单里已经不红的必须删"，留着一跑就失败。
+
+## A3. 2026-10-04 销账记录（`probe-quick-workspace-mutations` 的 M6/M14、`probe-model-picker-notify-mutations` 的 B7/B8/B10）
+
+**结论：本文件登记的这一单已经全部还清，`KNOWN_PROBE_DEBT` 现已清空。**
+`node scripts/release-preflight.mjs` 的探针项 **10/10、无欠账条目**，`--phase pre` 可退出 0。
+
+**为什么拖到这时才清**：这 5 条失效的根因是客户端重构（`index.tsx` 的 WorkbenchApp 拆分：
+提交路径搬进 `src/client/hooks/useWorkbenchAISessions.ts`、门禁成因的调用点落进
+`src/client/components/ModelPicker.tsx`、变量名从 `quickModelSelection` 漂到 `modelSelection`）。
+**重构搬走锚点 ⇒ 探针立刻失效**，而"失效的探针等于没有探针"正是本文件第 70 行那条判据要治的病；
+所以处置方式是**锚点跟着 owner 走**：把 5 条锚点改指真实 owner，逐个实测"装回缺陷必须变红"。
+
+| 探针 | 处置 | 结果 |
+|---|---|---|
+| `probe-quick-workspace-mutations` | M6 / M14 重锚到新调用点（`setQuickWorkspace(path)`；「不再记住」的渲染条件已在 `WorkspacePicker` 组件内） | **16/16** 变红 |
+| `probe-model-picker-notify-mutations` | B7 / B8 / B10 重锚（`selectionApplication` / `unavailableReason` / `clearExitReachable` 的新写法与新位置） | **10/10** 变红 |
+
+**同时销账**：`scripts/release-preflight.mjs` 的 `KNOWN_PROBE_DEBT` **已清空**（最后两条在本轮删除）。
+下次再有探针失效，按同一套机制处理：**先修探针，再发布** —— 名单只登记"已知且已评估"的盲点，
+"探针失效"与"基线没过"从不进名单。
+
