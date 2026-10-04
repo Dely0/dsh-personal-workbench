@@ -14,19 +14,34 @@ import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
+import { read, assertClientCount } from './_clientSources.mjs'
+
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
-const INDEX = readFileSync(join(root, 'src/client/index.tsx'), 'utf8')
-const MODAL = readFileSync(join(root, 'src/client/components/LocalDocModal.tsx'), 'utf8')
-const PICKER = readFileSync(join(root, 'src/client/components/WorkspacePicker.tsx'), 'utf8')
+const INDEX = read('src/client/index.tsx')
+/** D17/P1：知识库那份 file 模式弹窗已随知识域搬进 `views/KnowledgeListView.tsx`。 */
+const KNOWLEDGE_VIEW = read('src/client/views/KnowledgeListView.tsx')
+const MODAL = read('src/client/components/LocalDocModal.tsx')
+const PICKER = read('src/client/components/WorkspacePicker.tsx')
+/** D17/P3-3：新建/编辑任务两个弹窗已搬进这里（选择器仍是同一个组件，三处挂载点跨两个文件）。 */
+const TASK_FORM_MODAL = read('src/client/views/TaskFormModal.tsx')
+const TASK_FORMS_HOOK = read('src/client/hooks/useTaskForms.ts')
+/** D17/P7-2：四段 JSX 已搬进 src/client/app/ —— 装配层的 JSX owner 在那里。 */
+const APP_DIALOGS = read('src/client/app/WorkbenchDialogs.tsx')
 
 const count = (source, pattern) => (source.match(pattern) ?? []).length
 
 test('#2: 三个入口各挂一次 WorkspacePicker（快速录入 / 新建任务 / 编辑任务）', () => {
-  assert.equal(count(INDEX, /<WorkspacePicker/g), 3,
+  // 挂载点跨文件：快速录入仍在入口，两个任务表单在 TaskFormModal 里 —— 用全客户端计数。
+  assertClientCount(assert, /<WorkspacePicker/g, 3,
     '工作区选择器必须在三个入口各出现一次（少一个就有入口只能手打路径）')
-  // 三个入口的 onBrowse 必须各自指出"选完写回哪" —— 否则浏览完不知道落到谁身上
+  assert.match(TASK_FORM_MODAL, /<WorkspacePicker/, '任务表单里那两处仍在（新建 + 编辑）')
+  assert.equal(count(TASK_FORM_MODAL, /<WorkspacePicker/g), 2,
+    '新建与编辑各挂一次 —— 两个弹窗共用一个选择器组件，但各有一处挂载')
+  // 三个入口的 onBrowse 必须各自指出"选完写回哪" —— 否则浏览完不知道落到谁身上。
+  // D17/P7-2：三处调用点都在 app/WorkbenchDialogs.tsx（快速录入弹窗 + 两个任务表单弹窗）。
   for (const target of ["openDirPicker('quick')", "openDirPicker('form')", "openDirPicker('edit')"]) {
-    assert.ok(INDEX.includes(target), `缺少 ${target}：浏览弹窗需要知道自己是从哪个入口打开的`)
+    assert.ok(APP_DIALOGS.includes(target),
+      `缺少 ${target}：浏览弹窗需要知道自己是从哪个入口打开的（D17/P7-2 起 owner = src/client/app/WorkbenchDialogs.tsx）`)
   }
   assert.match(INDEX, /const applyWorkspaceDir = /, '选完目录必须有一个统一的分派点')
 })
@@ -48,9 +63,14 @@ test('#2/W03: 目录浏览复用 LocalDocModal 的 dir 模式，不是第二份�
   assert.match(MODAL, /data-doc-mode=\{mode\}/, '两种用途要能从 DOM 上区分（判据与排查都要）')
   assert.match(MODAL, /data-doc-pick-dir=/, 'dir 模式要有「选择此文件夹」入口')
   assert.match(MODAL, /data-doc-pick-current/, 'dir 模式要能直接选定当前浏览的文件夹')
-  // index.tsx 里两处用法：知识库(file，默认) + 工作区(dir)
-  assert.equal(count(INDEX, /<LocalDocModal/g), 2, '两个弹窗用法：知识库文件的 + 工作区的')
-  assert.match(INDEX, /mode="dir"/, '工作区那一处必须显式 dir 模式')
+  // 两处用法：知识库(file，默认，已随知识域搬进 views/) + 工作区(dir，D17/P7-2 起在
+  // src/client/app/WorkbenchDialogs.tsx 的快速录入弹窗里)
+  assertClientCount(assert, /<LocalDocModal/g, 2, '两个弹窗用法：知识库文件的 + 工作区的')
+  assert.match(KNOWLEDGE_VIEW, /<LocalDocModal/, '知识库那份仍在知识视图里')
+  assert.match(APP_DIALOGS, /<LocalDocModal/,
+    '工作区那份仍在装配层（D17/P7-2 起 owner = src/client/app/WorkbenchDialogs.tsx）')
+  assert.match(APP_DIALOGS, /mode="dir"/, '工作区那一处必须显式 dir 模式')
+  assert.doesNotMatch(INDEX, /<LocalDocModal/, '入口不再有第二处装配（P7-2 后 JSX 全在 app/）')
   assert.equal(count(MODAL, /data-doc-run/g), 1, 'file 模式独有按钮只许出现一次')
 })
 
@@ -73,8 +93,8 @@ test('#2/W03: 列目录的请求形状只有一处（index.tsx 不许再拼那�
 })
 
 test('#2: 新建任务表单的工作区值仍以 workspacePath 进 FormData（提交路径没变）', () => {
-  assert.match(INDEX, /name="workspacePath"/, '表单提交读的仍是 workspacePath 字段名（改字段名等于改接口）')
-  assert.match(INDEX, /const \[formWorkspace, setFormWorkspace\]/, '表单里的工作区必须受控，否则「浏览…」写不进值')
-  assert.match(INDEX, /if \(showForm\) setFormWorkspace\(''\)/,
+  assert.match(TASK_FORM_MODAL, /name="workspacePath"/, '表单提交读的仍是 workspacePath 字段名（改字段名等于改接口）')
+  assert.match(TASK_FORMS_HOOK, /const \[formWorkspace, setFormWorkspace\]/, '表单里的工作区必须受控，否则「浏览…」写不进值')
+  assert.match(TASK_FORMS_HOOK, /if \(showForm\) setFormWorkspace\(''\)/,
     '每次打开新建表单都要清空 —— 否则上一次浏览选的目录会留在下一次')
 })

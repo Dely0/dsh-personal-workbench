@@ -251,10 +251,20 @@ test('客户端接线：设置页有「知识库召回」分区与开关，且�
   assert.match(settings, /wb-recall-log/, '有召回回执面板')
   assert.match(settings, /recallSessionOff\.map/, '能列出并解除"单会话关闭"')
 
+  // D17/P5-1：召回日志/会话开关两条路由随设置域搬进 hooks/useWorkbenchSettings.ts，
+  // 判据跟着 owner 走 —— 入口留负向（不许自己再发包），正向改指 hook。
   const index = readFileSync('src/client/index.tsx', 'utf8').replace(/\r\n/g, '\n')
-  assert.match(index, /\/api\/workbench\/knowledge-recall\/log\?limit=30/, '面板拉的是真实召回日志端点')
-  assert.match(index, /\/api\/workbench\/knowledge-recall\/session/, '解除用的是真实会话开关端点')
-  assert.match(index, /recallLog=\{recallLog\}/, '状态要传进设置弹窗（否则开关点了没用）')
+  assert.doesNotMatch(index, /\/api\/workbench\/knowledge-recall\//,
+    '召回的两条端点是设置域独占的，入口不许自己发（见 hooks/useWorkbenchSettings.ts）')
+  // D17/P7-2：SettingsModal 的这处装配随主体 JSX 搬进 app/WorkbenchBody.tsx ⇒ 判据跟着 owner 走。
+  const appBody = readFileSync('src/client/app/WorkbenchBody.tsx', 'utf8').replace(/\r\n/g, '\n')
+  assert.match(appBody, /recallLog=\{recallLog\}/,
+    '状态要传进设置弹窗（否则开关点了没用；D17/P7-2 起 owner = app/WorkbenchBody.tsx）')
+  assert.doesNotMatch(index, /recallLog=\{recallLog\}/, '入口不再有第二处装配')
+
+  const settingsHook = readFileSync('src/client/hooks/useWorkbenchSettings.ts', 'utf8').replace(/\r\n/g, '\n')
+  assert.match(settingsHook, /\/api\/workbench\/knowledge-recall\/log\?limit=30/, '面板拉的是真实召回日志端点')
+  assert.match(settingsHook, /\/api\/workbench\/knowledge-recall\/session/, '解除用的是真实会话开关端点')
 
   // 契约：设置接口必须带上这个字段（漏了会表现为"保存后开关自己变回去"）
   const contracts = readFileSync('src/shared/contracts.ts', 'utf8').replace(/\r\n/g, '\n')

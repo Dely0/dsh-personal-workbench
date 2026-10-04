@@ -24,12 +24,23 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
 import {
   decideQuickWorkspaceDefault, quickFollowFolderDefault, shouldRememberQuickWorkspace,
 } from '../lib/client/quickWorkspaceDefault.js'
+import { read, stripComments } from './_clientSources.mjs'
 
-const SOURCE = readFileSync(new URL('../src/client/index.tsx', import.meta.url), 'utf8')
+/**
+ * D17/P6-2 之后，工作区预填的**真实 owner** 是快速录入域的 hook：
+ * `openIntake`（打开弹窗）与它调用的 `applyDecision`（把判定结果投影到那几个状态上）。
+ * 入口 `src/client/index.tsx` 只剩「跨域组合」的 `openQuickEntry` 与提交闸门。
+ *
+ * 判据跟着 owner 走：函数体从新 owner 里抽（抽不到就失败），入口那两条形态断言（提交闸门、
+ * `quickWorkspaceSourceLabel`）仍读入口。
+ */
+const HOOK_SOURCE = read('src/client/hooks/useWorkbenchQuickIntake.ts')
+const SOURCE = read('src/client/index.tsx')
+/** D17/P7-2：提交闸门那行随快速录入弹窗搬进 app/WorkbenchDialogs.tsx。 */
+const DIALOGS_SOURCE = read('src/client/app/WorkbenchDialogs.tsx')
 
 /** 切出 `const name = ... => { ... }` 的函数体（缩进 2 空格的收尾大括号）。 */
 function functionBody(source, name) {
@@ -38,17 +49,17 @@ function functionBody(source, name) {
 }
 
 /**
- * 把源码里真实的 `openQuickEntry`（+ 它调用的投影函数）装成可调用的函数。
+ * 把源码里真实的 `openIntake`（+ 它调用的投影函数 `applyDecision`）装成可调用的函数。
  *
  * @returns `null` = 源码结构变了（抽不到）—— 调用方必须**失败**，不能跳过。
  */
 function buildOpenQuickEntry() {
-  const openBody = functionBody(SOURCE, 'openQuickEntry')
-  const applyBody = functionBody(SOURCE, 'applyQuickWorkspaceDecision')
+  const openBody = functionBody(HOOK_SOURCE, 'openIntake')
+  const applyBody = functionBody(HOOK_SOURCE, 'applyDecision')
   if (openBody === null || applyBody === null) return null
   const factory = new Function('deps', `
     'use strict'
-    const { settings, selected, runtime, state, detectWslHost, decideQuickWorkspaceDefault, quickFollowFolderDefault } = deps
+    const { settings, runtime, state, detectWslHost, decideQuickWorkspaceDefault, quickFollowFolderDefault } = deps
     const setQuickText = (value) => { state.quickText = value }
     const setQuickWorkspace = (value) => { state.quickWorkspace = value }
     const setQuickWorkspaceSource = (value) => { state.quickWorkspaceSource = value }
@@ -56,29 +67,17 @@ function buildOpenQuickEntry() {
     const setQuickFollowFolder = (value) => { state.quickFollowFolder = value }
     const setShowQuick = (value) => { state.showQuick = value }
     /*
-     * 角色复位（T4/D13-B）：openQuickEntry 里新增了「每次打开都把角色复位成未指定」。
-     * 本文件测的是**工作区预填**，所以这里只提供一个同形的桩（记进 state 便于断言），
-     * 不断言它的语义 —— 角色那条线在 test/personaWiring.test.mjs。
+     * 角色/技能复位（T4/D13-B + 2026-10-01）仍在**装配层**的 openQuickEntry 里
+     * （P6-3 会换成 AI 会话域的 resetClarifyPicker）—— 本文件测的是工作区预填，
+     * 那两行不在 openIntake 里，所以这里不再需要桩。
      */
-    const INHERIT_PERSONA = { mode: 'inherit' }
-    const setQuickPersona = (value) => { state.quickPersona = value }
-    /*
-     * 技能复位（2026-10-01）：openQuickEntry 里新增了「每次打开把技能选择清空 + 拉一次目录」
-     * （用户反馈"快速录入无法选择 Skill"的另一半 —— 原来快速录入从不加载技能目录）。
-     * 本文件只测**工作区预填**，所以同样给同形桩，不断言它的语义；
-     * 技能那条线的判据在 test/quickIntakeClient.test.mjs。
-     */
-    const setSelectedSkills = (value) => { state.selectedSkills = value }
-    const setSkillQuery = (value) => { state.skillQuery = value }
-    const loadSkills = () => Promise.resolve()
-    const applyQuickWorkspaceDecision = (decided, autoCreateTypeFolders) => {${applyBody}}
+    const applyDecision = (decided, autoCreateTypeFolders) => {${applyBody}}
     return () => {${openBody}}
   `)
   return (input) => {
     const state = {}
     factory({
       settings: input.settings,
-      selected: input.selected ?? null,
       runtime: {},
       state,
       detectWslHost: () => input.isWsl === true,
@@ -91,18 +90,31 @@ function buildOpenQuickEntry() {
 
 const open = buildOpenQuickEntry()
 
-test('接线行为：抽得到源码里真实的 openQuickEntry（抽不到就是这条红，不是静默跳过）', () => {
+test('接线行为：抽得到源码里真实的 openIntake / applyDecision（抽不到就是这条红，不是静默跳过）', () => {
   assert.ok(open !== null,
-    '抽不到 openQuickEntry / applyQuickWorkspaceDecision —— 结构变了就要同步本文件与 '
+    '抽不到 openIntake / applyDecision —— 结构变了就要同步本文件与 '
     + 'scripts/repro/verify-quick-workspace-fix.mjs，不能让它静默不测')
+})
+
+/**
+ * 比"行为上没用 selected"更强的一条：快速录入域的 hook **构造上就拿不到** selected ——
+ * 它的入参里没有任务、也没有选中项（这正是 v1.15.2 那次事故的修法）。
+ *
+ * 扫的是**剥注释后**的源码：hook 的文档注释里必须留着"原实现是从 selected 派生"这段历史。
+ */
+test('接线行为：快速录入域的入参里没有 selected / effectiveWorkspacePath（构造上不可能继承父任务）', () => {
+  const stripped = stripComments(HOOK_SOURCE)
+  assert.doesNotMatch(stripped, /\bselected\b/,
+    '快速录入域一旦能看见 selected，就会重新长出"执行过任务 A → 默认值变成 A 的工作区"这条污染')
+  assert.doesNotMatch(stripped, /effectiveWorkspacePath/)
 })
 
 test('接线行为：预填值只由设置决定，且调用点真的把 recent / defaultWorkspace 传对了', () => {
   assert.ok(open !== null)
   // 有"上次手动选择" → 用它；任务 A 的工作区 X 一个字都不许出现
+  // （P6-2 之后这条是**构造上**成立的：`useWorkbenchQuickIntake` 的入参里没有 selected）
   const withRecent = open({
     settings: { quickWorkspaceRecent: ['R0', 'R1'], defaultWorkspace: 'D0', autoCreateTypeFolders: true },
-    selected: { task: { id: 'A', title: '任务 A', effectiveWorkspacePath: 'X' } },
   })
   assert.equal(withRecent.quickWorkspace, 'R0',
     'R4 变异（调用点把 recent 传成 []）会让这里变成 D0 —— 那正是本次事故的形态')
@@ -110,12 +122,11 @@ test('接线行为：预填值只由设置决定，且调用点真的把 recent 
   // 空列表 → 落到系统默认
   const withoutRecent = open({
     settings: { quickWorkspaceRecent: [], defaultWorkspace: 'D0', autoCreateTypeFolders: true },
-    selected: { task: { id: 'A', title: '任务 A', effectiveWorkspacePath: 'X' } },
   })
   assert.equal(withoutRecent.quickWorkspace, 'D0')
   assert.equal(withoutRecent.quickWorkspaceSource, 'system-default')
   // 都没有 → 空
-  const empty = open({ settings: { quickWorkspaceRecent: [], defaultWorkspace: '' }, selected: null })
+  const empty = open({ settings: { quickWorkspaceRecent: [], defaultWorkspace: '' } })
   assert.equal(empty.quickWorkspace, '')
   assert.equal(empty.quickWorkspaceSource, 'unset')
   // 打开弹窗要清空输入、要真的弹出来、并且预填值不算"用户改过"
@@ -153,9 +164,9 @@ test('接线行为：建任务资料夹的默认勾选与 quickFollowFolderDefau
  */
 function buildRememberGate() {
   const marker = 'void rememberQuickWorkspace(chosen)'
-  const index = SOURCE.indexOf(marker)
+  const index = DIALOGS_SOURCE.indexOf(marker)
   if (index === -1) return null
-  const head = SOURCE.slice(0, index)
+  const head = DIALOGS_SOURCE.slice(0, index)
   const openParen = head.lastIndexOf('if (')
   if (openParen === -1) return null
   const start = openParen + 3

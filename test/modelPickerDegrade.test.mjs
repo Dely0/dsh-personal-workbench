@@ -305,20 +305,26 @@ const stripComments = (source) => source
 test('接线：提交路径的降级不许 throw，且选择器保留出口', () => {
   /**
    * 2026-10-01 抽组件后的分工：
-   * - **提交路径**（应用模型 / 降级）仍在 `index.tsx`；
+   * - **提交路径**（应用模型 / 降级）原在 `index.tsx`，D17/P6-3 随 `startAISession`
+   *   搬进 `hooks/useWorkbenchAISessions.ts`；
    * - **门禁与成因**（`gateModelPicker` / `modelDirectoryUnavailableReason`）随组件搬进
    *   `components/ModelPicker.tsx`。
    * 所以这条断言要读**两个**文件，各查各的那一半 —— 不是放宽，是不再把两个文件的
    * 实现混在一起扫（否则任何一次搬家都会假红，而假红正是我们最贵的成本）。
+   * 负向那三条则对**两个文件都扫**（提交路径搬到哪都躲不掉）。
    */
-  const submitSource = read('src/client/index.tsx')
+  const entrySource = read('src/client/index.tsx')
+  const submitSource = read('src/client/hooks/useWorkbenchAISessions.ts')
   const gateSource = read('src/client/components/ModelPicker.tsx')
   const submitCode = stripComments(submitSource)
+  const entryCode = stripComments(entrySource)
   const gateCode = stripComments(gateSource)
-  assert.equal(
-    submitSource.includes('无法为快速录入切换模型'), false,
-    '那条"抛错中断整条流程"的写法必须消失（验收标准 1）',
-  )
+  for (const [name, code] of [['入口', entrySource], ['AI 会话域', submitSource]]) {
+    assert.equal(
+      code.includes('无法为快速录入切换模型'), false,
+      `${name}里不许有那条"抛错中断整条流程"的写法（验收标准 1）`,
+    )
+  }
   assert.ok(
     submitCode.includes('selectionToApply('),
     '提交路径必须走纯判据 selectionToApply（否则"不抛错"就只是换了个地方写死）',
@@ -359,4 +365,7 @@ test('接线：提交路径的降级不许 throw，且选择器保留出口', ()
     /Notification\.requestPermission\(/.test(submitCode), false,
     '请求授权必须唯一走 requestNotificationPermission（不支持的客户端会抛 TypeError）',
   )
+  // 入口侧同样不许出现（提交路径搬家不该在半路留一份）
+  assert.equal(/new Notification\(/.test(entryCode), false, '入口也不许裸 new Notification')
+  assert.equal(/Notification\.requestPermission\(/.test(entryCode), false, '入口也不许裸请求授权')
 })

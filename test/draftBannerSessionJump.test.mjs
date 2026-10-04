@@ -110,8 +110,11 @@ test('onSettled 的语义必须与 onDone 分开（前者不触发数据刷新�
   assert.equal(propsBlock.includes('onDone?.()'), false, '回到会话不该触发 onDone（那会顺带刷一轮数据）')
   assert.ok(SOURCE.includes('onSettled?: () => void'), '接口里必须有 onSettled（=纯投影更新）')
 
-  // index.tsx 必须把它接到"清掉当前弹框"上，而不是接到带刷新的 onDone
+  // D17/P7-2：DraftBanner 的这处装配随提示层 JSX 搬进 app/WorkbenchOverlays.tsx ⇒ 判据跟着 owner 走。
+  const overlaysSource = readFileSync(new URL('../src/client/app/WorkbenchOverlays.tsx', import.meta.url), 'utf8')
+  assert.match(overlaysSource, /onSettled=\{\(\) => setPendingDraft\(null\)\}/,
+    'app/WorkbenchOverlays.tsx 必须把 onSettled 接到 setPendingDraft(null)')
   const indexSource = readFileSync(new URL('../src/client/index.tsx', import.meta.url), 'utf8')
-  assert.match(indexSource, /onSettled=\{\(\) => setPendingDraft\(null\)\}/,
-    'index.tsx 必须把 onSettled 接到 setPendingDraft(null)')
+  assert.equal(indexSource.includes('onSettled={() => setPendingDraft(null)}'), false,
+    '入口不再有第二处装配（P7-2 后 JSX 全在 app/）')
 })

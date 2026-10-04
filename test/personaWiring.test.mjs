@@ -23,12 +23,21 @@ import { personaGroupLabel } from '../lib/shared/persona.js'
 /** ⚠️ 行尾归一化：Windows 检出是 CRLF，下面所有片段都按 `\n` 写。 */
 const read = (path) => readFileSync(path, 'utf8').replace(/\r\n/g, '\n')
 const indexSource = read('src/client/index.tsx')
+/**
+ * D17/P6-3：AI 会话域（`startAISession` / `reuseAiSessionId` / 提示词拼装 / 角色与技能复位）
+ * 已搬进这个 hook。**判据跟着 owner 走**：正向断言改扫新家，入口侧只留"装配点还在"。
+ */
+const aiHookSource = read('src/client/hooks/useWorkbenchAISessions.ts')
 const stylesSource = read('src/client/styles.ts')
 const pickerSource = read('src/client/personaPicker.ts')
 const promptSource = read('src/client/personaPrompt.ts')
 const librarySource = read('src/personas/library.ts')
 const sharedPersonaSource = read('src/shared/persona.ts')
 const componentSource = read('src/client/components/PersonaPicker.tsx')
+/** D17/P7-2：四段 JSX 搬进 app/ —— 提示词弹窗在 overlays、快速录入弹窗在 dialogs。 */
+const overlaysSource = read('src/client/app/WorkbenchOverlays.tsx')
+const dialogsSource = read('src/client/app/WorkbenchDialogs.tsx')
+const appUiSource = [overlaysSource, dialogsSource].join('\n')
 
 /** 去掉注释：避免"注释里提到某个写法"被当成实现。 */
 function stripComments(source) {
@@ -75,8 +84,8 @@ test('AX-R07 顺序：角色块在技能块**之前**（先说明身份，再要
   assert.ok(personaAt === 0, '角色块必须在最前面')
   assert.ok(skillAt > personaAt, `技能块必须在角色块之后：persona@${personaAt} skill@${skillAt}`)
   assert.ok(bodyAt > skillAt, '正文最后')
-  // 调用点也必须是这个嵌套（不是反过来）
-  assert.match(stripComments(indexSource), /withPersonaPromptBlock\(withSkillPromptBlock\(/)
+  // 调用点也必须是这个嵌套（不是反过来）—— 调用点随 `startAISession` 进了 AI 会话域（P6-3）
+  assert.match(stripComments(aiHookSource), /withPersonaPromptBlock\(withSkillPromptBlock\(/)
 })
 
 // ---------------------------------------------------------------------------
@@ -84,7 +93,12 @@ test('AX-R07 顺序：角色块在技能块**之前**（先说明身份，再要
 // ---------------------------------------------------------------------------
 
 test('AX-R07 十个 mode 共用同一角色选择路径：9 个走提示词弹窗 + 澄清走快速录入', () => {
-  const code = stripComments(indexSource)
+  /**
+   * ⚠️ P6-3：`startAISession` / `reuseAiSessionId`（mode 联合与两个角色来源）已搬进 AI 会话域 hook。
+   * 判据跟着 owner 走：这一段扫 hook；"两个弹窗各挂一个 `<PersonaPicker>`"仍是装配层的事，扫入口。
+   */
+  const code = stripComments(aiHookSource)
+  const entry = stripComments(indexSource)
   // mode 联合类型仍是这 10 个（没有被改动）
   const union = /'clarify' \| 'consult' \| 'breakdown' \| 'execute' \| 'review' \| 'plan' \| 'report' \| 'idea_association' \| 'idea_brainstorm' \| 'knowledge_doc'/
   assert.match(code, union, 'startAISession 的 mode 联合必须仍是 10 个')
@@ -93,9 +107,20 @@ test('AX-R07 十个 mode 共用同一角色选择路径：9 个走提示词弹�
   assert.match(code, /const personaChoice = promptInput\.persona \?\? INHERIT_PERSONA/)
   assert.match(code, /persona: clarifyOptions\.persona \?\? INHERIT_PERSONA/)
   assert.equal((code.match(/INHERIT_PERSONA/g) ?? []).length >= 3, true, '默认值必须是「未指定」而不是某个角色')
-  // 两个入口都渲染同一个组件
-  assert.equal((code.match(/<PersonaPicker/g) ?? []).length, 2, '提示词弹窗 + 快速录入弹窗各一个（同一个组件）')
-  assert.equal((code.match(/from '\.\/components\/PersonaPicker\.js'/g) ?? []).length, 1, '组件只有一个来源')
+  // 两个入口都渲染同一个组件（装配层）
+  assert.equal((appUiSource.match(/<PersonaPicker/g) ?? []).length, 2,
+    '提示词弹窗 + 快速录入弹窗各一个（同一个组件；D17/P7-2 起在 app/WorkbenchOverlays.tsx 与 app/WorkbenchDialogs.tsx）')
+  assert.equal((entry.match(/<PersonaPicker/g) ?? []).length, 0, '入口不再装配（P7-2 后 JSX 全在 app/）')
+  /**
+   * D17/P7-3：入口的 `import { PersonaPicker } …` 是死 import，已随死代码清理删掉；
+   * 组件的两个来源改为两个装配层文件各一处（同一个组件、同一份实现）。
+   */
+  assert.equal((overlaysSource.match(/from '\.\.\/components\/PersonaPicker\.js'/g) ?? []).length, 1,
+    '提示词弹窗的来源只有一个 import（app/WorkbenchOverlays.tsx）')
+  assert.equal((dialogsSource.match(/from '\.\.\/components\/PersonaPicker\.js'/g) ?? []).length, 1,
+    '快速录入弹窗的来源只有一个 import（app/WorkbenchDialogs.tsx）')
+  assert.equal((entry.match(/from '\.\.\/components\/PersonaPicker\.js'/g) ?? []).length, 0,
+    '入口不再 import 该组件（P7-3 清理死 import，不是放宽：两个来源由上面两句盯 owner）')
 })
 
 test('AX-R07 技能选择器与角色选择器**不遮挡**：角色块无绝对定位，且渲染在技能块之前', () => {
@@ -105,26 +130,41 @@ test('AX-R07 技能选择器与角色选择器**不遮挡**：角色块无绝对
   assert.doesNotMatch(personaCss, /position:\s*(absolute|fixed)/, '角色选择器不得绝对定位（会遮挡技能栏）')
   assert.doesNotMatch(componentSource, /position:\s*(absolute|fixed)/)
   // 提示词弹窗里：PersonaPicker 在技能选择器之前（同一文档流，先角色后技能）
-  const modalAt = indexSource.indexOf('{promptModal !== null && (')
-  const personaAt = indexSource.indexOf('<PersonaPicker', modalAt)
-  const skillAt = indexSource.indexOf('<SkillPicker', modalAt)
+  // D17/P7-2：提示词弹窗的 JSX 在 app/WorkbenchOverlays.tsx ⇒ 顺序断言跟着 owner 走。
+  const modalAt = overlaysSource.indexOf('{promptModal !== null && (')
+  const personaAt = overlaysSource.indexOf('<PersonaPicker', modalAt)
+  const skillAt = overlaysSource.indexOf('<SkillPicker', modalAt)
   assert.ok(modalAt > 0 && personaAt > modalAt, '提示词弹窗里必须有角色选择器')
   assert.ok(skillAt > personaAt, `角色选择器必须渲染在技能选择器之前：persona@${personaAt} skill@${skillAt}`)
-  // 角色块与技能块都不内联正文
-  assert.doesNotMatch(stripComments(indexSource), /withPersonaPromptBlock\([^)]*body/)
+  // 角色块与技能块都不内联正文（拼装点已进 AI 会话域）
+  assert.doesNotMatch(stripComments(aiHookSource), /withPersonaPromptBlock\([^)]*body/)
 })
 
 test('AX-R07 每次打开快速录入都把角色复位成「未指定」（上一次的选择不会静默继承）', () => {
   const code = stripComments(indexSource)
   const openAt = code.indexOf('const openQuickEntry = ')
-  const openEnd = code.indexOf('setShowQuick(true)', openAt)
-  assert.ok(openAt > 0 && openEnd > openAt, '必须能找到 openQuickEntry')
+  /**
+   * 函数体的结束标记**不锚任何会随批次搬走的语句**：拆分前这里锚的是 `setShowQuick(true)`，
+   * 而 D17/P6-2 把「打开弹窗」那一半搬进了快速录入域 hook，那行字在入口就没了（本条判据由此变红）。
+   * 改成"从函数起点起第一个行首两空格的收尾大括号"。
+   */
+  const openEnd = code.indexOf('\n  }\n', openAt)
+  assert.ok(openAt > 0 && openEnd > openAt, '必须能找到 openQuickEntry 的函数体')
   const body = code.slice(openAt, openEnd)
-  assert.match(body, /setQuickPersona\(INHERIT_PERSONA\)/, '打开弹窗时必须把角色复位为「未指定」')
-  // 提示词弹窗同理（askUserPrompt 里复位）
-  const askAt = code.indexOf('const askUserPrompt = ')
-  const askEnd = code.indexOf('const confirmPrompt = ', askAt)
-  assert.match(code.slice(askAt, askEnd), /setPromptPersona\(INHERIT_PERSONA\)/)
+  // 打开弹窗那一半交给快速录入域（P6-2）
+  assert.match(body, /openIntake\(\)/, '打开弹窗必须走快速录入域的 openIntake')
+  /**
+   * 角色复位这一半 P6-3 已收进 AI 会话域（`resetClarifyPicker()`）：入口只剩调用，
+   * 复位本体改扫那个 hook —— 这是"判据跟着 owner 走"，不是放宽。
+   */
+  assert.match(body, /resetClarifyPicker\(\)/, '打开弹窗时必须走 AI 会话域的角色复位动作')
+  const aiCode = stripComments(aiHookSource)
+  assert.match(aiCode, /setQuickPersona\(INHERIT_PERSONA\)/, '角色复位必须把选择置回「未指定」')
+  // 提示词弹窗同理（askUserPrompt 里复位）—— 它也在同一个 hook 里
+  const askAt = aiCode.indexOf('const askUserPrompt = ')
+  const askEnd = aiCode.indexOf('const confirmPrompt = ', askAt)
+  assert.ok(askAt > 0 && askEnd > askAt, '必须能找到 askUserPrompt 的函数体（结构变了就要同步这条断言）')
+  assert.match(aiCode.slice(askAt, askEnd), /setPromptPersona\(INHERIT_PERSONA\)/)
 })
 
 // ---------------------------------------------------------------------------
@@ -172,7 +212,8 @@ test('AX-R08 新建会话时绑定的是"用户明确选的角色"；未指定/�
 })
 
 test('AX-R08 接线：复用判定吃角色选择，且绑定写在 prompt **之前**', () => {
-  const code = stripComments(indexSource)
+  /** P6-3：这一整段（`reuseAiSessionId` 的调用点与绑定顺序）随 `startAISession` 进了 AI 会话域 hook。 */
+  const code = stripComments(aiHookSource)
   assert.match(code, /reuseAiSessionId\(mode, text, planAnchor, personaChoice\)/, '复用判定必须拿到用户选择')
   assert.match(code, /if \(reuse\.kind === 'reuse'\)/, '早退只发生在判据说"可以沿用"时')
   const reuseBlock = code.slice(code.indexOf('const reuse = await reuseAiSessionId'), code.indexOf('const ws = safeService'))
@@ -185,6 +226,8 @@ test('AX-R08 接线：复用判定吃角色选择，且绑定写在 prompt **之
   // 绑定失败必须抛错（不能照常发 prompt）
   const bindBlock = code.slice(bindAt, promptAt)
   assert.match(bindBlock, /throw new Error\(`角色「\$\{personaId\}」绑定未生效/, '绑定没生效必须中断，不能假装有角色')
+  // 装配层不许留第二份（判据跟着 owner 走）
+  assert.doesNotMatch(stripComments(indexSource), /reuseAiSessionId\(/, '入口不再直接判复用')
 })
 
 // ---------------------------------------------------------------------------
@@ -372,6 +415,9 @@ test('浏览器安全（运行时）：把 process 抹掉后，默认平台口�
 test('"选中的角色"判定只有一处：decidePersonaReuse 在纯模块里，组件不自己判', () => {
   assert.match(stripComments(pickerSource), /export function decidePersonaReuse\(/)
   assert.doesNotMatch(stripComments(componentSource), /decidePersonaReuse|reuseAiSessionId/, '选择器组件不判复用（它只回调选择）')
-  assert.match(stripComments(indexSource), /decidePersonaReuse\(persona, binding\)/)
-  assert.equal((stripComments(indexSource).match(/decidePersonaReuse\(/g) ?? []).length, 1, '调用点只允许一处')
+  // P6-3：唯一调用点随 `reuseAiSessionId` 搬进 AI 会话域 hook —— 仍然只允许一处
+  const aiCode = stripComments(aiHookSource)
+  assert.match(aiCode, /decidePersonaReuse\(persona, binding\)/)
+  assert.equal((aiCode.match(/decidePersonaReuse\(/g) ?? []).length, 1, '调用点只允许一处')
+  assert.equal((stripComments(indexSource).match(/decidePersonaReuse\(/g) ?? []).length, 0, '入口不许留第二处')
 })

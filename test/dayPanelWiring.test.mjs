@@ -21,6 +21,7 @@ const MODEL = read('src/client/dayPanelModel.ts')
 const PANEL = read('src/client/components/DayPanel.tsx')
 const LIST = read('src/client/components/TaskList.tsx')
 const INDEX = read('src/client/index.tsx')
+const DAY = read('src/client/hooks/useDayWorkspace.ts')
 
 const count = (source, pattern) => (source.match(pattern) ?? []).length
 
@@ -62,18 +63,21 @@ test('AX-T02: 装配层与组件都不做判定（不许自己 parse 截止、�
 
 test('AX-T02: 页签兜底落点两处都引用同一个函数，不许各写一遍三元表达式', () => {
   assert.ok(count(PANEL, /resolveDayPanelTab\(/g) >= 1, '组件渲染前必须用它兜底')
-  assert.ok(count(INDEX, /resolveDayPanelTab\(/g) >= 1, '装配层把 state 收回来时必须用它（同一份判定）')
+  assert.ok(count(DAY, /resolveDayPanelTab\(/g) >= 1, '装配层把 state 收回来时必须用它（同一份判定）')
   assert.equal(/===\s*'overdue'\s*\?\s*'plan'/.test(PANEL), false, '不许在组件里内联一份兜底落点')
-  assert.equal(/===\s*'overdue'\s*\?\s*'plan'/.test(INDEX), false, '不许在装配层里内联一份兜底落点')
+  assert.equal(/===\s*'overdue'\s*\?\s*'plan'/.test(DAY), false, '不许在装配层里内联一份兜底落点')
 })
 
 test('AX-T02: 行内「排入今日」不自己发请求（组件只回调，写入口仍只有一处）', () => {
   for (const [name, source] of [['TaskList.tsx', LIST], ['DayPanel.tsx', PANEL]]) {
     assert.equal(/fetch\(|api</.test(source), false,
-      `${name} 里不许拼请求：行内动作只能回调，写入口是 index.tsx 的 addTaskToPlan（`+"`POST /plans/:date/items`"+`）`)
+      `${name} 里不许拼请求：行内动作只能回调，写入口是 hooks/useDayWorkspace.ts 的 addTaskToPlan（`+"`POST /plans/:date/items`"+`）`)
   }
+  assert.ok(count(DAY, /addTaskToPlan/g) >= 2, '定义 + 导出必须成对出现（唯一写入口在日期域）')
+  assert.equal(/const addTaskToPlan = /.test(INDEX), false,
+    '定义只允许在日期域：装配层只能注入同一个 addTaskToPlan，不许自己再写一份')
   assert.ok(count(INDEX, /addTaskToPlan/g) >= 3,
-    '定义 + 容量未排入区 + 行内「排入今日」必须复用同一个 addTaskToPlan（不一致就会多出一条写路径）')
+    '解构 + 容量未排入区 + 行内「排入今日」必须复用同一个 addTaskToPlan（不一致就会多出一条写路径）')
   assert.equal(/onScheduleToday[\s\S]{0,200}?localDateString\(\)[\s\S]{0,80}?\/items/.test(PANEL), false,
     '组件里不许出现"自己算今天 + 自己请求"的写法')
 })

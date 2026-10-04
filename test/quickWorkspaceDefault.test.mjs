@@ -132,40 +132,61 @@ function functionBody(source, name) {
 }
 
 test('接线 v1.15.2：判定与投影的接线不许再读"当前选中任务"', () => {
-  const { stripped } = readSource('../src/client/index.tsx')
-  const openBody = functionBody(stripped, 'openQuickEntry')
-  assert.ok(openBody !== null, '没找到 openQuickEntry 实现（改名了就要同步这条断言）')
+  // D17/P6-2：`openQuickEntry` 与投影函数已随快速录入域搬进新 owner —— 判据跟着 owner 走。
+  const { stripped } = readSource('../src/client/hooks/useWorkbenchQuickIntake.ts')
+  const openBody = functionBody(stripped, 'openIntake')
+  assert.ok(openBody !== null, '没找到 openIntake 实现（改名了就要同步这条断言）')
   assert.match(openBody, /decideQuickWorkspaceDefault\(\{/, '默认值必须由纯函数判定给，不许在组件里重新推导')
-  assert.match(openBody, /applyQuickWorkspaceDecision\(/, '投影只能走 applyQuickWorkspaceDecision（唯一一处）')
-  const applyBody = functionBody(stripped, 'applyQuickWorkspaceDecision')
-  assert.ok(applyBody !== null, '没找到 applyQuickWorkspaceDecision（改名了就要同步这条断言）')
-  for (const [label, body] of [['openQuickEntry', openBody], ['applyQuickWorkspaceDecision', applyBody]]) {
+  assert.match(openBody, /applyDecision\(/, '投影只能走 applyDecision（唯一一处）')
+  const applyBody = functionBody(stripped, 'applyDecision')
+  assert.ok(applyBody !== null, '没找到 applyDecision（改名了就要同步这条断言）')
+  for (const [label, body] of [['openIntake', openBody], ['applyDecision', applyBody]]) {
     assert.equal(/\bselected\b/.test(body), false,
       `${label} 不许读 selected —— 那正是"执行过任务 A 之后默认值变成 A 的工作区"的成因`)
     assert.equal(/effectiveWorkspacePath/.test(body), false, `${label} 不许读任何任务工作区字段`)
   }
   assert.match(applyBody, /setQuickWorkspaceSource\(decided\.source\)/, '来源提示也要由判定一并给出')
-  // 界面上的来源文案只允许来自 quickWorkspaceSourceLabel，不许再内联判断
-  assert.match(stripped, /quickWorkspaceSourceLabel\(quickWorkspaceSource\)/)
-  assert.equal(/继承自父任务/.test(stripped), false, '「继承自父任务」这句界面文案已随判定一起删掉')
-  // 同义的另一句（审查 F4）：快速录入里 task 恒为 null，clarify 分支明确排除父任务 —— 这句是假的
-  assert.equal(/跟随父任务/.test(stripped), false, '「跟随父任务」在快速录入里永远不成立，不许再写进提示')
+  // 界面上的来源文案只允许来自 quickWorkspaceSourceLabel，不许再内联判断。
+  // D17/P7-2：快速录入弹窗的 JSX 搬进 app/WorkbenchDialogs.tsx ⇒ 判据跟着 owner 走
+  //（正向指新家；入口与组件两边都查负向，搬走之后不会空洞通过）。
+  const { stripped: indexSource } = readSource('../src/client/index.tsx')
+  const { stripped: dialogsSource } = readSource('../src/client/app/WorkbenchDialogs.tsx')
+  assert.match(dialogsSource, /quickWorkspaceSourceLabel\(quickWorkspaceSource\)/,
+    '来源提示必须由 quickWorkspaceSourceLabel 给出（D17/P7-2 起 owner = app/WorkbenchDialogs.tsx）')
+  for (const [label, src] of [['入口', indexSource], ['app/WorkbenchDialogs.tsx', dialogsSource]]) {
+    assert.equal(/继承自父任务/.test(src), false, `${label}：「继承自父任务」这句界面文案已随判定一起删掉`)
+    // 同义的另一句（审查 F4）：快速录入里 task 恒为 null，clarify 分支明确排除父任务 —— 这句是假的
+    assert.equal(/跟随父任务/.test(src), false, `${label}：「跟随父任务」在快速录入里永远不成立，不许再写进提示`)
+  }
 })
 
 test('接线 v1.15.2：把工作区记进「最近手动选择」必须先过 touched 闸门', () => {
   const { stripped } = readSource('../src/client/index.tsx')
-  assert.match(stripped, /shouldRememberQuickWorkspace\(quickWorkspaceTouched, chosen\)/,
-    'rememberQuickWorkspace 的调用必须先问 shouldRememberQuickWorkspace')
-  assert.equal(/if \(chosen !== ''\) void rememberQuickWorkspace/.test(stripped), false,
-    '不许退回"只要非空就记"：自动预填的值会被记成"上次手动选择"，下一轮就是默认值')
-  const rememberBody = functionBody(stripped, 'rememberQuickWorkspace')
+  // D17/P7-2：这一行随快速录入弹窗搬进 app/WorkbenchDialogs.tsx ⇒ 正向指新家；
+  // 入口与组件两边都查负向，这样"搬走之后空洞通过"也不会发生。
+  const { stripped: gateSource } = readSource('../src/client/app/WorkbenchDialogs.tsx')
+  assert.match(gateSource, /shouldRememberQuickWorkspace\(quickWorkspaceTouched, chosen\)/,
+    'rememberQuickWorkspace 的调用必须先问 shouldRememberQuickWorkspace（D17/P7-2 起 owner = app/WorkbenchDialogs.tsx）')
+  for (const [label, src] of [['入口', stripped], ['app/WorkbenchDialogs.tsx', gateSource]]) {
+    assert.equal(/if \(chosen !== ''\) void rememberQuickWorkspace/.test(src), false,
+      `${label}：不许退回"只要非空就记"：自动预填的值会被记成"上次手动选择"，下一轮就是默认值`)
+  }
+  // D17/P6-2：`rememberQuickWorkspace` / `forgetQuickWorkspace` 已随快速录入域搬进新 owner ——
+  // 判据跟着 owner 走（上面两条形态断言仍读入口 index.tsx）。
+  const { stripped: intakeHook } = readSource('../src/client/hooks/useWorkbenchQuickIntake.ts')
+  const rememberBody = functionBody(intakeHook, 'rememberQuickWorkspace')
   assert.ok(rememberBody !== null, '没找到 rememberQuickWorkspace（改名了就要同步这条断言）')
   assert.match(rememberBody, /sameRecentWorkspaces\(/, '同值不写：算出来一样就别发请求')
   // recent 同时是下一次的默认值来源 —— 这条链只在设置接口那一处写
-  const settingsWriters = stripped.match(/quickWorkspaceRecent:/g) ?? []
+  const settingsWriters = intakeHook.match(/quickWorkspaceRecent:/g) ?? []
   assert.ok(settingsWriters.length >= 1, 'rememberQuickWorkspace 仍要写 quickWorkspaceRecent')
   // 设置弹窗不得整表回传这个列表（服务端是整表替换语义，陈旧快照会把并发记下的顶掉）
-  const saveBody = functionBody(stripped, 'saveSettings')
+  // D17/P5-1：`saveSettings` 已随设置域搬进 hooks/useWorkbenchSettings.ts —— 判据跟着 owner 走：
+  // 入口留负向（不许再自建第二份），正向断言改扫 hook。
+  assert.equal(/const saveSettings = /.test(stripped), false,
+    'saveSettings 只能有一个 owner（hooks/useWorkbenchSettings.ts），入口不许再定义一份')
+  const { stripped: settingsHook } = readSource('../src/client/hooks/useWorkbenchSettings.ts')
+  const saveBody = functionBody(settingsHook, 'saveSettings')
   assert.ok(saveBody !== null, '没找到 saveSettings（改名了就要同步这条断言）')
   assert.match(saveBody, /const \{ quickWorkspaceRecent: _ignored, \.\.\.editable \} = settings/,
     'saveSettings 必须把 quickWorkspaceRecent 摘掉')
@@ -178,7 +199,7 @@ test('接线 v1.15.2：把工作区记进「最近手动选择」必须先过 to
   assert.equal(/JSON\.stringify\(settings\)/.test(saveBody), false,
     '不许再整表发 settings —— 那会让陈旧快照把并发记下的工作区顶掉')
   // 「不再记住」必须带后置校验：提交成功但记录还在（宿主是旧的合并语义）= 静默失败
-  const forgetBody = functionBody(stripped, 'forgetQuickWorkspace')
+  const forgetBody = functionBody(intakeHook, 'forgetQuickWorkspace')
   assert.ok(forgetBody !== null, '没找到 forgetQuickWorkspace（改名了就要同步这条断言）')
   assert.match(forgetBody, /sameRecentWorkspaces\(res\.settings\.quickWorkspaceRecent, next\)/,
     '删完要核对服务端真的按整表落库了，否则用户以为删掉了、下次它又回来')
@@ -197,11 +218,15 @@ test('接线 v1.15.2：把工作区记进「最近手动选择」必须先过 to
    * 这是判据跟实现走、不是放宽：意图仍是"判定说上次手动选择且用户没动过时，必须给得出这个出口"，
    * 而空值不可点由组件的 disabled 判据单独钉住。
    */
-  assert.match(stripped,
+  assert.match(gateSource,
     /showForget=\{quickWorkspaceSource === 'last-manual' && !quickWorkspaceTouched\}/,
-    '「不再记住」的显示条件必须仍由判定给出（判定说"上次手动选择"且用户没动过）')
-  assert.match(stripped, /onForget=\{\(\) => void forgetQuickWorkspace\(quickWorkspace\)\}/,
+    '「不再记住」的显示条件必须仍由判定给出（D17/P7-2 起 owner = app/WorkbenchDialogs.tsx）')
+  assert.match(gateSource, /onForget=\{\(\) => void forgetQuickWorkspace\(quickWorkspace\)\}/,
     '按钮必须真的调用 forgetQuickWorkspace')
+  assert.doesNotMatch(stripped, /showForget=\{quickWorkspaceSource === 'last-manual' && !quickWorkspaceTouched\}/,
+    '入口不再有第二处装配（P7-2 后 JSX 全在 app/）')
+  assert.doesNotMatch(stripped, /onForget=\{\(\) => void forgetQuickWorkspace\(quickWorkspace\)\}/,
+    '入口不再有第二处装配（P7-2 后 JSX 全在 app/）')
   const pickerSource = readSource('../src/client/components/WorkspacePicker.tsx').stripped
   assert.match(pickerSource, /data-workspace-forget/, '组件里必须真有这个按钮')
   assert.match(pickerSource, /disabled=\{disabled \|\| String\(value \?\? ''\)\.trim\(\) === ''\}/,
@@ -216,9 +241,15 @@ test('接线 v1.15.2：把工作区记进「最近手动选择」必须先过 to
  * （换个入口、加个"跟随任务"按钮）照样能溜过去。
  */
 test('接线 v1.15.2：setQuickWorkspace 的实参只允许是判定结果或用户交互', () => {
-  const { stripped } = readSource('../src/client/index.tsx')
+  /**
+   * D17/P6-2：这个 setter 的**所有**调用点都随快速录入域进了 hook，
+   * 入口 index.tsx 里已经一处都不剩（因此本断言改成扫新 owner）；
+   * 「浏览…」弹窗与 `WorkspacePicker` 回调那两条用户交互路径，
+   * 现在合并成同一个语义动作 `overrideWorkspace(path)` —— 也就是这里的 `path`。
+   */
+  const { stripped } = readSource('../src/client/hooks/useWorkbenchQuickIntake.ts')
   const args = [...stripped.matchAll(/setQuickWorkspace\(([^)]*)\)/g)].map((matched) => matched[1].trim())
-  assert.ok(args.length >= 2, `预期至少两处写入（打开时预填 + 用户输入），实际 ${args.length} 处`)
+  assert.ok(args.length >= 2, `预期至少两处写入（打开时预填 + 用户交互），实际 ${args.length} 处`)
   /**
    * ⚠️ 2026-10-01 更新（批次2 #2）：用户交互多了一条路径 ——
    * 「浏览…」弹窗选中的目录（`picked`，来自 `applyWorkspaceDir`），以及在
@@ -228,11 +259,11 @@ test('接线 v1.15.2：setQuickWorkspace 的实参只允许是判定结果或用
    * 下面同时**逐条禁止**实参里出现任务相关的东西 —— 那才是本事故的成因
    * （"执行过任务 A 之后默认值变成 A 的工作区"）。
    */
-  const ALLOWED = new Set(['decided.path', 'e.target.value', 'path', 'picked'])
+  const ALLOWED = new Set(['decided.path', 'path'])
   for (const argument of args) {
     assert.ok(ALLOWED.has(argument),
       `setQuickWorkspace(${argument}) 不是允许的形态：预填值只能来自 decideQuickWorkspaceDefault 的结果`
-        + '或有用户在场的交互（手打 / 下拉选中 / 浏览弹窗选目录）')
+        + '或有用户在场的交互（下拉选中 / 手打 / 浏览弹窗选目录）')
     assert.doesNotMatch(argument, /task|selected|effectiveWorkspacePath/i,
       `setQuickWorkspace(${argument}) 读到了任务相关的东西`
         + ' —— 这正是"执行过任务 A 之后默认值变成 A 的工作区"的成因')

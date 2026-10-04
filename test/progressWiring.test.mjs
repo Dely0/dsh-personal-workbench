@@ -22,7 +22,17 @@ const root = fileURLToPath(new URL('../', import.meta.url))
 const read = (relative) => readFileSync(`${root}${relative}`, 'utf8')
 
 const clientIndex = read('src/client/index.tsx')
+/**
+ * D17/P6-3：`startAISession`（十个 mode 的提示词拼装）随 AI 会话域搬进这个 hook。
+ * 提示词相关的切片一律从这里切 —— 从入口切会拿到空串，负向断言就会**空洞通过**。
+ */
+const clientAiHook = read('src/client/hooks/useWorkbenchAISessions.ts')
+// D17/P3-4：任务数据域（待验收投影折 Map、saveProgress / completeTaskFromProgress、
+// 刷新详情链）搬进了 `hooks/useTaskData.ts`，所以这几条判据改扫那个文件。
+const taskDataHook = read('src/client/hooks/useTaskData.ts')
 const taskList = read('src/client/components/TaskList.tsx')
+// D17/P3-2：任务详情区（`wb-detail` 的第三个分支）搬进 `views/TaskDetailPane.tsx`。
+const taskDetailPane = read('src/client/views/TaskDetailPane.tsx')
 const taskProgressComponent = read('src/client/components/TaskProgress.tsx')
 const taskProgressViewSource = read('src/client/taskProgressView.ts')
 const sharedProgress = read('src/shared/taskProgress.ts')
@@ -122,7 +132,7 @@ test('客户端与共享层走的是**同一个**投影函数（不许第二份�
 })
 
 test('共享投影只有一处实现：没有第二份 projectProgress', () => {
-  const sources = [clientIndex, taskList, taskProgressViewSource, taskProgressComponent]
+  const sources = [clientIndex, taskDataHook, taskList, taskProgressViewSource, taskProgressComponent]
   for (const source of sources) {
     assert.doesNotMatch(source, /function projectProgress|const projectProgress/, '投影只允许在 shared/taskProgress.ts 里实现')
   }
@@ -138,20 +148,25 @@ test('TaskProgress 独立组件存在，且列表行与详情都接线到它', (
   assert.match(taskProgressComponent, /export function ProgressBar\b/)
   assert.match(taskList, /import \{ TaskProgress \} from '\.\/TaskProgress\.js'/, '列表行必须用这个组件')
   assert.match(taskList, /<TaskProgress compact/, '列表行用 compact 形态')
-  assert.match(clientIndex, /<TaskProgress\b/, '详情页也用同一个组件')
+  assert.match(taskDetailPane, /<TaskProgress\b/, '详情页也用同一个组件（D17/P3-2 后详情 JSX 在这个文件里）')
+  assert.doesNotMatch(stripComments(clientIndex), /<TaskProgress\b/, '入口不再有第二处装配（详情卡只有一个 owner）')
 })
 
 test('列表行的进度数据来自**一次**待验收查询（不做 N+1）', () => {
-  assert.match(clientIndex, /tasks\/pending-completions/, '待验收投影走一次性端点')
-  assert.match(clientIndex, /pendingCompletionMap\(/, '折成 Map 后再分发到各行')
-  assert.match(clientIndex, /pending=\{pendingMap\}/, '列表树必须接到这份投影')
+  assert.match(taskDataHook, /tasks\/pending-completions/, '待验收投影走一次性端点')
+  assert.match(taskDataHook, /pendingCompletionMap\(/, '折成 Map 后再分发到各行')
+  // D17/P7-2：列表/详情的装配随主体 JSX 搬进 app/WorkbenchBody.tsx ⇒ 判据跟着 owner 走。
+  assert.match(read('src/client/app/WorkbenchBody.tsx'), /pending=\{pendingMap\}/,
+    '列表树必须接到这份投影（D17/P7-2 起 owner = app/WorkbenchBody.tsx）')
+  assert.doesNotMatch(stripComments(clientIndex), /pending=\{pendingMap\}/, '入口不再有第二处装配')
   // 反向：不许在渲染里逐任务发请求
-  assert.doesNotMatch(clientIndex, /tasks\/\$\{task\.id\}\/pending/, '不得逐行请求待验收')
+  assert.doesNotMatch(taskDataHook, /tasks\/\$\{task\.id\}\/pending/, '不得逐行请求待验收')
+  assert.doesNotMatch(stripComments(clientIndex), /tasks\/\$\{task\.id\}\/pending/, '入口也不得逐行请求待验收')
 })
 
 test('进度保存与"完成任务"是两个动作，且 100 不走保存路径', () => {
-  assert.match(clientIndex, /progressPercent: percent/, '保存进度只写 progressPercent')
-  assert.match(clientIndex, /completeTaskFromProgress/, '"完成任务"是独立动作')
+  assert.match(taskDataHook, /progressPercent: percent/, '保存进度只写 progressPercent')
+  assert.match(taskDataHook, /completeTaskFromProgress/, '"完成任务"是独立动作')
   // 100 档位必须落到 onComplete（完成任务），而不是 onSave（保存进度）
   assert.match(taskProgressComponent, /preset\.value === 100[\s\S]{0,120}onComplete/, '100 档位必须走完成任务')
   /**
@@ -161,8 +176,8 @@ test('进度保存与"完成任务"是两个动作，且 100 不走保存路径'
    */
   assert.match(taskProgressComponent, /100% 请点这里[\s\S]{0,80}不是把 100 存进进度/, '界面要写清 100 不是普通保存值（放在按钮 title 里）')
   assert.doesNotMatch(taskProgressComponent, /wb-progress-tip/, '那段落地的长 tip 已按用户要求删除')
-  assert.match(clientIndex, /window\.confirm\(question\)/, '完成任务要先确认')
-  assert.match(clientIndex, /级联完成/, '有子任务时提示要说明级联')
+  assert.match(taskDataHook, /window\.confirm\(question\)/, '完成任务要先确认')
+  assert.match(taskDataHook, /级联完成/, '有子任务时提示要说明级联')
 })
 
 /**
@@ -172,25 +187,48 @@ test('进度保存与"完成任务"是两个动作，且 100 不走保存路径'
  * 根因：刷新详情走的是 `openTaskById`，而它第一句是 `setView('list')`。
  *
  * 这条写成**源码级不变量**的理由与上面那条一样：`index.tsx` 需要宿主运行时，跑不起来。
- * 判据刻意不依赖行号，只切函数体（`slice` 到下一个 `const `），无关重构不会扫红。
+ * 判据刻意不依赖行号，只切函数体，无关重构不会扫红。
+ *
+ * D17/P3-4：`loadTaskDetail` / `saveProgress` / `completeTaskFromProgress` 搬进了
+ * `hooks/useTaskData.ts`，切片改在那个文件上做；并补一条反向判据 —— 会切 `list` 的
+ * `openTaskById` 按设计 §4.1 第 148 行留在装配层，所以它**必须**还在入口里。
  */
 test('刷新详情不带导航副作用：saveProgress 走 loadTaskDetail，而 loadTaskDetail 里没有 setView', () => {
-  const code = stripComments(clientIndex)
-  const detailBody = code.slice(code.indexOf('const loadTaskDetail = (taskId: string): void =>'))
-    .slice(0, code.slice(code.indexOf('const loadTaskDetail = (taskId: string): void =>')).indexOf('const openTask = '))
+  const entry = stripComments(clientIndex)
+  const hook = stripComments(taskDataHook)
+  /**
+   * ⚠️ 切片前先断言锚点存在：`indexOf` 找不到会返回 -1，`slice(-1)` 取到的是**最后一个字符**，
+   * 于是 `doesNotMatch` 全部通过 —— 这是**空洞通过**，比扫红更危险（本仓踩过）。
+   */
+  const sliceFrom = (code, start, end) => {
+    const from = code.indexOf(start)
+    assert.notEqual(from, -1, `切片起始锚点不存在：${start}`)
+    const rest = code.slice(from)
+    if (end === undefined) return rest
+    const to = rest.indexOf(end)
+    assert.notEqual(to, -1, `切片结束锚点不存在：${end}`)
+    return rest.slice(0, to)
+  }
+
+  const detailBody = sliceFrom(hook, 'const loadTaskDetail = (taskId: string): void =>', 'const patchTask = ')
   assert.doesNotMatch(detailBody, /setView\(/, 'loadTaskDetail 只刷新数据，不许切视图')
 
-  const saveBody = code.slice(code.indexOf('const saveProgress = async')).slice(0, 400)
+  const saveBody = sliceFrom(hook, 'const saveProgress = async', 'const completeTaskFromProgress = async')
   assert.match(saveBody, /loadTaskDetail\(taskId\)/, '保存进度后用 loadTaskDetail 刷新')
   assert.doesNotMatch(saveBody, /openTaskById\(/, '保存进度**不许**走 openTaskById（它内部会 setView(\'list\')）')
 
-  const completeBody = code.slice(code.indexOf('const completeTaskFromProgress = async')).slice(0, 800)
+  const completeBody = sliceFrom(hook, 'const completeTaskFromProgress = async', 'const deferPlanTask = async')
   assert.match(completeBody, /loadTaskDetail\(taskId\)/, '完成任务后同样只刷新')
   assert.doesNotMatch(completeBody, /openTaskById\(/, '完成任务后也不许把用户弹走')
+
+  // 反向（P3-4 新增）：导航只在装配层发生 —— 会切 list 的 openTaskById 必须留在入口。
+  const openByIdBody = sliceFrom(entry, 'const openTaskById = (taskId: string): void =>').slice(0, 220)
+  assert.match(openByIdBody, /setView\('list'\)/, 'openTaskById 由装配层组合 TaskData 与 Navigation，切视图留在入口')
 })
 
 test('执行提示词要求主动报进度、并说清 100 不是直接完成（AX-P08）', () => {
-  const executePrompt = clientIndex.slice(clientIndex.indexOf('你是“个人工作台”的任务执行助手'))
+  const executePrompt = clientAiHook.slice(clientAiHook.indexOf('你是“个人工作台”的任务执行助手'))
+  assert.ok(executePrompt.length > 0, '执行提示词必须能在 AI 会话域里找到（结构变了就要同步这条断言）')
   const promptBody = executePrompt.slice(0, 2000)
   assert.match(promptBody, /阶段性推进后主动报一次进度/, '执行提示词必须要求主动报进度')
   assert.match(promptBody, /workbench_update_progress/, '提示词要给出具体工具')
@@ -203,9 +241,12 @@ test('执行提示词要求主动报进度、并说清 100 不是直接完成（
 })
 
 test('非执行模式的提示词里**没有**进度工具指令（不诱导咨询/拆解会话执行任务）', () => {
-  const consult = clientIndex.slice(clientIndex.indexOf('你是“个人工作台”的任务协助助手'), clientIndex.indexOf('你是“个人工作台”的任务拆解助手'))
+  const consult = clientAiHook.slice(clientAiHook.indexOf('你是“个人工作台”的任务协助助手'), clientAiHook.indexOf('你是“个人工作台”的任务拆解助手'))
+  const breakdown = clientAiHook.slice(clientAiHook.indexOf('你是“个人工作台”的任务拆解助手'), clientAiHook.indexOf('你是“个人工作台”的任务复盘助手'))
+  // ⚠️ 切片必须真的切到东西：切不到就是空串，下面的 `doesNotMatch` 会**空洞通过**。
+  assert.ok(consult.length > 100, '咨询模式提示词必须能切到（否则这条负向断言是假的）')
+  assert.ok(breakdown.length > 100, '拆解模式提示词必须能切到（否则这条负向断言是假的）')
   assert.doesNotMatch(consult, /workbench_update_progress/, '咨询模式不得被诱导去写进度')
-  const breakdown = clientIndex.slice(clientIndex.indexOf('你是“个人工作台”的任务拆解助手'), clientIndex.indexOf('你是“个人工作台”的任务复盘助手'))
   assert.doesNotMatch(breakdown, /workbench_update_progress/, '拆解模式不得被诱导去写进度')
 })
 

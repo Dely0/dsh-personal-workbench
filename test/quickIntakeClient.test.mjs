@@ -360,8 +360,12 @@ test('快速录入里的技能选择**真的会进提示词**（不许再硬编�
    *
    * 只修第 1 层就是"能选、但不生效"的假功能，所以这条判据盯的是第 2 层。
    */
-  const index = readFileSync(new URL('../src/client/index.tsx', import.meta.url), 'utf8')
-  const clarifyInput = /mode === 'clarify'\s*\r?\n?\s*\?\s*\{([^}]*)\}/.exec(index)
+  /**
+   * ⚠️ D17/P6-3：`startAISession` 已搬进 AI 会话域 hook，clarify 分支的 promptInput 在那里。
+   * 判据跟着 owner 走 —— 扫入口会抽到空（`exec` 返回 null 直接 assert 失败，不是静默跳过）。
+   */
+  const aiHook = readFileSync(new URL('../src/client/hooks/useWorkbenchAISessions.ts', import.meta.url), 'utf8')
+  const clarifyInput = /mode === 'clarify'\s*\r?\n?\s*\?\s*\{([^}]*)\}/.exec(aiHook)
   assert.ok(clarifyInput !== null, '没找到 clarify 分支的 promptInput（结构变了就要同步这条断言）')
   assert.equal(
     /skills:\s*\[\]/.test(clarifyInput[1]), false,
@@ -375,15 +379,21 @@ test('快速录入里的技能选择**真的会进提示词**（不许再硬编�
 })
 
 test('三个 AI 入口的选择器都接在同一处：快速录入与共享提示词弹窗共用 Skill/Persona/Model', () => {
-  const index = readFileSync(new URL('../src/client/index.tsx', import.meta.url), 'utf8')
-  const code = index.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1')
+  // D17/P7-2：两个弹窗的 JSX 分别搬进 app/WorkbenchOverlays.tsx（共享提示词）与
+  // app/WorkbenchDialogs.tsx（快速录入）⇒ 计数扫两份，顺序断言只扫提示词弹窗那一份。
+  const overlays = readFileSync(new URL('../src/client/app/WorkbenchOverlays.tsx', import.meta.url), 'utf8')
+  const dialogs = readFileSync(new URL('../src/client/app/WorkbenchDialogs.tsx', import.meta.url), 'utf8')
+  const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1')
+  const code = strip(overlays) + '\n' + strip(dialogs)
+  const promptModalCode = strip(overlays)
   // 每个选择器都要在**两个**弹窗里各出现一次
   for (const [label, tag] of [['角色', '<PersonaPicker'], ['技能', '<SkillPicker'], ['模型', '<ModelPicker']]) {
     const count = (code.match(new RegExp(tag.replace('<', '<'), 'g')) ?? []).length
     assert.equal(count, 2, `${label}选择器必须挂在两个弹窗里各一次（快速录入 + 共享提示词），实际 ${count} 次`)
   }
   // 顺序：角色 → 技能（AX-R07 的"角色在技能之前"，两个弹窗都要一致）
-  const promptModal = code.slice(code.indexOf('{promptModal !== null && ('), code.indexOf('wb-modal-actions', code.indexOf('{promptModal !== null && (')))
+  const promptModal = promptModalCode.slice(promptModalCode.indexOf('{promptModal !== null && ('),
+    promptModalCode.indexOf('wb-modal-actions', promptModalCode.indexOf('{promptModal !== null && (')))
   assert.ok(promptModal.indexOf('<PersonaPicker') < promptModal.indexOf('<SkillPicker'),
     '共享提示词弹窗里角色必须在技能之前')
 })
