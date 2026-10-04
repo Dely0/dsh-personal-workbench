@@ -245,12 +245,6 @@ export function useDayWorkspace(input: UseDayWorkspaceInput): UseDayWorkspaceRes
   // eslint-disable-next-line react-hooks/exhaustive-deps -- now 用日键代替
   [tasks, pickedPlan, dailyCapacityIncludeOverdue, defaultEstimateMinutes, capacityTodayKey(now)])
 
-  const clearTodayPlan = async (): Promise<void> => {
-    await api(`/api/workbench/plans/${localDateString()}`, { method: 'DELETE' })
-    await refresh()
-  }
-  void clearTodayPlan
-
   /**
    * 今日容量（唯一权威源 = 纯函数模块 `capacity.ts`）。
    *
@@ -365,6 +359,14 @@ export function useDayWorkspace(input: UseDayWorkspaceInput): UseDayWorkspaceRes
   const clearPlan = async (date: string): Promise<void> => {
     try {
       await api(`/api/workbench/plans/${date}`, { method: 'DELETE' })
+      /**
+       * **必须重新拉 bootstrap**：`todayPlan` 来自 `bootstrap`，而 `planRefreshKey` 只驱动
+       * 「日历视图选中日」的 `pickedPlan`（那个 effect 在 `view !== 'calendar'` 时直接 return）。
+       * 2026-10-05 实测缺陷：只 bump key 的话，在「今日」实例上清除计划后卡片与被排期的任务
+       * 全都还在（容量账本与页签成员也都从 `todayPlan` 派生，一起不刷）。
+       * 判据见 `test/dayPanelWiring.test.mjs`「清除某日计划只有一处实现」那条。
+       */
+      await refresh()
       setPlanRefreshKey((v) => v + 1)
       onNotice('该日计划已清除')
     } catch (e) {

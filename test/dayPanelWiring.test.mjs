@@ -81,3 +81,49 @@ test('AX-T02: 行内「排入今日」不自己发请求（组件只回调，写
   assert.equal(/onScheduleToday[\s\S]{0,200}?localDateString\(\)[\s\S]{0,80}?\/items/.test(PANEL), false,
     '组件里不许出现"自己算今天 + 自己请求"的写法')
 })
+
+/**
+ * 2026-10-05 追加：清除某日计划漏了 `await refresh()`（用户实测：「清除」之后今日计划卡片与
+ * 被排期的任务都还在）。
+ *
+ * 根因：`clearPlan` 只 bump `planRefreshKey`，而 `planRefreshKey` 只驱动**日历视图选中日**的
+ * pickedPlan（那个 effect 在 `view !== 'calendar'` 时直接 return）；`todayPlan` 来自
+ * `bootstrap`，只有任务数据域的 `refresh()` 会重拉它。
+ *
+ * 当时同一文件里还有一份**没接线**的 `clearTodayPlan`（DELETE 之后 `await refresh()`，写对了，
+ * 但只被一句 `void clearTodayPlan` 丢掉）—— "同一件事两份实现，写对的那份没接线"正是本项目
+ * 第一 bug 类别。所以这里既断言"只有一处实现"，也断言"它写完之后必须重新拉 bootstrap"。
+ */
+test('AX-T02: 清除某日计划只有一处实现，且写完之后必须重新拉 bootstrap', () => {
+  /*
+   * 只数**计划**的 DELETE：同文件里 reports 的删除也是一条 `method: 'DELETE'`，
+   * 那是另一件事，不能拿总量当判据（会把无关的删除算进来）。
+   */
+  const deletePlan = /api\(`\/api\/workbench\/plans\/[^`]*`, \{ method: 'DELETE' \}\)/g
+  assert.equal(count(DAY, deletePlan), 1,
+    '清除计划的请求只允许有一处实现（两份实现时，写对的那份往往没接线）')
+  /*
+   * 判据落在**函数体**上而不是"DELETE 的下一行"：两者之间允许有解释性注释，
+   * 否则以后想写清楚"为什么必须重拉"就会把判据弄红（判据不该绑定文本形态）。
+   */
+  const clearStart = DAY.indexOf('const clearPlan = ')
+  assert.ok(clearStart > 0, 'clearPlan 必须存在（清除计划的唯一接线段）')
+  const clearRest = DAY.slice(clearStart + 1)
+  const clearNext = clearRest.indexOf('\n  const ')
+  const clearBody = clearNext < 0 ? clearRest : clearRest.slice(0, clearNext)
+  const deleteAt = clearBody.search(/\/api\/workbench\/plans\/[^`]*`, \{ method: 'DELETE' \}\)/)
+  const refreshAt = clearBody.indexOf('await refresh()')
+  assert.ok(deleteAt >= 0, '清除计划的 DELETE 必须发生在 clearPlan 里，不许挪到别处')
+  assert.ok(refreshAt >= 0,
+    'clearPlan 必须 await refresh()：todayPlan 来自 bootstrap，只 bump planRefreshKey 在「今日」视图上什么都刷不到')
+  assert.ok(refreshAt > deleteAt, '必须**先** DELETE 再 refresh（否则刷到的还是旧计划）')
+  for (const fn of ['addTaskToPlan', 'patchPlanItem', 'savePlan', 'clearPlan']) {
+    const start = DAY.indexOf(`const ${fn} = `)
+    assert.ok(start > 0, `${fn} 必须存在于日期域（计划写入的唯一落点）`)
+    const rest = DAY.slice(start + 1)
+    const next = rest.indexOf('\n  const ')
+    const body = next < 0 ? rest : rest.slice(0, next)
+    assert.match(body, /await refresh\(\)/,
+      `${fn} 写完之后必须 await refresh()（漏一处就是"清除了、页面却还在"）`)
+  }
+})
