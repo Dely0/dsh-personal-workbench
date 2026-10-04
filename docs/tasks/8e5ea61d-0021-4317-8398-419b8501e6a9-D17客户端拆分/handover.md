@@ -47,8 +47,11 @@ legacy-duplicate-task 11 / progress 13 / daily-effort 13 / **day-panel 11** / wo
 ② **19387 / desktop 侧没有换版**：本次只装到 `web`(3080)，desktop 侧仍是 2026-10-02 的 dev 构建
 （`wb-a4ca2b1f98cf3ea1` / pre-D17）——也就是说**本会话界面上看到的不是 D17 构建**；
 ③ 知识库 / 点子两条线仍**没有**白名单套件（只有一次性诊断截图 `test-results/workbench-verify/diag-views/`）；
-④ 正式库未迁移；~~版本号仍 **1.16.2**~~ → **已发 `v1.16.3`**（tag `v1.16.3` 已推、发布提交 `fc40921`；
-   npm 侧**停在 staged，等维护者 2FA 批准** —— 见 `docs/releases/v1.16.3.md` §7 的「发布插曲」，GitHub Release 在此之前故意不建）。
+④ 正式库未迁移；~~版本号仍 **1.16.2**~~ → **已发 `v1.16.3`，链路四者一致**：
+   npm `dist-tags.latest = 1.16.3`（tarball 200，`sha1 73a69af8…` 与 `dist.shasum` 逐字节一致，空目录用户视角安装到 1.16.3）、
+   GitHub Release `v1.16.3`（`releases/latest` 指向它，Title 只写版本号）、tag `v1.16.3` 指向发布提交 `fc40921`
+   （文档回填 `11c7c7b` / `f4ae270`）。发布过程有过一次「`pnpm publish` 打印 ✅ 却只 stage」的插曲，
+   原委与解法见 `docs/releases/v1.16.3.md` §7 的「发布插曲」；`release-preflight` 的 pre 与 post 两阶段均**退出 0**。
 
 **P7 新增/改动的文件**：
 新增 `src/client/app/assembly.ts`、`src/client/app/WorkbenchHeader.tsx`(44) / `WorkbenchOverlays.tsx`(195) /
