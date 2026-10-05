@@ -160,8 +160,8 @@ test('db migrations, dictionaries and task tree', () => {
     // V2 daily plan: draft -> confirm -> persisted per date, replace & delete work
     const planDate = localDateString()
     const planTask = createTask(db, { title: 'plan target', typeCode: 'code_impl', priorityCode: 'p2' })
-    // 另一个**顶层**任务：同一父子链不能同时入计划（下面单独断言），所以计划里的第二条
-    // 必须是独立的一支，而不是 planTask 的子任务。
+    // 另一个**顶层**任务：计划项只能是可执行叶子，且**新增叶子不得与既有计划项同链**（ADR0010），
+    // 所以第二条必须是独立的一支，而不是 planTask 的子任务（同链被拒的用例见下面单独断言）。
     const sibling = createTask(db, { title: 'plan sibling', typeCode: 'code_impl', priorityCode: 'p2' })
     const planDraft = createDraft(db, { kindCode: 'daily_plan', sessionId: 's-plan', payload: { planDate, summary: '先清逾期', items: [{ taskId: planTask.id, order: 1, note: '先做' }] } })
     const plan = confirmDailyPlanDraft(db, planDraft.id)
@@ -182,13 +182,25 @@ test('db migrations, dictionaries and task tree', () => {
     assert.equal(updatedPlan.items[0].note, '改到前面')
     assert.equal(updatedPlan.items[1].note, '手动备注')
     assert.equal(getDailyPlan(db, planDate).sourceCode, 'manual')
-    // 同一父子链：新增的那条必须与既有计划项不同链（ADR0010）—— 显式给出中文原因，不部分生效
+    // 同一父子链（ADR0010 保留的唯一形态）：新增**叶子**而它的**上级已是既有计划项** → 整份拒绝、不部分生效。
+    // 旧场景写的是两个互不相关的顶层任务 —— 那种组合新旧规则都不该拒绝，所以这条断言自 2026-10-01
+    // 起一直是红的（CI run #51 → #83 连续 33 次），这里按 ADR0010 的判据补成真正会触发的场景。
+    const childOfPlanned = createTask(db, { title: 'plan target child', typeCode: 'code_impl', priorityCode: 'p2', parentId: planTask.id })
     assert.throws(
       () => updateDailyPlan(db, planDate, { items: [
         { taskId: planTask.id, order: 1, note: '' },
-        { taskId: task.id, order: 2, note: '' },
+        { taskId: childOfPlanned.id, order: 2, note: '' },
       ] }),
-      /已在同一天的计划里.*先移除/s,
+      /已在同一天的计划里.*先移除它/s,
+    )
+    assert.equal(getDailyPlan(db, planDate).items.length, 2, '被拒的写入不得有部分生效')
+    // 另一条新增形态：**非叶子**（下面还有未完成子任务）不得新增进计划 —— 同样整份拒绝
+    assert.throws(
+      () => updateDailyPlan(db, planDate, { items: [
+        { taskId: planTask.id, order: 1, note: '' },
+        { taskId: taskWithReminder.id, order: 2, note: '' },
+      ] }),
+      /不是可执行的叶子.*请改排它下面的子任务/s,
     )
     assert.equal(getDailyPlan(db, planDate).items.length, 2, '被拒的写入不得有部分生效')
     // validation: empty items and unknown task still throw; archived/closed tasks are allowed as plan records
