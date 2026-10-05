@@ -22,7 +22,7 @@
 
 ## 2. 本轮已核对的本机 SDK 契约
 
-以下为源码/类型核对，**不是运行验证**。基目录为 C:/Users/Administrator/.dsh/profiles/node_modules/@deepseek-ai；主 SDK 取证版本为 0.2.0-rc.2。P0 要在真正执行环境重新读版本。
+以下为源码/类型核对，**不是运行验证**。基目录为 `<本机家目录>/.dsh/profiles/node_modules/@deepseek-ai`；主 SDK 取证版本为 0.2.0-rc.2。P0 要在真正执行环境重新读版本。
 
 | 契约 | 已核对内容 | 可复核文件/符号 |
 |---|---|---|
@@ -60,12 +60,12 @@
 
 v0.2 的 227/45.1% 实际对应字节数，不能当成解析器的正文字符计数。方案转向的依据为用户定位与维护成本，不要求通过长度或镜像统计证明唯一选择。
 
-已有本机克隆位置为 C:/Users/Administrator/AppData/Local/Temp/probe-kdense-1dr6ay。该路径不是长期证据依赖；其他机器可在独立临时目录取得相同 commit。
+已有本机克隆位置为 `<本机临时目录>/probe-kdense-1dr6ay`。该路径不是长期证据依赖；其他机器可在独立临时目录取得相同 commit。
 
 可复算命令（仓库 cwd；先有本次 src 对应的 lib。仅统计，不写用户库）：
 
 ~~~powershell
-$env:EXPERT_PROBE_ROOT = 'C:/Users/Administrator/AppData/Local/Temp/probe-kdense-1dr6ay/scientific-agents'
+$env:EXPERT_PROBE_ROOT = '<本机临时目录>/probe-kdense-1dr6ay/scientific-agents'
 git -C (Split-Path $env:EXPERT_PROBE_ROOT) rev-parse HEAD
 @'
 import fs from 'node:fs';
@@ -114,7 +114,7 @@ console.log(JSON.stringify(counts));
 
 | 阶段 | 状态 | 证据/实际结果 |
 |---|---|---|
-| P0 目标执行环境重新核对 | 未执行 | 本轮只核对了本机设计环境 |
+| P0 目标执行环境重新核对 | ✅ 2026-10-05 已执行 | 见 §7；HEAD 50d85b9、SDK 0.2.0-rc.2、依赖的公开接口全部存在。原状态“未执行（本轮只核对了本机设计环境）”保留于此 |
 | P1–P5 生成与安装主链 | 未实现 | 无产品运行结果 |
 | P6–P7 专家调用主链 | 未实现 | 无产品运行结果 |
 | P8 客户端界面 | 未实现 | 无浏览器结果 |
@@ -137,3 +137,48 @@ node scripts/dev-verify.mjs --url http://127.0.0.1:3080 --profile web --profile-
 dry-run 通过、目标不等于当前实例且任务已有测试实例授权后，用相同实参去掉 --dry-run。套件 expert.mjs 必须先创建并登记 required/active；缺文件不能静默跳过。
 
 真实 LLM 验证费用、模型选择和环境按测试实例现有配置；不要为了得到绿色结果换成假 provider 或伪造模型响应。
+
+## 7. P0 施工基线记录（2026-10-05 执行）
+
+执行任务：ed644638-f9a0-45cf-a32f-90df7d060dda「工作台专家功能实现和优化」（用户要求执行阶段 1–3，P0 为前置基线）。
+
+### 7.1 目标执行环境事实（命令退出码均为 0）
+
+| 项 | 实测值 | 复核命令 |
+|---|---|---|
+| git HEAD | `50d85b9aeffee3a23929e32ddb44567a82e89e61` | `git rev-parse HEAD` |
+| package | `@dely0/dsh-personal-workbench` **1.16.4**（工作树内为未提交的版本号提升；HEAD 内为 1.16.3） | `git diff package.json` |
+| schema | `SCHEMA_VERSION = 19`（`src/db/schema.ts:7`） | `node --test test/db.test.mjs` 属后续批次 |
+| host inject | `['webServer', 'systemPrompt', 'tools', 'commands']`（`src/index.ts:47`） | 源码 |
+| client inject | `['sessions', 'workspaces', 'connection', 'slots', 'layout']`（`src/client/capabilities.ts:35`） | `test/capabilities.test.mjs` |
+| 基线 typecheck | `pnpm typecheck` → 退出码 0（node v24.19.0 / pnpm 11.7.0） | 已执行 |
+
+工作树内另有**用户未提交改动**：`README.md`、`docs/design/2026-10-03-专家市场-调研.md`、`package.json`（版本号 1.16.3→1.16.4）、未跟踪 `docs/releases/v1.16.4.md`、未跟踪 `docs/design/20261003-工作台专家功能调研.txt`、未跟踪 `scripts/lib/_p2_left_body.txt`。这些不属于本任务施工成果，各批提交只显式指定本批文件。
+
+### 7.2 真实 SDK 契约核对（0.2.0-rc.2，基目录 `<本机家目录>/.dsh/profiles/node_modules/@deepseek-ai`）
+
+**结论：方案 v0.3 依赖的公开接口在本机目标环境全部存在，与 §2 设计取证版本一致，无差异需要记录，P1–P3 不因契约缺失而停止。**
+
+| 契约 | 实测符号（文件） | 结论 |
+|---|---|---|
+| 新建会话 | `create(opts?: { workspaceId?; cwd?; sessionId? }): Promise<SessionId>`（`dsh-api-session-controller/lib/types/client/sessions/service.d.ts:179`；契约声明 `.../contract/sessions.d.ts:80`） | ✅ 不传旧 sessionId |
+| subagents | `list(): string[]`、`getProvider(name): SubagentProvider \| undefined`、`start(name, request): Promise<SubagentRun>`（`dsh-subagent/lib/types/index.d.ts:282/287/300`） | ✅ |
+| spawn provider | `depthLimit: true`、`toolFilter: true`、`persona: true`、`inheritsParentContext = false`、providerName 缺省 `spawn`（`dsh-subagent-spawn-in-process/lib/index.js`） | ✅ 四个能力位齐 |
+| run | `SubagentRun.localAgent: Agent \| undefined`、`dispose(): Promise<void>`（`dsh-subagent/lib/types/types.d.ts:304/317`） | ✅ |
+| 深度 | `delegationDepthOf(agent): number` 由 `dsh-subagent/lib/types/index.d.ts` 公开导出（实现 `.../types/depth.d.ts`） | ✅ 按官方语义，不猜 header 字段 |
+| skills provider | `registerProvider(create: (control: SkillProviderControl) => SkillProvider): () => void`（`dsh-skill/lib/types/index.d.ts:247`）、`SkillProviderControl.invalidate`（同文件 :192） | ✅ |
+| candidate | `SkillCandidate.rank`（:65）、`SkillCandidate.resourceBase: SkillResourceBase`（:60） | ✅ rank 600 / resourceBase 可用 |
+| scope helper | `scopeOf(ctx: Context): ScopeKey \| undefined`（`dsh-scope/lib/index.js:312`，`lib/types/index.d.ts:84`） | ✅ `dsh-scope@0.2.0-rc.2` 已装盘 |
+| @ 引用源 | `InputTriggerSource.onPick(pick): PickOutcome`（同步）、`ReferenceCodec.clipboardText(ref): string`、`serialize(ref, signal): Promise<string>`（`dsh-client-ui-input-trigger/lib/types/types.d.ts:161/124/126`） | ✅ 同步 pick + 异步 serialize |
+| 引用插入 | `ReferenceInsert` 由 `@deepseek-ai/dsh-client-ui-conversation/client` 再导出（`dsh-client-ui-input-trigger/lib/types/types.d.ts:11,14`） | ✅ 形状照 §8.3 |
+
+### 7.3 本批新增的产品事实与约束
+
+- **本项目 devDependencies 里没有** `dsh-skill` / `dsh-subagent` / `dsh-scope` / 客户端 UI 包（只有 cordis、dsh-commands、dsh-host-webserver、dsh-llm、dsh-system-prompt、dsh-tools）。因此 P4/P6/P7 的适配层**只能按结构化 Probe 接口写形状探测**，不能 `import` 宿主 runtime；`@deepseek-ai/dsh-scope` 的开发依赖按 P4 计划再加。
+- 客户端 `sessions.create` 与宿主 controller 的 `create` 是两层同名接口，形状一致（`workspaceId` / `cwd` / `sessionId` 全可选），P8 的 `WorkbenchRuntime.sessions` 可选方法形状按此声明。
+
+### 7.4 未验证项（如实标注，不填通过）
+
+- 本批**没有**运行任何真实宿主服务调用（未注册 provider、未起子代理、未建生成会话）；仅为**源码/类型契约核对**，不是运行验证。
+- `connectWorkspace` 的 `reuseOrCreateBlank` 行为沿用设计取证结论（`dsh-client-ui-workspace/lib/client.js`），本批未复跑。
+- AX-E01–E62 仍全部**未做产品验收**。

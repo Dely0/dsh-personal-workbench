@@ -57,6 +57,6 @@ PlanPanel 页脚「清除」（src/client/components/PlanPanel.tsx:382）
 
 - `node --test test/dayPanelWiring.test.mjs`：**7/7 绿**（含新增那条）。
 - `pnpm test`（先 build 再全量 `node --test test/*.test.mjs`）：**994 条，993 通过 / 1 失败**。唯一失败是 `test/db.test.mjs` 的 "db migrations, dictionaries and task tree"：
-  `Error: EPERM, Permission denied: \\?\C:\Users\...\Temp\dsh-personal-workbench-db-*`，抛在 `finally` 的 `removeTempDir`（`test/db.test.mjs:32-42` 已有 10 次重试），**所有断言都已跑过**——这正是该文件第 26-30 行注释里写明的"Windows 清理期假失败"。该文件不 import 任何客户端 hook，**隔离单跑同样复现**，与本次改动无关。
+  `Error: EPERM, Permission denied: \\?\<临时目录>\dsh-personal-workbench-db-*`，抛在 `finally` 的 `removeTempDir`（`test/db.test.mjs:32-42` 已有 10 次重试），**所有断言都已跑过**——这正是该文件第 26-30 行注释里写明的"Windows 清理期假失败"。该文件不 import 任何客户端 hook，**隔离单跑同样复现**，与本次改动无关。
 - 本轮**没有**做真浏览器实测：缺陷形态是"数据已删、界面陈旧"，修复是补一次与另外三条写入口同构的既有 `refresh()` 调用，界面层证据由源码扫描判据 + 变异探针承担。
 - 未顺带修 `removeTempDir` 的重试耗尽问题（属测试脚手架，另开一次改动）。
