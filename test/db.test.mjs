@@ -23,21 +23,23 @@ import {
  *
  * 现象（本机实测，且已用 `git checkout` 回到未改动源码复现过同一现象）：`mkdtempSync` 建目录
  * → `openWorkbenchDb` 在里面建 WAL 库 → `db.close()` → 立刻 `rmSync`，偶发
- * `EPERM: Permission denied`（目录本身删不掉）。**所有断言其实都跑过了**，失败只发生在
- * `finally` 的清理里 —— 属于清理期假失败，与产品代码无关。
+ * `EPERM: Permission denied`（目录本身删不掉）。
  *
- * 为什么不"忽略失败"：忽略会让临时目录越积越多；重试则在句柄释放后自然成功，
- * 次数用尽仍失败就照旧抛（不吞异常）。
+ * ⚠️ **2026-10-05 修正：这里不再抛错。** 以前用尽重试就 `throw`，而这个函数是在 `finally` 里调的，
+ * 于是清理期的 EPERM 会**顶替**掉真正的断言失败（JS 语义：`finally` 抛出的异常取代 `try` 里的异常）。
+ * 后果很严重：`test/db.test.mjs` 里那条排期断言从 2026-10-01 起一直失败，在 Linux CI 上如实报红，
+ * 在本机（Windows）却被读成"清理期假失败、所有断言其实都跑过了" —— 仓库里 4 份 release notes
+ * 也就是这么写错的（实际那些断言根本没跑到）。
+ *
+ * 现在的口径：**断言结论永远优先**。清理交给 `rmSync` 自带的 `maxRetries`（对 EBUSY/EPERM/ENOTEMPTY
+ * 按 `retryDelay` 线性退避），仍失败就打一条带路径的 `console.warn`（临时目录残留可从日志追），
+ * 但绝不把一次断言失败盖掉。
  */
 function removeTempDir(dir) {
-  for (let attempt = 0; ; attempt += 1) {
-    try {
-      rmSync(dir, { recursive: true, force: true })
-      return
-    } catch (error) {
-      if (attempt >= 9) throw error
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50)
-    }
+  try {
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
+  } catch (error) {
+    console.warn(`[test] 临时目录清理失败（不影响断言结论）：${dir} :: ${error.code ?? error.message}`)
   }
 }
 
