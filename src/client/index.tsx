@@ -721,7 +721,13 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   )
 }
 
+let styleHealArmed = false
+
 function ensureStyle(): void {
+  if (!styleHealArmed) {
+    styleHealArmed = true
+    new MutationObserver(() => ensureStyle()).observe(document.head, { childList: true })
+  }
   if (document.querySelector('style[data-dsh-personal-workbench-style]') !== null) return
   const style = document.createElement('style')
   style.dataset.dshPersonalWorkbenchStyle = ''
