@@ -186,8 +186,34 @@ try {
     await sleep(500)
   }
 
+  /**
+   * 把页签里的**折叠父行全部展开**再数行。
+   *
+   * 为什么必须有：计数判据比的是"成员行数 == 页签徽标"，而树里嵌套成员在折叠状态下**根本不渲染**
+   * （只画根行）。2026-10-05 实测：真实数据是深树，未排期 12 个成员只有 1 个根行可见 → 判据假红。
+   * 用**真实鼠标点击**（先 scrollIntoView 再量坐标），不用 `el.click()`；一次只展开一个，
+   * 因为展开会让后面的行位移、坐标失效。
+   */
+  const expandAllRows = async () => {
+    for (let round = 0; round < 40; round += 1) {
+      const box = await browser.evaluate(`
+        for (const btn of document.querySelectorAll('[data-day-tree] .wb-row button')) {
+          if ((btn.textContent || '').trim() !== '▶') continue;
+          btn.scrollIntoView({ block: 'center' });
+          const r = btn.getBoundingClientRect();
+          return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+        }
+        return null;
+      `)
+      if (box === null || box === undefined) return
+      await browser.clickAt(box.x, box.y)
+      await sleep(250)
+    }
+  }
+
   for (const [label, key, shot] of [['逾期', 'overdue', '04-逾期页签.png'], ['未排期', 'unscheduled', '05-未排期页签.png']]) {
     await clickTab(label)
+    await expandAllRows()
     const state = await readTabState()
     report[`${key}Tab`] = state
     const badge = state.tabs.find((t) => t.label === label)?.count ?? -1
