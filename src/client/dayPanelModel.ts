@@ -158,19 +158,16 @@ export function useDayPanelModel(input: DayPanelModelInput): DayPanelModel {
     [tasks, plannedIds, planOrder],
   )
   /**
-   * 「计划」页签的**分组行**判据必须用 `planItemIds`（真计划项），不能用 `plannedIds`
-   * —— 后者含"子树全排完"的父任务（它按 `dayPlaced` 算已安排，但**不是计划项**、
-   * 不计投入，要用分组行画出来）。
-   */
-  const planItemIds = useMemo(() => new Set((plan?.items ?? []).map((item) => item.taskId)), [plan])
-  /**
-   * `contextIdsOf(tree, isMember)` 的第二个参数是**成员判定**（它把"不是成员"的行当上下文）。
-   * ⚠️ 2026-10-05 实测踩到过：这里曾传成 `!planItemIds.has(...)`（否定式），结果**计划项自己**
-   * 被标成上下文行 —— 用户看到「子任务反而显示成灰行」。成员判定必须传正向的 `planItemIds.has`。
+   * 「计划」页签的**上下文行**（父/祖先链）—— **只用于计数**，不再用于灰化（2026-10-05 用户拍板：
+   * 计划页签的灰行太丑，关掉）。
+   *
+   * ⚠️ 成员判定必须传 `plannedIds`（**计划树成员**：计划项 + 当日到期 + 进行中），不能传
+   * "真计划项"那个集合 —— 后者会把"进行中/今天到期但不是计划项"的**单任务**也当成上下文行，
+   * 于是它们被灰化、也不计入计划条数（2026-10-05 实测被用户抓到）。
    */
   const planContextIds = useMemo(
-    () => contextIdsOf(planTree, (task) => planItemIds.has(task.id)),
-    [planTree, planItemIds],
+    () => contextIdsOf(planTree, (task) => plannedIds.has(task.id)),
+    [planTree, plannedIds],
   )
   const groupSummaries = useMemo(
     () => planGroupSummaries(tasks, (plan?.items ?? []).map((item) => ({ taskId: item.taskId, minutes: item.minutes }))),

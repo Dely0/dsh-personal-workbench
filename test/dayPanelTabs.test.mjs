@@ -389,13 +389,13 @@ test('ADR0010：分组行渲染合计文案 + 灰化 + 不计入计划条数 + �
     groupSummaryOf: (taskId) => (taskId === 'container' ? '已排 1 / 共 2 个子任务 · 合计 30 分钟' : null),
   })
   assert.ok(html.includes('data-group-summary="已排 1 / 共 2 个子任务 · 合计 30 分钟"'), '分组行必须写出合计')
-  assert.match(html, /wb-row-context/, '分组行要灰化（与「已完成」页签同一条规矩）')
   /**
-   * 2026-10-05 实测踩到过：`contextIdsOf` 的成员判定传成否定式 → **计划项（叶子）反而被灰化**，
-   * 用户看到"子任务显示成灰行"。这两条把方向钉住：灰行与合计**只准出现在分组行**上。
+   * 2026-10-05 用户拍板：**计划页签关掉灰行**（分组行与进行中的单任务都被灰成一片，太丑）。
+   * 合计与计数保留：合计只画在分组行上、条数只数计划树成员。
    */
-  assert.equal((html.match(/wb-row-context/g) ?? []).length, 1, '只有分组行灰化；叶子（真计划项）不许灰')
+  assert.equal((html.match(/wb-row-context/g) ?? []).length, 0,
+    '计划页签不许出现灰行（即使父级传了 planContextIds，也只用于计数）')
   assert.equal((html.match(/data-group-summary=/g) ?? []).length, 1, '合计只画在分组行上；叶子不许带"已排 1 / 共 1"这种噪声')
-  assert.equal(/class="count">1</.test(html), true, '计划条数只数真计划项（分组行不算）')
+  assert.equal(/class="count">1</.test(html), true, '计划条数只数计划树成员（分组行/祖先链不算）')
   assert.equal(html.includes('wb-schedule'), false, '「计划」页签本来就不该有「排入今日」按钮')
 })

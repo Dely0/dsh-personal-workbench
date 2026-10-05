@@ -150,9 +150,14 @@ export function DayPanel(props: DayPanelProps): JSX.Element {
     : activeTab === 'overdue'
       ? overdueTree
       : activeTab === 'unscheduled' ? unscheduledTree : doneTree
+  /**
+   * 灰化只保留在「已完成 / 逾期 / 未排期」三个页签（既有规矩）。
+   * **「计划」页签不再灰化**（2026-10-05 用户拍板关掉：分组行与进行中的任务被灰成一片，太丑）；
+   * `planContextIds` 仍参与**计数**（分组行/祖先链不算计划项），见上面的 `countMembers`。
+   */
   const contextIds = activeTab === 'done'
     ? doneContextIds
-    : activeTab === 'overdue' ? overdueContextIds : activeTab === 'unscheduled' ? unscheduledContextIds : activeTab === 'plan' ? planContextIds : undefined
+    : activeTab === 'overdue' ? overdueContextIds : activeTab === 'unscheduled' ? unscheduledContextIds : undefined
   /**
    * 行内「排入今日」只在**今天** + **逾期 / 未排期**两个页签上（那两页里的行按定义都还没排进今天，
    * 除"逾期∩计划"的事实重叠行 —— 那些由 `scheduledIds` 挡掉）。缺 `onScheduleToday` 就整列不出现。
