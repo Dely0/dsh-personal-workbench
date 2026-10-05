@@ -1328,6 +1328,10 @@ export function apply(ctx: unknown): () => void {
   /** 清理幂等标记：`disposePreviousInstance()` 与 cordis 都可能调用清理。 */
   let disposed = false
   const officialDisposers: Array<() => void> = []
+  const styleObserver = new MutationObserver(() => {
+    if (!disposed) ensureStyle()
+  })
+  styleObserver.observe(document.head, { childList: true })
 
 
   /**
@@ -1946,6 +1950,7 @@ export function apply(ctx: unknown): () => void {
   const cleanup = (): void => {
     if (disposed) return
     disposed = true
+    styleObserver.disconnect()
     instanceAlive = false
     sidebarResizeObserver?.disconnect()
     sidebarCollapseObserver?.disconnect()
