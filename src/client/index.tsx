@@ -721,13 +721,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
   )
 }
 
-let styleHealArmed = false
-
 function ensureStyle(): void {
-  if (!styleHealArmed) {
-    styleHealArmed = true
-    new MutationObserver(() => ensureStyle()).observe(document.head, { childList: true })
-  }
   if (document.querySelector('style[data-dsh-personal-workbench-style]') !== null) return
   const style = document.createElement('style')
   style.dataset.dshPersonalWorkbenchStyle = ''
@@ -1334,6 +1328,10 @@ export function apply(ctx: unknown): () => void {
   /** 清理幂等标记：`disposePreviousInstance()` 与 cordis 都可能调用清理。 */
   let disposed = false
   const officialDisposers: Array<() => void> = []
+  const styleObserver = new MutationObserver(() => {
+    if (!disposed) ensureStyle()
+  })
+  styleObserver.observe(document.head, { childList: true })
 
 
   /**
@@ -1952,6 +1950,7 @@ export function apply(ctx: unknown): () => void {
   const cleanup = (): void => {
     if (disposed) return
     disposed = true
+    styleObserver.disconnect()
     instanceAlive = false
     sidebarResizeObserver?.disconnect()
     sidebarCollapseObserver?.disconnect()
