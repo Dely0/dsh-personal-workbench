@@ -93,6 +93,7 @@ pnpm build && pnpm dev:install   # 装盘到本机 profile（装完重启 dsh we
 
 | 版本 | 要点 |
 |---|---|
+| **1.16.5** | **合入外部贡献：工作台样式节点丢失后的自愈**（[issue #9](https://github.com/Dely0/dsh-personal-workbench/issues/9) / [PR #10](https://github.com/Dely0/dsh-personal-workbench/pull/10)，[@SnowNight777](https://github.com/SnowNight777)）—— 插件活动期间 `style[data-dsh-personal-workbench-style]` 被删掉后约 **600ms** 内自动重建，关闭态面板不再"无样式弹出并覆盖界面"；观察者挂在**插件实例**上（不是模块级），`cleanup()` 先 `disposed = true` 再 `disconnect()`。同版修掉 **main 连续 33 次红的 CI**：`test/db.test.mjs` 那条"同链计划项"断言的**场景**从 2026-10-01 起就写错了、且 `finally` 里的清理异常会顶替断言失败（正是它被长期读成"Windows EPERM 假失败"的原因），CI run **#84** 双绿。详见 [`docs/releases/v1.16.5.md`](docs/releases/v1.16.5.md) |
 | **1.16.4** | **「排入今日」的父子口径定案**：计划项必须是**可执行叶子**，在**父任务**上点一次 = 按树序**展开它下面所有未完成叶子**（各自带自己的投入），父任务自己不是计划项、在「计划」页签作**分组行**（「已排 N / 共 M 个子任务 · 合计 X 分钟」）；候选池只收叶子、AI 侧口径同步「只排可执行叶子」（含父任务的提案整份被拒）。同版修掉「**清除今日计划不刷新**」与两处验收链套件假红。口径见 [`docs/adr/0010-plan-items-are-executable-leaves.md`](docs/adr/0010-plan-items-are-executable-leaves.md)，详见 [`docs/releases/v1.16.4.md`](docs/releases/v1.16.4.md) |
 | **1.16.3** | **客户端入口拆分**：`src/client/index.tsx` **5725 → 1972 行**、`WorkbenchApp` **4197 → 631 行**；117 个 state 按域收进 16 个 hook，五个视图与任务详情区各自成组件（`hooks/` + `views/` + `app/` 装配四段）；ADR-0008 结构硬门（体内 `useState`/`api`/`fetch`/定时器 = 0、单个顶层块 ≤80 行）落成扫描判据。**纯结构重构、零行为变化**。详见 [`docs/releases/v1.16.3.md`](docs/releases/v1.16.3.md) |
 | **1.16.2** | 日期面板补**「逾期」/「未排期」两个任务页签**（无截止、没排期、非进行中的任务终于有归宿，「未排期」= 补集：三页签并集恰好是全部未完成）+ 这两个页签的行内**「排入今日」**；统计卡「逾期」口径统一到**当日 00:00**（与页签同一把尺子）。详见 [`docs/releases/v1.16.2.md`](docs/releases/v1.16.2.md) |
@@ -124,7 +125,9 @@ pnpm build && pnpm dev:install   # 装盘到本机 profile（装完重启 dsh we
   [#5](https://github.com/Dely0/dsh-personal-workbench/issues/5) /
   [#7](https://github.com/Dely0/dsh-personal-workbench/issues/7) 与 PR
   [#6](https://github.com/Dely0/dsh-personal-workbench/pull/6) /
-  [#8](https://github.com/Dely0/dsh-personal-workbench/pull/8)）。
+  [#8](https://github.com/Dely0/dsh-personal-workbench/pull/8)）；**v1.16.5 的工作台样式自愈**同样来自其
+  issue [#9](https://github.com/Dely0/dsh-personal-workbench/issues/9)（含故障注入最小复现与只读状态采集脚本）
+  与 PR [#10](https://github.com/Dely0/dsh-personal-workbench/pull/10)（样式节点丢失后的自动恢复 + 生命周期清理 + 7 例回归）。
 - [@tujunwenjie](https://github.com/tujunwenjie)、[@lhmhz](https://github.com/lhmhz) —— issue 诊断报告。
 - **内置角色库**含两个 MIT 上游（`novotnyllc/dotnet-artisan`、`K-Dense-AI/scientific-agents`）的领域角色，
   完整署名与「我们改了什么」见 [`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md)。

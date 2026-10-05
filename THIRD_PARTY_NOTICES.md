@@ -156,10 +156,10 @@ client split into `src/client/components/*`), so every item was re-implemented a
 current modules — with deliberate differences, e.g. an added legacy-path compatibility rule
 for task folders, and a rewritten decompression guard in the attachment parser.
 
-## SnowNight777/dsh-personal-workbench (contributor, v1.15.3)
+## SnowNight777/dsh-personal-workbench (contributor, v1.15.3 / v1.16.5)
 
 - Contributor: https://github.com/SnowNight777
-- Reports: issues #4 / #5 / #7 · Pull requests #6 / #8
+- Reports: issues #4 / #5 / #7 / #9 · Pull requests #6 / #8 / #10
 - License: MIT (same as this project) — the changes were accepted as upstream contributions
 
 Accepted contributions (v1.15.3). These are **contributed changes, not adapted third-party
@@ -183,7 +183,29 @@ is traceable from one place:
   draft banner). When the predicate does not hold, those paths fall back to creating a new
   session or surface an explicit notice instead of failing silently.
 
-One maintainer revision on top of the contribution (`c78416e`): the last branch of
+Accepted contributions (v1.16.5):
+
+- **Workbench stylesheet recovery after removal** (issue #9, pull request #10). The workbench injects
+  a single `<style data-dsh-personal-workbench-style>` element; when that element disappeared while the
+  plugin was loaded, the panel's computed styles fell back to `position: static; display: block`, so a
+  *closed* panel was drawn on top of the interface. The contributed fix adds an instance-scoped
+  `MutationObserver` on `document.head` (`childList`) that calls `ensureStyle()` to rebuild the element,
+  and folds it into the plugin lifecycle: `cleanup()` sets `disposed = true` **before** calling
+  `styleObserver.disconnect()`, and `disposePreviousInstance()` covers the "previous instance left an
+  observer armed" path. The first revision's module-level `styleHealArmed` flag was removed by the author
+  in `049e0ae` — recovery belongs to the instance, not the module. Seven regression cases land in
+  `test/styleRecovery.test.mjs` (repeated removal restores a single node; cleanup is idempotent; pending
+  notifications cannot restore after cleanup; re-apply arms a fresh observer; a disposed module cannot
+  restore its old CSS; unrelated head changes do not duplicate CSS; previous-instance cleanup precedes
+  observer registration). The author states explicitly that the *root cause* of the natural removal was
+  never captured — this is defensive self-healing, not a root-cause fix.
+
+No maintainer revision on top of this contribution: the three original commits (`9cf7a37` / `a7d927a` /
+`049e0ae`) were merged unchanged through a real merge commit (`848ad0b`), so GitHub shows the pull request
+as merged and the author's name stays on the commits. The CI repair carried by the same release
+(`05fea07` / `7980493`, `test/db.test.mjs`) is maintainer-authored and is **not** part of this contribution.
+
+One maintainer revision on top of the v1.15.3 contribution (`c78416e`): the last branch of
 `isTargetConfigured` was tightened from `return adapter.available()` to `return false`, so users
 who never bound a delivery target keep the previous "do nothing" behaviour instead of repeatedly
 attempting and failing delivery. See [`docs/releases/v1.15.3.md`](docs/releases/v1.15.3.md) §3.

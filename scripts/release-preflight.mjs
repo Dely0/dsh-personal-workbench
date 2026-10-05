@@ -44,10 +44,16 @@ const PKG_NAME = PKG.name
  * 每加一条都要问自己：这是"与本次改动无关的历史问题"吗？有 issue 追踪吗？
  */
 const KNOWN_TEST_FAILURES = [
-  {
-    test: 'db migrations, dictionaries and task tree',
-    reason: 'Windows 清理期 rmSync EPERM（既有环境问题、与代码无关；已长期存在，不删断言）',
-  },
+  // 2026-10-05（v1.16.5）本条已销账并从名单删除 —— 它其实是**同一个问题的两半**：
+  //   ① `test/db.test.mjs` 那条"同链计划项必须被拒"的断言用的是两条**互不相关的顶层叶子**，
+  //      从 `0d95769`（2026-10-01 引入 `dailyPlanPolicy`）那一刻起就不可能触发；`4751332`
+  //      （ADR0010）只把期望文案换了一版、没换场景 ⇒ CI run #51→#83 连续 33 次红。
+  //   ② `removeTempDir` 是在 `finally` 里调的，用尽重试就 `throw`；JS 语义下 `finally` 抛出的异常
+  //      会**取代** `try` 里的异常，于是"断言失败 + 清理期 EPERM"同时发生时报出来的是 EPERM ——
+  //      这正是本机长期把它读成"Windows 清理期 EPERM 假失败、所有断言其实都跑过了"的原因。
+  // 两半都已修（`05fea07` + `7980493`），CI run #84 双绿，Windows 本机同口径 1016/0。
+  // 名单空着是**正常状态**：双向断言要求"登记为已知失败的用例这次必须是红的"，
+  // 还清了就必须删掉，否则门禁会红（见 `scripts/lib/releasePreflight.mjs` 的 `judgeTests`）。
 ]
 
 /**
