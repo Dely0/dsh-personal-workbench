@@ -6,9 +6,21 @@ whenToUse: 本轮要动 public 版本号、要给仓库打 tag、要 `npm publis
 
 # DSH 插件公开发布（硬门禁）
 
-> 版本：**V1.3.0（2026-10-02）**。V1.0.0 的条目全部来自真实发布里**实际犯过的错**（一次发了
+> 版本：**V1.4.0（2026-10-05）**。V1.0.0 的条目全部来自真实发布里**实际犯过的错**（一次发了
 > 1.15.2 / 1.15.3 / 1.15.4 三个版本）；V1.1.0 并入团队记忆里的发布教训；V1.2.0 并入 v1.16.1 这一版
-> 的真实翻车；**V1.3.0 把门禁从"文档里的步骤"变成"一条可执行的命令"**（见下）。
+> 的真实翻车；V1.3.0 把门禁从"文档里的步骤"变成"一条可执行的命令"；
+> **V1.4.0 用 v1.16.5 的实测把「npm 只 stage、不发布」写死成判据**（见下）。
+>
+> **V1.4.0 改了什么、为什么**（全部来自 2026-10-05 发 v1.16.5 的真实发布）：
+>
+> | 改动 | 触发它的真实事故 |
+> |---|---|
+> | §5/§7 明确：**发布这一步只能走"会话身份 + 交互式 2FA"**，bypass-2FA 令牌只用做只读核对 | `pnpm publish`（令牌）退出码 0、还打印 `✅ Published package`，registry 上却版本 404、tarball 404、`latest` 纹丝不动 |
+> | §7 的骗人信号表补上 **`✅ Published package`** 这句输出 | 同上；而且这次是 **`pnpm`** 打的（不只是 `npm`） |
+> | §7 的"中间态"补第二种形状（版本端点也可能 **404**）与 **409 的真实文案** | 重发拿到 `409 Cannot publish over previously staged version "1.16.5"`；而 `GET /<pkg>/1.16.5` 自始至终是 404 |
+> | §7 新增**"成功伪装成失败"**的字符串 `You cannot publish over the previously published versions: <ver>` | v1.16.5 落地时那次交互式 `npm publish` 报的就是它，差点被记成发布失败 |
+> | §7 明确**哈希口径**：要比的是 **registry 下回来的那份 tarball** | 本地 `8c3c10f7…` vs registry `130d4e7b…`，看着像事故；实为包内 `package.json` 少了 `packageManager`/`prepare`（历年发布形态），代码文件 SHA256 与 `buildId` 完全一致 |
+> | §11 更正 `npm stage list` 的表现：不止 `E401`，也可能是 **200 但空** | 会话身份与 bypass 令牌**都查到空列表** ⇒ 没有 stage-id ⇒ "去 approve 一下"这条退路不存在 |
 >
 > **V1.3.0 改了什么、为什么**：
 >
@@ -233,6 +245,11 @@ Remove-Item $tmp -Force; Remove-Item Env:\NPM_CONFIG_USERCONFIG
 
 **硬要求**：token 只放仓库外、**绝不 echo**、用完即删；发布后确认仓库内无 `.npmrc`。
 
+> ⚠️ **2026-10-05 起：`npm publish` 这一条链走的是「会话身份 + 交互式 2FA」，不是令牌。**
+> bypass-2FA 令牌**已经发不出去了**（只会 stage，见 §11）—— 上表里 npm 令牌那条现在只用于
+> `npm whoami` / `npm view` / 直连 registry 这类**只读核对**。发布时**不要**设 `NPM_CONFIG_USERCONFIG`（那会把身份切成令牌），
+> 直接在用户自己的终端里 `npm publish --access public` 并输入 2FA 验证码；AI 不得索要 OTP。
+
 ## 第 6 条：本机网络现实（会伪装成 git / npm 故障）
 
 - `github.com:443` **直连不通**，必须给**那一条命令**临时加：
@@ -267,22 +284,42 @@ curl.exe -sSL -o x.tgz $m.dist.tarball
 npm i <pkg> --cache <全新临时目录>            # 必须成功
 ```
 
-**三个会骗人的信号**（v1.16.1 实测）：
+**⚠️ 哈希要比"哪一份"**：上面的 sha1 必须哈希 **`$m.dist.tarball` 下回来的那一份**，
+**不是**本地 `npm publish` 打在 `Tarball Details: shasum:` 的那个值 —— 两者不同**不代表内容不同**。
+v1.16.5 实测：本地算 `8c3c10f74d0d7bb32c4df82d19f26a1932e6d2cf`、registry 是 `130d4e7b7a17c316666bfc1b169c16021137ac45`，
+而包内 `lib/**`（240 个文件）、`cordis.patch.yml`、`README.md`、`THIRD_PARTY_NOTICES.md` 与本地构建
+**SHA256 逐一相同**、`lib/build-info.json` 的 `buildId` 也一致 —— 差异只来自包内 `package.json` 少了
+`packageManager` / `prepare`（本仓历来的发布形态，1.16.2 / 1.16.3 / 1.16.4 同样如此）。
+要回答"上线的是不是我构建的那份"，用**逐文件哈希 + buildId**，别用 tarball 字节哈希。
+
+**三个会骗人的信号**（v1.16.1 实测，v1.16.5 补一行）：
 
 | 信号 | 真相 |
 |---|---|
 | `pnpm publish` 退出码 0 | 只说明**客户端**没报错；传输中断时它也返回非 0，但**超时后服务端可能已留下中间态** |
+| **`✅ Published package` 这行输出**（`pnpm` 与 `npm` 都会打；v1.16.5 是 `pnpm` 打的） | 只说明**那次 PUT 没抛错**。npm 2026 的 staged publishing 下，不带 2FA 的提交会**进暂存区**而不是公开：v1.16.5 打了这句，registry 上版本端点仍是 404、tarball 404、`latest` 还是上一版 |
 | npm **网页**对维护者显示 **"Published"** + `Current Tags: <ver> = latest` | 中间态也会这样显示。**只有 tarball 能下载才算数** |
 | `npm view <pkg>@<ver>` / `npm i` 报 `E404` / `notarget` | 可能命中**本地 npm 缓存**；同一时刻 `curl` 直连原站可能已经最新。**用 `curl` 直连裁决** |
 
-**中间态长什么样、怎么办**：
+**中间态长什么样、怎么办**（v1.16.5 实测补全）：
 
-- 症状：`GET /<pkg>/<ver>` 返回 **200**（元数据在），而 `…-<ver>.tgz` 返回 **404**；
-  packument 里 `versions` 尚不含它、`dist-tags.latest` 还没动。
+- 症状（两种形状都见过）：
+  - **形状 A**（v1.16.1）：`GET /<pkg>/<ver>` 返回 **200**（元数据在），而 `…-<ver>.tgz` 返回 **404**；
+  - **形状 B**（v1.16.5）：`GET /<pkg>/<ver>` **也是 404**（`"version not found"`）、tarball 404，
+    而其余一切正常：packument 里 `versions` 不含它、`dist-tags.latest` 没动。
+  - 两种形状的共同点：**`dist-tags.latest` 没动**。先查它，一眼分辨"发了"还是"没发"。
+  - ⚠️ 别被 CDN 缓存骗到：加 `?cb=<随机>` + `Cache-Control: no-cache` 再查，看到 `CF-Cache-Status: MISS`
+    且 `Last-Modified` 早于本次发布 ⇒ origin 真的没变。
 - 重发会得到 `409 Cannot publish over previously staged version "x.y.z"`（措辞会变，**别按字面理解成"进了暂存区等人批准"**）：
-  此时 `npm stage list` 往往是**空的**（没有 stage-id 可 `approve/reject`）。
-- **解法**：在**正确目录**用**会话身份**（`npm login`，2FA）**重发一次**让提交完成；
-  其后 tarball 还可能有**数分钟到十几分钟的边缘传播延迟**，退避重试即可。
+  此时 `npm stage list` 往往是**空的** —— v1.16.5 实测**两种身份都是空**（会话身份这次不报 `E401`，
+  而是 `200` + `[]`；端点就是 `GET /-/stage?page=0&perPage=100&package=…`），
+  即**根本没有 stage-id 可 `approve/reject`**，"去 approve 一下"这条退路不存在。
+- **解法**（v1.16.5 就是这样落地的）：在**正确目录**用**会话身份**（`npm login`，2FA）
+  **交互式**重发一次 `npm publish --access public`（用 `npm`，不要用带 bypass 令牌的 `pnpm`），
+  让那次暂存提交**补完**；其后 tarball 还可能有**数分钟到十几分钟的边缘传播延迟**，退避重试即可。
+  v1.16.5 的实际落地时间是 `12:51:57Z`，**早于**命令自己报错的时间 —— 别用"命令返回了什么"推断服务端状态。
+- 🔎 **会伪装成失败的字符串**：`npm error You cannot publish over the previously published versions: <ver>.`
+  —— 它意味着 registry **认为该版本已在册**（客户端的前置检查）。看到它先查 `latest` 与 tarball，很可能已经成功了。
 - 仍不行的兜底：换一个版本号发（npm 文档明确"有 staged 待批准时仍可正常发布其他版本"），
   或找 npm support 释放该版本号（用户侧无自助入口）。
 
@@ -335,17 +372,22 @@ npm i <pkg> --cache <全新临时目录>            # 必须成功
 
 ## 第 11 条：npm 平台变更（2026，会以"莫名其妙的报错"形式出现）
 
-- **bypass-2FA 粒度令牌（GAT）正在被剥夺直接发布能力**：账户/包管理类操作 **2026-08 已要求交互式 2FA**；
-  **直接发布预计 2027-01 取消**，之后它只能"读私有包 + stage 一次发布"。
-  用到这种 token 时 npm 会打一条 deprecation notice
-  （<https://gh.io/npm-gat-bypass2fa-deprecation>）。
+- **bypass-2FA 粒度令牌（GAT）已不能直接发布**（v1.16.5 的 2026-10-05 实测，不再是"预告"）：
+  账户/包管理类操作 2026-08 起已要求交互式 2FA；用它跑 `pnpm publish` **退出码 0、还会打印
+  `✅ Published package`，实际只把版本送进暂存区**。npm 自己会打一条 deprecation notice
+  （<https://gh.io/npm-gat-bypass2fa-deprecation>）—— **看到这条通告就别再指望这个令牌能把包发出去**。
+  现在的分工：**发布交给人（会话身份 + 交互式 2FA）**，令牌只用来做只读核对。
 - **staged publishing**：token 执行 `npm stage publish`（不需要 2FA）→ 维护者
   `npm stage list` 拿 stage-id → `npm stage approve <id>`（**需要 2FA**）才真正公开。
   规则：staged 版本与已发布版本**共用同一个 semver 唯一索引**；tag 是 stage 的不可变属性。
   文档：<https://docs.npmjs.com/staged-publishing>、<https://docs.npmjs.com/cli/v12/commands/npm-stage/>
-- **`npm stage list` 用 bypass-2FA token 会报 `E401 /-/stage`** —— 排查要切 `npm login` 的**会话身份**。
+- ⚠️ **但别指望 `stage list` 一定给你 stage-id**：v1.16.3 那次报 **`E401 /-/stage`**；
+  v1.16.5 这次**两种身份都是 `200` + 空列表**（端点 `GET /-/stage?page=0&perPage=100&package=…`）
+  ⇒ 没有 id 可 approve。**能救回这个版本号的只有"交互式重发一次"**（§7 中间态的解法）。
 - **长远方向**：把自动化发布迁到 [trusted publishing (OIDC)](https://docs.npmjs.com/trusted-publishers)。
-- **团队记忆里的对应条目**：`01M3W3ZXQD5FVEBVWW3EAVCZTA`（判据与中间态）、
+- **团队记忆里的对应条目**：`01M461R901F3J97W3R0194YJ1Y`（v1.16.5：`✅ Published package` 是假的、
+  409 文案、stage list 空、以及"已在册"那句伪装成失败的话）、`01M42QXX61GHWGQHT8WX9V6FTT`（v1.16.3 同源）、
+  `01M3W3ZXQD5FVEBVWW3EAVCZTA`（判据与中间态）、
   `01M3EY1JEP5CQTQ6DP682DR0BV`（packument 先到、tarball 滞后）、
   `01M3W4WJQHYBKYD1TCZ8G8BKDT`（变异探针的 `lib/` 污染假红）。
 
@@ -360,8 +402,9 @@ npm i <pkg> --cache <全新临时目录>            # 必须成功
 6. README 版本历史 + 致谢 + `THIRD_PARTY_NOTICES` + `docs/releases/v<ver>.md` 都写完了吗？
 7. PII：`check-pii.mjs` 两个面都扫了吗？命中逐条判断过了吗？（第 4 条）
 8. tag 打了**并推了**吗？
-9. **发布命令单独执行、代理已清？**（第 6 条）
-   publish 之后：**tarball 200 且 `sha1 == dist.shasum`**、拿到包哈希了吗？（第 7 条）
+9. **发布命令单独执行、代理已清？用「会话身份 + 交互式 2FA」发的吗？**（第 5、6 条 —— bypass 令牌现在只会 stage）
+   publish 之后：**tarball 200 且 `sha1 == dist.shasum`**（哈希的是 **registry 下回来的那份**）、
+   拿到包哈希了吗？**`✅ Published package` 不算成功**（第 7 条）
 10. **Release 建了吗**（不是只推 tag）、Title **只写版本号**、`releases/latest` 指向它？
 11. `npm pack` 拉回真实产物复核过？**用户视角 `npm i`（全新缓存）装得上？**
     profile 要不要切、要不要让用户重启？
@@ -371,7 +414,8 @@ npm i <pkg> --cache <全新临时目录>            # 必须成功
 - 本机 DSH 环境事实与装盘门禁：`dsh-safe-plugin-ops`（用户级 skill，`~/.dsh/skills/dsh-safe-plugin-ops/`；本项目内没有副本）
 - 建 Release 的脚本（Title 硬校验、UTF-8 正文、凭据回退、`latest` 复核）：
   [`scripts/new-github-release.ps1`](../../../scripts/new-github-release.ps1)（**用 `pwsh -File` 调**）
-  —— 本仓库只有**这一份**，不要再往 skill 目录里放副本。
+  —— 本仓库只有**这一份**，不要再往 skill 目录里放副本（跨项目用的那份在私有工具库
+  `Dely0/dsh-private-toolkit` 的 `skills/dsh-release/scripts/` 下，与这份各自独立、都在用）。
 - 项目级编码规范与回归防线：[`dsh-plugin-change`](../dsh-plugin-change/SKILL.md)
 - 发版前自检清单（清单化版本、含 §7 判据）：[`docs/release-checklist.md`](../../../docs/release-checklist.md)
 - 变异探针待修清单：[`docs/issues/2026-10-01-mutation-probe-maintenance.md`](../../../docs/issues/2026-10-01-mutation-probe-maintenance.md)
