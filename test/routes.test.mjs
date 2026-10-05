@@ -165,7 +165,10 @@ test('manual plan editing PUT saves added task instead of returning not found', 
     const expandPost = await request('POST', `/api/workbench/plans/${planDate}/items`, { taskId: proj.id })
     assert.equal(expandPost.status, 200)
     assert.equal(expandPost.body.added, true)
-    assert.deepEqual(expandPost.body.addedTaskIds, [projA.id, projB.id], '回执要如实给出展开了哪几条（按树序）')
+    assert.equal(expandPost.body.addedTaskIds.length, 2, '回执要如实给出展开了哪几条（两条叶子）')
+    assert.deepEqual([...expandPost.body.addedTaskIds].sort(), [projA.id, projB.id].sort(),
+      '两条叶子都必须出现在回执里 —— 这里不比顺序：createTask 三次调用的 createdAt 可能落在同一毫秒，' +
+      '此时同级顺序由 id（UUID）决定，比顺序会变成随机的假红；树序本身由 test/dailyPlanPolicy.test.mjs 的纯函数判据（显式 createdAt）覆盖')
     const planAfter = await request('GET', `/api/workbench/plans?date=${planDate}`)
     const idsAfter = planAfter.body.plan.items.map((item) => item.taskId)
     assert.ok(idsAfter.includes(projA.id) && idsAfter.includes(projB.id), '父任务下的叶子都进了计划')
