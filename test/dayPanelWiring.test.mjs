@@ -149,3 +149,16 @@ test('ADR0010: AI 侧四处口径都只说「只能排可执行叶子」，不�
   assert.match(files['src/tools.ts'], /整份拒绝/, '工具描述要写明代价：非叶子提案会被整份拒绝')
   assert.match(files['src/client/dailyPlanPrompt.ts'], /整份拒绝/, '提示词构造器同样要说清代价')
 })
+
+/**
+ * 2026-10-05 实测踩到：`contextIdsOf(tree, isMember)` 的第二个参数是**成员判定**，它把"不是成员"
+ * 的行当上下文。计划页签这里曾传成否定式 `!planItemIds.has(...)` → **计划项（叶子）自己反被灰化**，
+ * 用户看到「子任务显示成灰行」。这条扫描把方向钉住（组件/装配层都不许再出现否定式）。
+ */
+test('ADR0010: 计划页签的上下文行判定必须传正向成员（否定式会把计划项自己灰掉）', () => {
+  const model = read('src/client/dayPanelModel.ts')
+  assert.match(model, /contextIdsOf\(planTree, \(task\) => planItemIds\.has\(task\.id\)\)/,
+    '必须传正向 `planItemIds.has(task.id)`：传否定式会让真计划项反被标成上下文行（灰化）')
+  assert.equal(/contextIdsOf\(planTree, \(task\) => !/.test(model), false,
+    '不许再用否定式成员判定（2026-10-05 实测的用户可见缺陷）')
+})

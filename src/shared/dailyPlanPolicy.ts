@@ -397,10 +397,13 @@ export function planGroupSummaries(
     itemMinutes.set(item.taskId, typeof item.minutes === 'number' && Number.isFinite(item.minutes) ? item.minutes : 0)
   }
 
-  const summaries = new Map<string, PlanGroupSummary>()
+  /** 递归用的备忘（**会包含叶子**）；对外只暴露非叶子任务，见下面的 `out`。 */
+  const memo = new Map<string, PlanGroupSummary>()
+  /** 对外的分组行合计：只放非叶子任务。 */
+  const out = new Map<string, PlanGroupSummary>()
   const visiting = new Set<string>()
   const summaryOf = (id: string): PlanGroupSummary => {
-    const cached = summaries.get(id)
+    const cached = memo.get(id)
     if (cached !== undefined) return cached
     if (visiting.has(id)) return { totalLeaves: 0, plannedLeaves: 0, plannedMinutes: 0 } // 成环：不死循环
     visiting.add(id)
@@ -424,15 +427,20 @@ export function planGroupSummaries(
     }
     visiting.delete(id)
     const summary = { totalLeaves, plannedLeaves, plannedMinutes: minutes }
-    summaries.set(id, summary)
+    memo.set(id, summary)
     return summary
   }
 
+  /**
+   * 只给**非叶子任务**产出条目。2026-10-05 实测踩到过反过来：递归会把叶子也记进备忘里，
+   * 于是叶子行也被画上「已排 1 / 共 1 个子任务 · 合计 30 分钟」—— 那是噪声（叶子自己就是计划项，
+   * 它旁边已经有投入分钟）。
+   */
   for (const task of walk.byId.values()) {
     if (!isOpenRef(task)) continue
-    if (hasOpenChild(walk, task.id)) summaryOf(task.id) // 只有非叶子任务需要分组行
+    if (hasOpenChild(walk, task.id)) out.set(task.id, summaryOf(task.id))
   }
-  return summaries
+  return out
 }
 
 /** 分组行文案（**唯一实现**）：`已排 2 / 共 5 个子任务 · 合计 60 分钟`。 */

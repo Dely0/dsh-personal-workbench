@@ -540,6 +540,7 @@ test('ADR0010：分组行合计只给非叶子任务，算「已排 N / 共 M �
 
   const partial = planGroupSummaries(tasks, [{ taskId: 'a', minutes: 25 }])
   assert.deepEqual(partial.get('parent'), { totalLeaves: 2, plannedLeaves: 1, plannedMinutes: 25 })
+  assert.equal(partial.has('a'), false, '被递归访问过的叶子也不许出现在结果里（否则叶子行会被画上"已排 1/共 1"）')
   assert.equal(planGroupSummaryLabel(partial.get('parent')), '已排 1 / 共 2 个子任务 · 合计 25 分钟')
 
   const full = planGroupSummaries(tasks, [{ taskId: 'a', minutes: 25 }, { taskId: 'b', minutes: 35 }])

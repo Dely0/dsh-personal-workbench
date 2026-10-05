@@ -163,8 +163,13 @@ export function useDayPanelModel(input: DayPanelModelInput): DayPanelModel {
    * 不计投入，要用分组行画出来）。
    */
   const planItemIds = useMemo(() => new Set((plan?.items ?? []).map((item) => item.taskId)), [plan])
+  /**
+   * `contextIdsOf(tree, isMember)` 的第二个参数是**成员判定**（它把"不是成员"的行当上下文）。
+   * ⚠️ 2026-10-05 实测踩到过：这里曾传成 `!planItemIds.has(...)`（否定式），结果**计划项自己**
+   * 被标成上下文行 —— 用户看到「子任务反而显示成灰行」。成员判定必须传正向的 `planItemIds.has`。
+   */
   const planContextIds = useMemo(
-    () => contextIdsOf(planTree, (task) => !planItemIds.has(task.id)),
+    () => contextIdsOf(planTree, (task) => planItemIds.has(task.id)),
     [planTree, planItemIds],
   )
   const groupSummaries = useMemo(
