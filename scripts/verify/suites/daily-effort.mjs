@@ -55,6 +55,13 @@ const clickInItem = async (browser, title, label) => {
       if (t !== wanted) continue;
       const btn = Array.from(item.querySelectorAll('button')).find((b) => (b.textContent || '').trim() === ${JSON.stringify(label)});
       if (btn === undefined || btn.disabled) return null;
+      /*
+       * 先把它滚进可视区**再量坐标**：计划卡默认只展示前 N 项（「共 N 项 · 默认展示前 9 项」），
+       * 目标行可能在裁剪区外 —— 量出来的按钮坐标落在卡片外，真实鼠标点击就落空。
+       * 2026-10-05 实测：计划里 10 项（用户自己 8 项 + 本套件 2 项）时第 10 行的「推迟截止一天」
+       * 点击无效果 → 判据假红；计划只有 2 项时同一套件连过两次。
+       */
+      item.scrollIntoView({ block: 'center' });
       const r = btn.getBoundingClientRect();
       return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
     }
@@ -197,6 +204,11 @@ try {
       if (t !== wanted) continue;
       const btn = Array.from(item.querySelectorAll('.wb-plan-progress-hint button')).find((b) => (b.textContent || '').trim() === '50%');
       if (btn === undefined) return null;
+      /*
+       * 与 clickInItem 同一条理由：先滚进可视区再量坐标。计划卡只默认展示前 N 项，行在裁剪区外时
+       * 量到的坐标落在卡片外 → 真实鼠标点击落空（2026-10-05 实测：计划 10 项时这条判据假红）。
+       */
+      item.scrollIntoView({ block: 'center' });
       const r = btn.getBoundingClientRect();
       return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
     }
