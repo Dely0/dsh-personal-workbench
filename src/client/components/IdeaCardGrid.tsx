@@ -29,6 +29,7 @@ import { useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { ContentItem } from '../listPresentation.js'
 import { placePopover, type PopoverPlacement } from '../popoverPlacement.js'
+import { overlayMountContainer } from '../overlayMount.js'
 import { fmtTime } from '../format.js'
 import type { Dict } from '../viewTypes.js'
 
@@ -188,9 +189,11 @@ export function IdeaCardGrid({ ideas, dicts, selectedId, pickedIds, clusters, on
           )
         })}
       </div>
-      {/* portal 到 body：网格/卡片/面板的 overflow 与层叠都管不到它。
-          SSR（`renderToStaticMarkup`）里没有 document，退回原位渲染即可。 */}
-      {menu !== null && (typeof document === 'undefined' ? menu : createPortal(menu, document.body))}
+      {/* portal 到宿主 overlay 层（取不到则退回 body）：网格/卡片/面板的 overflow 管不到它；
+          而挂在 body 上比不过宿主 overlay 层的 z-index:1000（面板就在那一层里），
+          菜单会被面板盖住 —— 见 overlayMount.ts。
+          SSR（renderToStaticMarkup）里没有 document，退回原位渲染即可。 */}
+      {menu !== null && (typeof document === 'undefined' ? menu : createPortal(menu, overlayMountContainer() ?? document.body))}
     </>
   )
 }

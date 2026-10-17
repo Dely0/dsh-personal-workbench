@@ -192,9 +192,12 @@ test('借会话绑定只允许出现在 sessionRef.ts（业务代码不许直接
  *
  * 两条判据缺一条就会复发：
  * 1. 遮罩的 z-index 必须**高于** `.wb-overlay`，且**低于**对话框内浮层（`.wb-model-scrim` 329）；
- * 2. LocalDocModal 必须 portal 到 document.body（与 Modal 同一机制）。
+ * 2. LocalDocModal 必须 portal 到**宿主 overlay 层**（与 Modal 同一机制）。
+ *    注（2026-10-17 修订）：原先判的是"portal 到 document.body"，但挂 body 时它和面板
+ *    不在同一层叠上下文、会被宿主 overlay 层（z-index:1000）整支压住；改挂同一层后，
+ *    上面那条 z-index 相对序才真正生效。判据因此指向 overlayMountContainer()。
  */
-test('层级：文档/目录弹窗必须盖得住打开它的对话框，且 portal 到 body', () => {
+test('层级：文档/目录弹窗必须盖得住打开它的对话框，且 portal 到宿主 overlay 层', () => {
   const styles = readFileSync(new URL('../src/client/styles.ts', import.meta.url), 'utf8')
   const zIndexOf = (selector) => {
     const match = new RegExp(`\\${selector}\\s*\\{[^}]*z-index:\\s*(-?\\d+)`, 's').exec(styles)
@@ -215,7 +218,8 @@ test('层级：文档/目录弹窗必须盖得住打开它的对话框，且 por
 
   const modal = readFileSync(new URL('../src/client/components/LocalDocModal.tsx', import.meta.url), 'utf8')
   assert.match(modal, /createPortal\(/, 'LocalDocModal 必须 portal（内联在面板里会被祖先的 overflow/transform 裁剪，且层级排不上）')
-  assert.match(modal, /document\.body,?\s*\)/s, 'portal 的目标必须是 document.body（与 components/Modal.tsx 一致）')
+  assert.match(modal, /overlayMountContainer\(\) \?\? document\.body,?\s*\)/s,
+    'portal 目标必须是宿主 overlay 层（取不到才退回 body）—— 与 components/Modal.tsx 一致')
 })
 
 /**

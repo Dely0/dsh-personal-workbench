@@ -104,8 +104,12 @@ test('接线：点子菜单位置复用 placePopover，不再自造第二份摆�
   assert.doesNotMatch(stripComments(ideaSource), /getBoundingClientRect\(\)[\s\S]{0,400}?Math\.(min|max)\(/, '组件里不该再手写夹取算术')
 })
 
-test('接线：菜单 portal 到 body（网格/面板的 overflow 与层叠都管不到它）', () => {
-  assert.match(ideaSource, /createPortal\(menu, document\.body\)/, 'portal 到 body')
+test('接线：菜单 portal 到宿主 overlay 层（网格/面板的 overflow 管不到它，且要与面板同层才压得住）', () => {
+  // 2026-10-17：从 document.body 改成 overlayMountContainer()。挂 body 时它在 body 那一层
+  // 比不过宿主 overlay 层的 z-index:1000（面板挂在那一层里），菜单会被自家面板盖住。
+  assert.match(ideaSource, /createPortal\(menu, overlayMountContainer\(\) \?\? document\.body\)/,
+    'portal 到 overlayMountContainer()（取不到 overlay 层时才退回 body）')
+  assert.match(ideaSource, /import \{ overlayMountContainer \} from '\.\.\/overlayMount\.js'/, '必须走统一的挂载点解析器')
   assert.match(ideaSource, /typeof document === 'undefined' \? menu : createPortal/, 'SSR 下退回原位渲染（否则测试与首屏会炸）')
 })
 
@@ -345,8 +349,10 @@ test('标签区：单行 + 「更多」浮层，且**不再只渲染前 12 个**
   assert.match(tagFilter, /data-tagmore/, '有「更多」入口')
   assert.match(tagFilter, /data-tagmenu/, '有浮层')
   assert.doesNotMatch(knowledgeSource, /tagCounts\.slice\(0, 12\)/, '旧的"只显示前 12 个"必须消失')
-  // 浮层的定位前提与点子菜单一致：portal + fixed + 高于面板宿主
-  assert.match(tagFilter, /createPortal\(menu, document\.body\)/, '浮层 portal 到 body')
+  // 浮层的定位前提与点子菜单一致：portal 到宿主 overlay 层 + fixed + 高于面板宿主
+  // （2026-10-17：挂 body 会被宿主 overlay 层的 z-index:1000 整支压住，见 overlayMount.ts）
+  assert.match(tagFilter, /createPortal\(menu, overlayMountContainer\(\) \?\? document\.body\)/,
+    '浮层 portal 到 overlayMountContainer()（取不到 overlay 层才退回 body）')
   const css = readFileSync('src/client/styles.ts', 'utf8')
   const rule = css.match(/\.wb-tagmenu \{[^}]*\}/)
   assert.ok(rule !== null, 'styles.ts 有 .wb-tagmenu 规则')

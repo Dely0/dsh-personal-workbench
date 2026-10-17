@@ -163,7 +163,11 @@ ${panelContainerCss({ view: VIEW_ATTR, official: OFFICIAL_ATTR, active: ACTIVE_A
    命中的是对话框里的元素，表现为"点了没反应、值也不落进去"。这个 bug 是
    scripts/verify/suites/workspace-picker.mjs 的 elementFromPoint 诊断抓出来的。
    ⚠️ 本段在模板字符串里，**不能出现反引号**。 */
-.wb-modal-mask { position:fixed; inset:0; z-index:320; background:rgba(0,0,0,.55); display:flex; align-items:center; justify-content:center; }
+/* ⚠️ pointer-events:auto 是**必需**的：这些浮层现在 portal 到宿主的 overlay 层
+   （见 overlayMount.ts），而那一层是 pointer-events:none 的纯覆盖容器 ——
+   pointer-events 会**继承**，不显式写回来就是"弹窗看得见但一次都点不动"。
+   挂回 body 时这条声明也无害（body 本来就是 auto）。 */
+.wb-modal-mask { position:fixed; inset:0; z-index:320; pointer-events:auto; background:rgba(0,0,0,.55); display:flex; align-items:center; justify-content:center; }
 .wb-modal { width:min(520px, 92vw); background:var(--dsw-alias-bg-layer-2, #1c1c1f); border:1px solid var(--dsw-alias-border-l1, rgba(255,255,255,.25)); border-radius:14px; padding:18px; box-shadow:0 18px 50px rgba(0,0,0,.4); color:var(--dsw-alias-label-primary, #eee); font-family:var(--dsw-font-family, system-ui); }
 .wb-modal h4 { margin:0 0 8px; }
 .wb-modal p { margin:0 0 12px; font-size:12.5px; color:var(--dsw-alias-label-secondary); }
@@ -469,9 +473,12 @@ ${panelContainerCss({ view: VIEW_ATTR, official: OFFICIAL_ATTR, active: ACTIVE_A
    层叠：.wb-overlay 是 300，浮层要压住它；--wb-* 令牌由令牌层提供。
    ⚠️ 本段在模板字符串里，**不能出现反引号**。
    --------------------------------------------------------------------------- */
-.wb-model-menu { position: fixed; z-index: 330; box-sizing: border-box; width: 320px; max-height: min(60vh, 360px); overflow-y: auto; padding: 6px; border: 1px solid var(--wb-border, rgba(127,127,127,.22)); border-radius: 10px; background: var(--dsw-alias-bg-layer-2, #1c1c1f); box-shadow: 0 12px 32px rgba(0,0,0,.45); overscroll-behavior: contain; scrollbar-width: thin; }
-/* 浮层打开时的"点外面关掉"层：必须**在弹窗之上**（300）才能接住落在弹窗任意位置的第一次点击 */
-.wb-model-scrim { position: fixed; inset: 0; z-index: 329; }
+.wb-model-menu { position: fixed; z-index: 330; pointer-events: auto; box-sizing: border-box; width: 320px; max-height: min(60vh, 360px); overflow-y: auto; padding: 6px; border: 1px solid var(--wb-border, rgba(127,127,127,.22)); border-radius: 10px; background: var(--dsw-alias-bg-layer-2, #1c1c1f); box-shadow: 0 12px 32px rgba(0,0,0,.45); overscroll-behavior: contain; scrollbar-width: thin; }
+/* 浮层打开时的"点外面关掉"层：必须**在弹窗之上**（300）才能接住落在弹窗任意位置的第一次点击。
+   ⚠️ 这两条 pointer-events:auto 是必需的：浮层现在 portal 到宿主的 overlay 层
+   （见 overlayMount.ts），那一层是 pointer-events:none 的纯覆盖容器，
+   而 pointer-events 会被继承 —— 不显式声明就是"模型列表看得见、一次都点不动"。 */
+.wb-model-scrim { position: fixed; inset: 0; z-index: 329; pointer-events: auto; }
 .wb-model-group-title { padding: 4px 8px; font-size: 11px; font-weight: 700; color: var(--dsw-alias-label-secondary); }
 .wb-model-option { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 9px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: inherit; font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
 .wb-model-option:hover { background: color-mix(in srgb, var(--dsw-alias-label-primary, #fff) 7%, transparent); }
@@ -522,7 +529,9 @@ ${panelContainerCss({ view: VIEW_ATTR, official: OFFICIAL_ATTR, active: ACTIVE_A
   animation: wb-dialog-in .18s cubic-bezier(.2,.9,.3,1);
 }
 .wb-overlay {
-  position: fixed; inset: 0; z-index: 300;
+  /* pointer-events:auto：见 .wb-modal-mask 上方注释 —— 宿主的 overlay 层是
+     pointer-events:none，不写回来整块弹窗都点不动。 */
+  position: fixed; inset: 0; z-index: 300; pointer-events: auto;
   display: flex; align-items: center; justify-content: center; padding: 24px;
   background: rgba(0,0,0,.52);
   backdrop-filter: blur(2px);

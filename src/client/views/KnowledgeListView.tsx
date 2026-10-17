@@ -69,7 +69,7 @@ export function KnowledgeListView({ model, dictOf, busy }: KnowledgeListViewProp
         *
         * 拆分前它内联在入口的 `<div className="wb-h">` 里（第 3033 行），**不在**这个视图分支内 ——
         * 但它的全部状态与动作都属于知识域，跟着域走才不会再出现"两处装配"；
-        * `LocalDocModal` 自己 `createPortal(..., document.body)`，渲染位置不影响 DOM 层级。
+         * `LocalDocModal` 自己 portal 出去（落点见 overlayMount.ts），渲染位置不影响 DOM 层级。
         */}
       <LocalDocModal
         open={filePicker.open}

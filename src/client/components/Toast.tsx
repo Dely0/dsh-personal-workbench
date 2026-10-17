@@ -9,6 +9,7 @@
  */
 import { useEffect, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
+import { overlayMountContainer } from '../overlayMount.js'
 
 export type ToastTone = 'info' | 'success' | 'warning' | 'error'
 
@@ -37,7 +38,7 @@ export function ToastHost({ items, onDismiss }: ToastHostProps): ReactNode {
     <div className="wb-toasts" role="status" aria-live="polite">
       {items.map((item) => <ToastCard key={item.id} item={item} onDismiss={onDismiss} />)}
     </div>,
-    document.body,
+    overlayMountContainer() ?? document.body,
   )
 }
 

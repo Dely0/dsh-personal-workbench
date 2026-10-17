@@ -15,6 +15,7 @@
 import { createPortal } from 'react-dom'
 import { Icon } from './Icon.js'
 import { ROOTS_PARENT } from '../localDirBrowser.js'
+import { overlayMountContainer } from '../overlayMount.js'
 
 /**
  * 与后端 `localDirRoute.ROOTS_PARENT` 同值的哨兵（客户端可读文本）。
@@ -173,13 +174,17 @@ export function LocalDocModal({ open, path, listing, loading, error, busy, mode 
       </div>
     </div>,
     /**
-     * ⚠️ **必须 portal 到 `document.body`**（与 `components/Modal.tsx` 同一理由，且更强）：
+     * ⚠️ **必须 portal 到宿主的 overlay 层**（与 `components/Modal.tsx` 同一理由，且更强；
+     * 取不到那一层时 `overlayMountContainer()` 自动退回 `document.body`）：
      * 1. 插件渲染在 DSH 面板容器里，祖先可能带 `overflow` / `transform` —— 内联的 `position:fixed`
      *    会被裁剪或错位；
      * 2. 这个弹窗会被**从另一个弹窗里**打开（批次2 #2 的工作区「浏览…」来自快速录入 / 新建任务），
-     *    那些对话框本身就 portal 到 body。内联在面板里的这一份 DOM 更靠内，连层级都排不上，
+     *    那些对话框本身就 portal 到同一层。内联在面板里的这一份 DOM 更靠内，连层级都排不上，
      *    于是被整块盖住 —— 表现为"点在按钮坐标上、命中的是对话框里的元素"。
+     * 3. 为什么不是 `document.body`（2026-10-17）：宿主 overlay 层自带 z-index:1000 且自成
+     *    层叠上下文，面板挂在它里面；portal 到 body 的浮层在 body 一层比不过那整支 1000，
+     *    会被自家面板盖住。挂进同一层才让 320 / 300 / 330 这些数字重新可比。
      */
-    document.body,
+    overlayMountContainer() ?? document.body,
   )
 }

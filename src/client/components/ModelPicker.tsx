@@ -16,6 +16,7 @@
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
+import { overlayMountContainer } from '../overlayMount.js'
 import type { ModelDirectoryRuntime, ModelProviderGroup, WorkbenchRuntime } from '../viewTypes.js'
 import type { ModelModalityRecord } from '../modelCapability.js'
 import type { QuickImageDraft } from '../quickAttachments.js'
@@ -447,11 +448,15 @@ export function ModelPicker({ runtime, value, onChange, modalityTable, disabled,
         <Icon name="model" />{selectedLabel}<span style={{ flex: 'none' }}>{open ? '▲' : '▼'}</span>
       </button>
       {/*
-        浮层 **portal 到 document.body**（不是就地渲染）：
+        浮层 **portal 到宿主的 overlay 层**（取不到时 `overlayMountContainer()` 退回
+        `document.body`），不是就地渲染：
         `.wb-dialog` 有 `overflow: hidden`、`.wb-dialog-body` 有 `overflow: auto`、
         `.wb-overlay` 有 `backdrop-filter`（会变成 fixed 后代的包含块）——
         留在原地就一定被裁。它与触发按钮的祖先关系因此断开了，
         所以"跟着按钮走"必须靠 `placePopover()` 在滚动/改尺寸时重算。
+        为什么不是 body（2026-10-17 实测）：面板挂在宿主 overlay 层里、那一层自带
+        z-index:1000 并自成层叠上下文，portal 到 body 的 330 在 body 一层比不过它，
+        模型列表因此整块躲到面板后面、点不到也选不了。
       */}
       {open && createPortal(
         <>
@@ -523,7 +528,7 @@ export function ModelPicker({ runtime, value, onChange, modalityTable, disabled,
             )}
           </div>
         </>,
-        document.body,
+        overlayMountContainer() ?? document.body,
       )}
     </div>
   )

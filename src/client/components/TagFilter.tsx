@@ -16,6 +16,7 @@
 import { useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { TagCount } from '../listPresentation.js'
+import { overlayMountContainer } from '../overlayMount.js'
 
 /** 单行里最多常显几个标签（含"全部标签"入口之外的部分）。 */
 export const VISIBLE_TAG_LIMIT = 6
@@ -141,8 +142,11 @@ export function TagFilter({ tagCounts, selected, onChange, limit = VISIBLE_TAG_L
           </button>
         )}
       </div>
-      {/* portal 到 body：工具栏在滚动容器里，浮层留在里面会被裁掉（与点子菜单同一套做法） */}
-      {menu !== null && (typeof document === 'undefined' ? menu : createPortal(menu, document.body))}
+      {/* portal 到宿主 overlay 层（取不到则退回 body）：工具栏在滚动容器里，
+          浮层留在里面会被裁掉；而挂在 body 上又比不过宿主 overlay 层的 z-index:1000
+          —— 那一层里装着面板自己，菜单就会被面板盖住（见 overlayMount.ts）。
+          与点子菜单、模型选择器同一套做法。 */}
+      {menu !== null && (typeof document === 'undefined' ? menu : createPortal(menu, overlayMountContainer() ?? document.body))}
     </>
   )
 }

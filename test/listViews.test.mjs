@@ -306,10 +306,10 @@ test('IdeaCardGrid: 已选卡片带 picked 且 ☑ 是按下态（否则会忘�
   assert.match(html, /aria-pressed="false"/, '未选的是 false，不是缺失')
 })
 
-test('IdeaCardGrid: 静息时渲染 HTML 里没有菜单（菜单由交互打开，且 portal 走 document.body）', () => {
+test('IdeaCardGrid: 静息时渲染 HTML 里没有菜单（菜单由交互打开，且 portal 走宿主 overlay 层）', () => {
   const html = renderToStaticMarkup(createElement(IdeaCardGrid, gridProps()))
   assert.doesNotMatch(html, /data-idea-foldmenu/, '没点开时不该渲染菜单')
-  // 菜单是 portal 到 body 的（组件源码里必须用 createPortal），见 listViewWiring.test.mjs 的扫描断言
+  // 菜单是 portal 出去的（组件源码里必须用 createPortal），落点判据见 listViewWiring.test.mjs 的扫描断言
 })
 
 test('IdeaCardGrid: 空集合什么都不渲染（空态由页面负责，不留两份实现）', () => {

@@ -2,10 +2,18 @@
  * 弹窗基座：统一 ESC 关闭、遮罩点击关闭、焦点陷阱、打开时锁定页面滚动。
  *
  * 为什么用 portal：插件渲染在 DSH 面板容器里，祖先可能带 overflow/transform，
- * 直接 fixed 定位会被裁剪或错位；挂到 document.body 才能稳定覆盖整个视口。
+ * 直接 fixed 定位会被裁剪或错位，必须挂到面板子树之外。
+ *
+ * 挂到**哪一层之外**（2026-10-17 修「弹窗被工作台面板盖住」）：**宿主的 overlay 层**
+ * （`[data-shell-overlay]`），不是 `document.body`。面板本体就挂在那一层里，
+ * 而该层自带 z-index:1000 并自成层叠上下文 —— portal 到 body 的弹窗只能拿 300
+ * 去跟"整层 1000"比大小，于是设置页弹窗整块躲到面板后面。挂进同一层之后
+ * 300 > 55 自然成立，一行 z-index 都不用改。判据与兜底见 `overlayMount.ts`
+ * （取不到该层时退回 body，即修复前的行为）。
  */
 import { useEffect, useRef, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
+import { overlayMountContainer } from '../overlayMount.js'
 
 export type ModalSize = 'sm' | 'md' | 'lg' | 'xl'
 
@@ -123,6 +131,6 @@ export function Modal({ title, titleExtra, size = 'md', footer, onClose, closeOn
         {footer !== undefined && <footer className="wb-dialog-foot">{footer}</footer>}
       </div>
     </div>,
-    document.body,
+    overlayMountContainer() ?? document.body,
   )
 }
