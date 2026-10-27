@@ -30,6 +30,7 @@ import {
 import { placePopover, samePlacement, stepIndex, type PopoverPlacement } from '../popoverPlacement.js'
 import { pickDirectorySessionId } from '../modelDirectorySession.js'
 import { createSessionHold, type SessionHold } from '../sessionRef.js'
+import { serviceScopeCtx } from '../serviceScope.js'
 import { api } from '../api.js'
 import { Icon } from './Icon.js'
 import type { ModelDirectoryState, PromptContentPart, QuickModelSelection } from '../viewTypes.js'
@@ -71,6 +72,12 @@ const EMPTY_MODEL_DIRECTORY_STATE: ModelDirectoryState = { current: null, groups
  * `retain()` 过的会话才有 —— 见 `modelDirectorySession.ts` 顶部那段事故说明。
  * 不传时行为与本补丁之前**逐字一致**（纯探测、不持有）。
  *
+ * ⚠️ 读服务要走 `serviceScopeCtx()` 而不是直接用插件 ctx（2026-10-27 桌面端实测）：
+ * cordis 的 traceable 服务会把 `this.ctx` 影射成**调用方 ctx**，而宿主 provider 内部要读
+ * `this.ctx.remote.session`；插件 ctx 没声明那个 inject，于是"首次为某会话创建目录"时
+ * 会被宿主报 `cannot get property "remote.session" without inject`（缓存命中的会话反而正常）。
+ * 详见 `serviceScope.ts`。
+ *
  * @param runtime - 插件运行上下文。
  * @param sessionId - 要解析目录的会话（用 `pickDirectorySessionId()` 挑，见下面组件里的注释）。
  * @param ensureScope - "补一次持有"的钩子；返回 `true` 表示补上了、值得重试一次。
@@ -81,7 +88,7 @@ export function resolveModelDirectoryOutcomeFor(
   ensureScope?: (id: string) => boolean,
 ): ModelDirectoryOutcome {
   return resolveModelDirectoryOutcome(
-    () => optionalService<{ directoryFor?: (id: string) => ModelDirectoryRuntime }>(getPluginCtx(), 'modelDirectories')
+    () => optionalService<{ directoryFor?: (id: string) => ModelDirectoryRuntime }>(serviceScopeCtx(getPluginCtx()), 'modelDirectories')
       ?? (() => { try { return runtime.modelDirectories } catch { return undefined } })(),
     sessionId,
     ensureScope === undefined ? undefined : { ensureScope },

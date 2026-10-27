@@ -51,6 +51,7 @@ import { startOfDay
 import type { DshSessionSummary, Task, WorkbenchRuntime
 } from './viewTypes.js'
 import { currentSessionIdOf, getPluginCtx, optionalService, safeService, setPluginCtx } from './runtimeServices.js'
+import { installServiceScope, resetServiceScope } from './serviceScope.js'
 import { installExpertInputSource } from './expertInputSource.js'
 import { decideSidebarWidth, decideTopInset, pickFrameCandidate } from './panelGeometry.js'
 import { indexModalities, type ModelModalityRecord
@@ -1364,6 +1365,13 @@ export function apply(ctx: unknown): () => void {
   const runtime = ctx as WorkbenchRuntime
   setPluginCtx(ctx)
   /**
+   * 装一条"声明了 `remote.session` 的调用作用域"：宿主 0.2.x 的 traceable 服务会把
+   * `this.ctx` 影射成**调用方 ctx**，而模型选择 provider 内部要读 `this.ctx.remote.session`。
+   * 不装这条，工作台自己取模型目录时（首次为某会话创建目录）会被宿主报
+   * `cannot get property "remote.session" without inject`。详见 `serviceScope.ts`。
+   */
+  installServiceScope(ctx)
+  /**
    * 单实例守卫（v1.14.2，2026-09-12 背景渐黑事故的根因修复）。
    *
    * cordis 在热重载/HMR 与某些重挂场景下会**再次**执行 `apply()`，而上一轮的清理函数
@@ -2055,7 +2063,7 @@ export function apply(ctx: unknown): () => void {
      * `--wb-sidebar-w` 是内联样式变量，留着无害（下一次 apply 会按真实宽度覆盖）。
      */
     html.removeAttribute(ACTIVE_ATTR); html.removeAttribute(OFFICIAL_ATTR)
-    if (getPluginCtx() === ctx) setPluginCtx(undefined)
+    if (getPluginCtx() === ctx) { setPluginCtx(undefined); resetServiceScope() }
     if (workbenchHost?.closePanel === undefined ? false : workbenchHost.runtime === runtime) workbenchHost = undefined
     if (activeDisposer === cleanup) activeDisposer = undefined
   }

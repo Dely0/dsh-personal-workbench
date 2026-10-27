@@ -30,6 +30,7 @@ import { join, relative, sep } from 'node:path'
 
 import { createSessionHold, hasAnyRetention } from '../lib/client/sessionRef.js'
 import { pickDirectorySessionId } from '../lib/client/modelDirectorySession.js'
+import { installServiceScope, resetServiceScope, serviceScopeCtx } from '../lib/client/serviceScope.js'
 import { modelDirectoryUnavailableReason, resolveModelDirectoryOutcome } from '../lib/client/modelCapability.js'
 
 const read = (path) => readFileSync(fileURLToPath(new URL(`../${path}`, import.meta.url)), 'utf8')
@@ -292,3 +293,44 @@ test('ModelPicker 走唯一入口：挑会话用 pickDirectorySessionId，持有
     '不许再自己写"当前会话 ?: ids[0]"—— 那个兜底正是本次事故的形态',
   )
 })
+
+// ============================================================ 调用方 inject 作用域
+
+test('serviceScope：装上了就用带 inject 的作用域，没装就退回原 ctx', () => {
+  resetServiceScope()
+  assert.equal(serviceScopeCtx('fallback'), 'fallback', '没装时（老宿主）必须退回调用方 ctx，不许返回 undefined')
+
+  const scoped = { tag: 'scoped' }
+  let requested
+  installServiceScope({
+    inject(deps, callback) {
+      requested = deps
+      callback(scoped)
+    },
+  })
+  assert.deepEqual(requested, ['remote.session'], '必须请求宿主 provider 真正需要的那个 inject')
+  assert.equal(serviceScopeCtx('fallback'), scoped, '装上之后取服务要走作用域 ctx')
+
+  resetServiceScope()
+  assert.equal(serviceScopeCtx('fallback'), 'fallback', '卸载后必须清空，不能继续拿已销毁的 fiber')
+})
+
+test('serviceScope：旧宿主没有 inject / 回调一直不来 ⇒ 不抛、保持兜底', () => {
+  resetServiceScope()
+  assert.doesNotThrow(() => installServiceScope({}))
+  assert.equal(serviceScopeCtx('fallback'), 'fallback')
+  assert.doesNotThrow(() => installServiceScope({ inject() { throw new Error('boom') } }), 'inject 抛错不许冒到界面')
+  assert.equal(serviceScopeCtx('fallback'), 'fallback')
+  // 可选依赖永远不 ready（没装 dsh-client-ui-model-selection 的机器）：作用域一直是空的
+  installServiceScope({ inject() { /* 永远不调用 callback */ } })
+  assert.equal(serviceScopeCtx('fallback'), 'fallback', '依赖缺席时只能退回兜底，绝不能把面板拖死')
+})
+
+test('接线：apply 装作用域，ModelPicker 取服务时用它', () => {
+  const index = read('src/client/index.tsx')
+  assert.match(index, /installServiceScope\(ctx\)/, 'apply() 必须装这条作用域（否则首次创建目录会被宿主报 inject 错）')
+  assert.match(index, /resetServiceScope\(\)/, '卸载时必须清空作用域')
+  const picker = read('src/client/components/ModelPicker.tsx')
+  assert.match(picker, /serviceScopeCtx\(getPluginCtx\(\)\)/, '取 modelDirectories 必须经由 serviceScopeCtx')
+})
+
