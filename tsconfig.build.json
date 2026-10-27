@@ -80,6 +80,7 @@
     "src/client/components/WorkspacePicker.tsx",
     "src/client/quickAttachments.ts",
     "src/client/modelCapability.ts",
+    "src/client/modelDirectorySession.ts",
     "src/client/notificationCapability.ts",
     "src/client/popoverPlacement.ts",
     "src/client/quickWorkspaceDefault.ts",

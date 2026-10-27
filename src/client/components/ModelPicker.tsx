@@ -28,6 +28,8 @@ import {
   type ModelDirectoryOutcome, type SelectionApplication,
 } from '../modelCapability.js'
 import { placePopover, samePlacement, stepIndex, type PopoverPlacement } from '../popoverPlacement.js'
+import { pickDirectorySessionId } from '../modelDirectorySession.js'
+import { createSessionHold, type SessionHold } from '../sessionRef.js'
 import { api } from '../api.js'
 import { Icon } from './Icon.js'
 import type { ModelDirectoryState, PromptContentPart, QuickModelSelection } from '../viewTypes.js'
@@ -63,12 +65,26 @@ const EMPTY_MODEL_DIRECTORY_STATE: ModelDirectoryState = { current: null, groups
  * 压成同一个 `undefined`，于是界面上把后者说成"当前 DSH 未提供模型选择接口" ——
  * 而本机该 provider 明明是装着的，报错文案把排查方向整个带偏。
  * 本函数只做"读服务"这一件事，分类与措辞都在纯模块里，并由测试钉住。
+ *
+ * ⚠️ 第三个参数是**宿主 0.2.x 才需要**的重试钩子（2026-10-26 桌面端 0.2.1-rc.3 实测）：
+ * 宿主的 provider 在 `directoryFor()` 里先查 `sessions.scope(id)`，而 scope 只有被试
+ * `retain()` 过的会话才有 —— 见 `modelDirectorySession.ts` 顶部那段事故说明。
+ * 不传时行为与本补丁之前**逐字一致**（纯探测、不持有）。
+ *
+ * @param runtime - 插件运行上下文。
+ * @param sessionId - 要解析目录的会话（用 `pickDirectorySessionId()` 挑，见下面组件里的注释）。
+ * @param ensureScope - "补一次持有"的钩子；返回 `true` 表示补上了、值得重试一次。
  */
-export function resolveModelDirectoryOutcomeFor(runtime: WorkbenchRuntime, sessionId: string): ModelDirectoryOutcome {
+export function resolveModelDirectoryOutcomeFor(
+  runtime: WorkbenchRuntime,
+  sessionId: string,
+  ensureScope?: (id: string) => boolean,
+): ModelDirectoryOutcome {
   return resolveModelDirectoryOutcome(
     () => optionalService<{ directoryFor?: (id: string) => ModelDirectoryRuntime }>(getPluginCtx(), 'modelDirectories')
       ?? (() => { try { return runtime.modelDirectories } catch { return undefined } })(),
     sessionId,
+    ensureScope === undefined ? undefined : { ensureScope },
   )
 }
 
@@ -128,14 +144,40 @@ export function ModelPicker({ runtime, value, onChange, modalityTable, disabled,
   const menuRef = useRef<HTMLDivElement | null>(null)
   /** 用方向键打开时，等选项挂上 DOM 之后要把焦点交给第一项 / 最后一项。 */
   const pendingFocusRef = useRef<'first' | 'last' | null>(null)
-  const sessionsState = safeService<WorkbenchRuntime['sessions']>(runtime, 'sessions')?.list?.getSnapshot?.()
+  /**
+   * 宿主 `sessions` 服务（软探测）。它同时供三处读：会话列表快照、目录的"补一次持有"、释放。
+   */
+  const sessionsService = safeService<WorkbenchRuntime['sessions']>(runtime, 'sessions')
+  const sessionsState = sessionsService?.list?.getSnapshot?.()
   /**
    * 「当前会话」按唯一入口读（`currentSession.ts`）—— 0.1.7-rc.2 起列表快照里没有 `current`。
-   * 读不到时才退到 `ids[0]`：那只是"模型目录得有个会话可问"的兜底，
-   * 绝不能拿它去推断工作区（那是猜，会把文件建进别人的项目目录）。
+   *
+   * ⚠️ 读不到时**不许**随手退到 `ids[0]` 就完事（2026-10-26 桌面端 0.2.1-rc.3 的红字）：
+   * 宿主 0.2.x 要求"先 `retain()` 才有 scope"，而 `ids[0]` 往往谁都没持有 —— 于是每次点
+   * 模型按钮都报 `ui-model-selection: session "…" resolved no scope`，一个模型都列不出来。
+   * 挑选口径收在 `pickDirectorySessionId()`（已被持有的会话优先），再由下面的 `hold` 兜底持有。
+   *
+   * 这个 id **只用来问模型表**、不能拿去推断工作区：目录是"宿主这一代的全局模型表"，
+   * 问哪个会话都一样；而工作区必须精确（猜错会把文件建进别人的项目目录）。
    */
   const currentSessionId = currentSessionIdOf(runtime)
-  const directorySessionId = currentSessionId !== '' ? currentSessionId : (sessionsState?.ids?.[0] ?? '')
+  const directorySessionId = pickDirectorySessionId(currentSessionId, sessionsState)
+  /**
+   * 模型目录的**会话持有**（每个组件实例一份，绝不共享 —— 共享会让释放时机变成猜）。
+   * 宿主 0.2.x 的 `directoryFor()` 要求该会话的 scope 已经存在，而 scope 只在被
+   * `retain()` 过之后才有；持有语义的唯一实现在 `sessionRef.ts`（`createSessionHold`）。
+   */
+  const [hold] = useState<SessionHold>(() => createSessionHold())
+  /** 本实例的"使用者"身份（引用计数用；整个生命周期内必须是同一颗对象）。 */
+  const [holder] = useState<object>(() => ({}))
+  /**
+   * "scope 不在，补一次持有再重试" —— 只在宿主明确报 `no scope` / `no binding` 时才会被调用
+   * （判据在 `resolveModelDirectoryOutcome` 里，这里不做第二份判定）。
+   */
+  const ensureScope = useCallback((id: string): boolean => {
+    hold.acquire(sessionsService, id, holder)
+    return hold.holding(id)
+  }, [hold, holder, sessionsService])
   /**
    * 这次解析的结果（拿到目录 / 为什么没拿到）—— 门禁、菜单、提示**共用这一份**。
    *
@@ -148,19 +190,27 @@ export function ModelPicker({ runtime, value, onChange, modalityTable, disabled,
    * 无法确认时机，就不敢只靠依赖变化 —— 所以这里补一条**显式重试入口**
    * （`recomputeDirectory`，挂在用户点击上）：会话/服务就绪后点一下即可重新解析，
    * 失败也不再是永久性的。原来的"不可用就永久不可用"因此消失。
+   *
+   * 首帧这次解析**不带 `ensureScope`**：渲染期不产生副作用（持有是 effect/点击路径的事）。
    */
   const [directoryOutcome, setDirectoryOutcome] = useState<ModelDirectoryOutcome>(
     () => resolveModelDirectoryOutcomeFor(runtime, directorySessionId),
   )
   const recomputeDirectory = useCallback((): ModelDirectoryOutcome => {
-    const next = resolveModelDirectoryOutcomeFor(runtime, directorySessionId)
+    const next = resolveModelDirectoryOutcomeFor(runtime, directorySessionId, ensureScope)
     setDirectoryOutcome(next)
     return next
-  }, [runtime, directorySessionId])
+  }, [runtime, directorySessionId, ensureScope])
   useEffect(() => {
-    // 会话换人（或面板重挂）时重新解析一次 —— 依赖变化就是"该重算了"的信号。
-    setDirectoryOutcome(resolveModelDirectoryOutcomeFor(runtime, directorySessionId))
-  }, [runtime, directorySessionId])
+    /**
+     * 会话换人（或面板重挂）时：先补持有、再解析一次 —— 依赖变化就是"该重算了"的信号。
+     * `acquire()` 内部会看 `retainInfo().retainedBy`：宿主已经有人持有（多半是 mainView）
+     * 就不再 retain，免得白跑一次宿主 open。卸载/切会话时按引用计数释放。
+     */
+    hold.acquire(sessionsService, directorySessionId, holder)
+    setDirectoryOutcome(resolveModelDirectoryOutcomeFor(runtime, directorySessionId, ensureScope))
+    return () => { hold.release(directorySessionId, holder) }
+  }, [runtime, directorySessionId, hold, holder, ensureScope, sessionsService])
   const directory = directoryOutcome.ok ? directoryOutcome.directory : undefined
   /**
    * 目录拿不到时的可读**成因**（唯一来源：`modelDirectoryUnavailableReason`）。
