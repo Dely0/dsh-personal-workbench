@@ -16,8 +16,10 @@ import { ModelPicker } from '../components/ModelPicker.js'
 import { PersonaPicker } from '../components/PersonaPicker.js'
 import { SkillPicker } from '../components/SkillPicker.js'
 import { fmtTime } from '../format.js'
+import { useI18n } from '../i18n.js'
 
 export function WorkbenchOverlays(props: WorkbenchAssembly): JSX.Element {
+  const { t } = useI18n()
   const { modelModalityTable, promptModal, promptModelSelection, promptPersona, selectedSkills, skillCatalog, skillProblem, skillsAvailable, skillsLoading } = props.ai
   const { cancelPrompt, confirmPrompt, loadSkills, setModelModalityTable, setPromptModal, setPromptModelSelection, setPromptPersona, toggleSkill } = props.ai.actions
   const { busy } = props.busyApi
@@ -227,25 +229,25 @@ export function WorkbenchOverlays(props: WorkbenchAssembly): JSX.Element {
         */}
       {folderForm !== null && (
         <Modal
-          title={<><Icon name="folder" />{folderForm.mode === 'create' ? '新建文件夹' : '重命名文件夹'}</>}
+          title={<><Icon name="folder" />{t(folderForm.mode === 'create' ? '新建文件夹' : '重命名文件夹')}</>}
           size="sm"
           onClose={() => setFolderForm(null)}
           footer={(
             <>
-              <span className="wb-foot-note">文件夹 = 点子王；删除文件夹不会删除点子，它们会回到「未归类」</span>
-              <button className="wb-btn" onClick={() => setFolderForm(null)}>取消</button>
+              <span className="wb-foot-note">{t('文件夹 = 点子王；删除文件夹不会删除点子，它们会回到「未归类」')}</span>
+              <button className="wb-btn" onClick={() => setFolderForm(null)}>{t('取消')}</button>
               <button
                 className="wb-btn primary"
                 disabled={folderForm.title.trim() === ''}
                 onClick={() => saveFolder()}
               >
-                {folderForm.mode === 'create' ? '创建' : '保存'}
+                {t(folderForm.mode === 'create' ? '创建' : '保存')}
               </button>
             </>
           )}
         >
           <label className="wb-field">
-            <span>文件夹名称</span>
+            <span>{t('文件夹名称')}</span>
             <input
               data-autofocus="true"
               value={folderForm.title}
@@ -256,16 +258,16 @@ export function WorkbenchOverlays(props: WorkbenchAssembly): JSX.Element {
                 // 与按钮同一个准入门槛：标题为空时不发请求（不发、也不留一条看不见的错误）
                 if (folderForm.title.trim() !== '') saveFolder()
               }}
-              placeholder="例如：工作台 · 微信提醒方向"
+              placeholder={t('例如：工作台 · 微信提醒方向')}
             />
           </label>
           <label className="wb-field" style={{ marginTop: 12 }}>
-            <span>一句话说明<span className="wb-field-note">（可选）</span></span>
+            <span>{t('一句话说明')}<span className="wb-field-note">{t('（可选）')}</span></span>
             <textarea
               rows={3}
               value={folderForm.summaryMd}
               onChange={(e) => patchFolderForm({ summaryMd: e.target.value })}
-              placeholder="这个文件夹收的是哪一类点子"
+              placeholder={t('这个文件夹收的是哪一类点子')}
             />
           </label>
         </Modal>

@@ -37,6 +37,7 @@ import { useCallback, useEffect, useState, type Dispatch, type FormEvent, type S
 import { api } from '../api.js'
 import { DEFAULT_ESTIMATE_MINUTES } from '../capacity.js'
 import { withSettingsFallback } from '../settingsFallback.js'
+import { cacheEntryUiLocale } from '../entryLocale.js'
 import type { ToastTone } from '../components/Toast.js'
 import type { DictKind } from '../components/SettingsModal.js'
 import type { WorkbenchSettings } from '../../shared/contracts.js'
@@ -122,7 +123,20 @@ export function useWorkbenchSettings(input: UseWorkbenchSettingsInput): UseWorkb
   const [dictEditCode, setDictEditCode] = useState<string | null>(null)
   const [dictError, setDictError] = useState<string | null>(null)
 
-  useEffect(() => { void api<{ settings: WorkbenchSettings }>('/api/workbench/settings').then((r) => setSettings(withSettingsFallback(r.settings))).catch(() => undefined) }, [])
+  useEffect(() => {
+    void api<{ settings: WorkbenchSettings }>('/api/workbench/settings')
+      .then((r) => {
+        const loaded = withSettingsFallback(r.settings)
+        /**
+         * 入口（侧栏那一行 / 会话标题栏按钮）渲染在 `I18nProvider` **之外**，
+         * 拿不到这个 state；它只在注册时取一次文案。所以装载设置后把权威值
+         * 镜像一份给入口 —— 权威源仍是服务端 meta，这里只是给入口用的缓存。
+         */
+        cacheEntryUiLocale(loaded.uiLocale)
+        setSettings(loaded)
+      })
+      .catch(() => undefined)
+  }, [])
 
   /**
    * 拉一次知识库召回回执（日志行 + 单会话关闭清单）。
@@ -225,6 +239,8 @@ export function useWorkbenchSettings(input: UseWorkbenchSettingsInput): UseWorkb
        */
       const { quickWorkspaceRecent: _ignored, ...editable } = settings
       await api('/api/workbench/settings', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(editable) })
+      /** 保存成功后同步入口镜像：入口文案在下次装载时跟上（面板内部是即时重渲染）。 */
+      cacheEntryUiLocale(settings.uiLocale)
       setShowSettings(false)
       pushToast('设置已保存', 'success')
     } catch (e) {

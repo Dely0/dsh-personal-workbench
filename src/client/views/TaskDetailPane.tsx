@@ -23,6 +23,7 @@ import { Icon } from '../components/Icon.js'
 import { Badge, type PendingMap } from '../components/TaskList.js'
 import { TaskProgress } from '../components/TaskProgress.js'
 import { MarkdownText } from '../components/MarkdownText.js'
+import { useI18n } from '../i18n.js'
 import { taskProgressView } from '../taskProgressView.js'
 import { eventIcon, eventLabel, fmtTime, roleLabel, shortId, toLocalInput } from '../format.js'
 import type { Dict, DshSessionListState, DshSessionSummary, KnowledgeEntry, Task, TaskDetail } from '../viewTypes.js'
@@ -91,6 +92,7 @@ export function TaskDetailPane({
   setView, isSessionUsable, sessionCandidates, sessionListSnapshot, linkedSessionIds, linkExistingSession,
   openSessionInPanel, addTaskReminder, resetReminderState,
 }: TaskDetailPaneProps): JSX.Element {
+  const { t } = useI18n()
   const {
     detailTab, sessionPickerOpen, sessionPickerRole, sessionPickerQuery, sessionPickerBusy, eventsExpanded,
   } = detail
@@ -100,7 +102,7 @@ export function TaskDetailPane({
 
   if (selected === null) {
     return (
-  <div className="wb-empty">← 从左侧选择一个任务查看详情<br /><span style={{ fontSize: 12 }}>AI 澄清/咨询/拆解会跳转到官方会话区，完成后回这里确认草稿</span></div>
+  <div className="wb-empty">{t('← 从左侧选择一个任务查看详情')}<br /><span style={{ fontSize: 12 }}>{t('AI 澄清/咨询/拆解会跳转到官方会话区，完成后回这里确认草稿')}</span></div>
     )
   }
 
@@ -122,11 +124,11 @@ export function TaskDetailPane({
             <button
               className="wb-btn"
               style={{ color: '#e0645c', borderColor: 'color-mix(in srgb, #e0645c 45%, transparent)' }}
-              title="归档后任务会从工作台列表隐藏（其子任务也会一并从列表隐藏），可在列表页「查看归档」中恢复"
+              title={t('归档后任务会从工作台列表隐藏（其子任务也会一并从列表隐藏），可在列表页「查看归档」中恢复')}
               onClick={archiveSelectedTask}
-            ><Icon name="archive" />归档</button>
+            ><Icon name="archive" />{t('归档')}</button>
           )}
-          {!selected.task.archived && <button className="wb-btn" onClick={() => onOpenEdit({ title: selected.task.title, description: selected.task.description, typeCode: selected.task.typeCode, priorityCode: selected.task.priorityCode, statusCode: selected.task.statusCode, aiPolicyCode: selected.task.aiPolicyCode, dueLocal: toLocalInput(selected.task.dueAt), workspacePath: selected.task.workspacePath ?? '', recurrenceCode: selected.task.recurrenceCode ?? 'none', parentId: selected.task.parentId ?? '', estimatedMinutes: selected.task.estimatedMinutes === null ? '' : String(selected.task.estimatedMinutes), allDay: selected.task.allDay })}><Icon name="edit" />编辑</button>}
+          {!selected.task.archived && <button className="wb-btn" onClick={() => onOpenEdit({ title: selected.task.title, description: selected.task.description, typeCode: selected.task.typeCode, priorityCode: selected.task.priorityCode, statusCode: selected.task.statusCode, aiPolicyCode: selected.task.aiPolicyCode, dueLocal: toLocalInput(selected.task.dueAt), workspacePath: selected.task.workspacePath ?? '', recurrenceCode: selected.task.recurrenceCode ?? 'none', parentId: selected.task.parentId ?? '', estimatedMinutes: selected.task.estimatedMinutes === null ? '' : String(selected.task.estimatedMinutes), allDay: selected.task.allDay })}><Icon name="edit" />{t('编辑')}</button>}
         </div>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', margin: '8px 0' }}>
           <Badge dict={dictOf('type')} code={selected.task.typeCode} />
@@ -135,25 +137,25 @@ export function TaskDetailPane({
         </div>
         {!selected.task.archived && (
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', margin: '8px 0 4px' }}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 600, color: 'var(--dsw-alias-label-primary)' }}>状态
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 600, color: 'var(--dsw-alias-label-primary)' }}>{t('状态')}
               <select style={{ background: 'var(--dsw-alias-bg-base,#17171a)', color: 'inherit', fontWeight: 600, border: '1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.2))', borderRadius: 8, padding: '6px 10px' }} value={selected.task.statusCode} onChange={(e) => void patchTask(selected.task.id, { statusCode: e.target.value })}>
                 {dictOf('status').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}
               </select>
             </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 600, color: 'var(--dsw-alias-label-primary)' }}>AI 策略
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 600, color: 'var(--dsw-alias-label-primary)' }}>{t('AI 策略')}
               <select style={{ background: 'var(--dsw-alias-bg-base,#17171a)', color: 'inherit', fontWeight: 600, border: '1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.2))', borderRadius: 8, padding: '6px 10px' }} value={selected.task.aiPolicyCode} onChange={(e) => void patchTask(selected.task.id, { aiPolicyCode: e.target.value })}>
                 {dictOf('ai_policy').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}
               </select>
             </label>
           </div>
         )}
-        <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>截止：{selected.task.effectiveDueAt === null ? '无' : fmtTime(selected.task.effectiveDueAt)}{selected.task.dueAt === null && selected.task.effectiveDueAt !== null ? '（继承父任务）' : ''}</div>
+        <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>{t('截止：')}{selected.task.effectiveDueAt === null ? t('无') : fmtTime(selected.task.effectiveDueAt)}{selected.task.dueAt === null && selected.task.effectiveDueAt !== null ? t('（继承父任务）') : ''}</div>
         {/* 预计耗时（v1.15.1）：直接决定今日容量的「已排」，所以未填时必须说清"按默认算"。 */}
-        <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>预计耗时：{selected.task.estimatedMinutes === null ? `默认 ${settings.defaultEstimateMinutes} 分钟（未单独设置）` : `${selected.task.estimatedMinutes} 分钟`}{selected.task.allDay ? ' · 全天' : ''}</div>
-        <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>AI 工作区：{selected.task.effectiveWorkspacePath ?? (settings.defaultWorkspace || '默认工作区未设置')}{selected.task.workspacePath === null && selected.task.effectiveWorkspacePath !== null ? '（继承父任务）' : ''}</div>
+        <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>{t('预计耗时：')}{selected.task.estimatedMinutes === null ? t('默认 {n} 分钟（未单独设置）', { n: settings.defaultEstimateMinutes }) : t('{n} 分钟', { n: selected.task.estimatedMinutes })}{selected.task.allDay ? t(' · 全天') : ''}</div>
+        <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>{t('AI 工作区：')}{selected.task.effectiveWorkspacePath ?? (settings.defaultWorkspace || t('默认工作区未设置'))}{selected.task.workspacePath === null && selected.task.effectiveWorkspacePath !== null ? t('（继承父任务）') : ''}</div>
         <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>
-          重复：{dicts.find((d) => d.kind === 'recurrence' && d.code === (selected.task.recurrenceCode ?? 'none'))?.name ?? '不重复'}
-          {selected.task.recurrenceMasterId !== null ? '（自动生成的实例）' : selected.task.recurrenceCode !== null && selected.task.recurrenceCode !== 'none' ? `（模板，已生成到 ${selected.task.recurrenceLastGenerated ?? '—'}）` : ''}
+          {t('重复：')}{dicts.find((d) => d.kind === 'recurrence' && d.code === (selected.task.recurrenceCode ?? 'none'))?.name ?? t('不重复')}
+          {selected.task.recurrenceMasterId !== null ? t('（自动生成的实例）') : selected.task.recurrenceCode !== null && selected.task.recurrenceCode !== 'none' ? t('（模板，已生成到 {n}）', { n: selected.task.recurrenceLastGenerated ?? '—' }) : ''}
         </div>
       </>
     )}
@@ -185,13 +187,13 @@ export function TaskDetailPane({
     <>
       <div className="wb-detail-actions">
         {selected.task.archived ? (
-          <button className="wb-btn primary" onClick={() => onRestoreTask(selected.task.id)}><Icon name="refresh" />恢复任务</button>
+          <button className="wb-btn primary" onClick={() => onRestoreTask(selected.task.id)}><Icon name="refresh" />{t('恢复任务')}</button>
         ) : (
           <>
             {selected.task.recurrenceMasterId !== null
-              ? <span style={{ fontSize: 12, color: '#999', alignSelf: 'center' }}>这是重复任务自动生成的实例，可直接执行/验收。</span>
+              ? <span style={{ fontSize: 12, color: '#999', alignSelf: 'center' }}>{t('这是重复任务自动生成的实例，可直接执行/验收。')}</span>
               : selected.task.recurrenceCode !== null && selected.task.recurrenceCode !== 'none'
-                ? <span style={{ fontSize: 12, color: '#999', alignSelf: 'center' }}>重复任务模板：实例会自动生成到“子任务”中，归档模板即停止重复。</span>
+                ? <span style={{ fontSize: 12, color: '#999', alignSelf: 'center' }}>{t('重复任务模板：实例会自动生成到“子任务”中，归档模板即停止重复。')}</span>
                 : selected.task.statusCode === 'done' || selected.task.statusCode === 'cancelled'
                   ? <button className="wb-btn" disabled={busy} onClick={() => {
                       const existing = selected.sessions.find((x) => x.role_code === 'review')
@@ -200,7 +202,7 @@ export function TaskDetailPane({
                       } else {
                         void startAISession('review', selected.task, selected.task.title)
                       }
-                    }}><Icon name="report" />{selected.sessions.some((x) => x.role_code === 'review') ? '进入复盘会话' : 'AI 复盘'}</button>
+                    }}><Icon name="report" />{selected.sessions.some((x) => x.role_code === 'review') ? t('进入复盘会话') : t('AI 复盘')}</button>
                   : <>
                       {/**
                         * ⚠️ **文案精简**（2026-10-01 用户要求）。
@@ -218,17 +220,17 @@ export function TaskDetailPane({
                         className="wb-btn primary"
                         disabled={busy || selected.task.aiPolicyCode !== 'execute'}
                         title={selected.task.aiPolicyCode !== 'execute'
-                          ? '请先在“AI 策略”里开启「可执行」'
+                          ? t('请先在“AI 策略”里开启「可执行」')
                           : selected.children.length > 0
-                            ? '执行父任务：验收通过后未完成子任务会级联完成；所有子节点完成后父节点也会自动完成'
+                            ? t('执行父任务：验收通过后未完成子任务会级联完成；所有子节点完成后父节点也会自动完成')
                             : selected.sessions.some((x) => x.role_code === 'execute')
-                              ? '新建执行会话并携带此前会话提示'
-                              : '开始执行'}
+                              ? t('新建执行会话并携带此前会话提示')
+                              : t('开始执行')}
                         onClick={() => void startAISession('execute', selected.task, selected.task.title, selected.sessions.filter((x) => x.role_code === 'execute'))}
-                      ><Icon name="ai" />AI 执行{selected.children.length > 0 ? '（父任务）' : ''}</button>
-                      <button className="wb-btn" disabled={busy} title="就这个任务向 AI 咨询（不改任务状态）" onClick={() => void startAISession('consult', selected.task, selected.task.title)}><Icon name="ai" />AI 协助</button>
-                      <button className="wb-btn" disabled={busy} title="让 AI 把任务拆成子任务提案（确认后才建）" onClick={() => void startAISession('breakdown', selected.task, selected.task.title)}><Icon name="breakdown" />AI 拆解</button>
-                      <button className="wb-btn" title="手动添加子任务" onClick={() => { onAddSubtask(selected.task); setDetailTab('children') }}><Icon name="subtask" />子任务</button>
+                      ><Icon name="ai" />{t('AI 执行')}{selected.children.length > 0 ? t('（父任务）') : ''}</button>
+                      <button className="wb-btn" disabled={busy} title={t('就这个任务向 AI 咨询（不改任务状态）')} onClick={() => void startAISession('consult', selected.task, selected.task.title)}><Icon name="ai" />{t('AI 协助')}</button>
+                      <button className="wb-btn" disabled={busy} title={t('让 AI 把任务拆成子任务提案（确认后才建）')} onClick={() => void startAISession('breakdown', selected.task, selected.task.title)}><Icon name="breakdown" />{t('AI 拆解')}</button>
+                      <button className="wb-btn" title={t('手动添加子任务')} onClick={() => { onAddSubtask(selected.task); setDetailTab('children') }}><Icon name="subtask" />{t('子任务')}</button>
                     </>}
             {/* 「归档」已移到详情页右上角（与「编辑」并列），见本卡片标题那一行 */}
           </>
@@ -243,15 +245,15 @@ export function TaskDetailPane({
         * 删掉它不丢语义，只是不再重复占高度。
         */}
       <div className="wb-detail-tabs">
-        <button className={`wb-detail-tab ${detailTab === 'desc' ? 'on' : ''}`} onClick={() => setDetailTab('desc')}>描述</button>
-        <button className={`wb-detail-tab ${detailTab === 'children' ? 'on' : ''}`} onClick={() => setDetailTab('children')}>子任务<span className="count">{selected.children.length}</span></button>
-        <button className={`wb-detail-tab ${detailTab === 'sessions' ? 'on' : ''}`} onClick={() => setDetailTab('sessions')}>会话<span className="count">{selected.sessions.length}</span></button>
-        <button className={`wb-detail-tab ${detailTab === 'records' ? 'on' : ''}`} onClick={() => setDetailTab('records')}>记录<span className="count">{selected.reminders.length + (selected.reviews?.length ?? 0) + (selected.events?.length ?? 0)}</span></button>
+        <button className={`wb-detail-tab ${detailTab === 'desc' ? 'on' : ''}`} onClick={() => setDetailTab('desc')}>{t('描述')}</button>
+        <button className={`wb-detail-tab ${detailTab === 'children' ? 'on' : ''}`} onClick={() => setDetailTab('children')}>{t('子任务')}<span className="count">{selected.children.length}</span></button>
+        <button className={`wb-detail-tab ${detailTab === 'sessions' ? 'on' : ''}`} onClick={() => setDetailTab('sessions')}>{t('会话')}<span className="count">{selected.sessions.length}</span></button>
+        <button className={`wb-detail-tab ${detailTab === 'records' ? 'on' : ''}`} onClick={() => setDetailTab('records')}>{t('记录')}<span className="count">{selected.reminders.length + (selected.reviews?.length ?? 0) + (selected.events?.length ?? 0)}</span></button>
       </div>
 
       {detailTab === 'desc' && (
         <div className="wb-card">
-          <MarkdownText text={selected.task.description || '（无描述）'} />
+          <MarkdownText text={selected.task.description || t('（无描述）')} />
         </div>
       )}
 
@@ -262,25 +264,25 @@ export function TaskDetailPane({
               e.preventDefault()
               onCreateSubtask(new FormData(e.currentTarget), subtaskParent)
             }}>
-              <h4 className="full" style={{ margin: 0 }}><Icon name="subtask" />新建子任务（父任务：{subtaskParent.title}）</h4>
-              <label className="full">标题<input name="title" required placeholder="子任务标题" /></label>
-              <label>类型<select name="type" defaultValue={subtaskParent.typeCode}>{dictOf('type').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
-              <label>优先级<select name="priority" defaultValue={subtaskParent.priorityCode}>{dictOf('priority').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
-              <label>截止时间<input name="due" type="datetime-local" /></label>
-              <div className="full" style={{ display: 'flex', gap: 8 }}><button className="wb-btn primary" type="submit">保存子任务</button><button className="wb-btn" type="button" onClick={onCancelSubtask}>取消</button></div>
+              <h4 className="full" style={{ margin: 0 }}><Icon name="subtask" />{t('新建子任务（父任务：{title}）', { title: subtaskParent.title })}</h4>
+              <label className="full">{t('标题')}<input name="title" required placeholder={t('子任务标题')} /></label>
+              <label>{t('类型')}<select name="type" defaultValue={subtaskParent.typeCode}>{dictOf('type').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
+              <label>{t('优先级')}<select name="priority" defaultValue={subtaskParent.priorityCode}>{dictOf('priority').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}</select></label>
+              <label>{t('截止时间')}<input name="due" type="datetime-local" /></label>
+              <div className="full" style={{ display: 'flex', gap: 8 }}><button className="wb-btn primary" type="submit">{t('保存子任务')}</button><button className="wb-btn" type="button" onClick={onCancelSubtask}>{t('取消')}</button></div>
             </form>
           )}
           <div className="wb-card">
-            <h4>子任务（{selected.children.length}）{selected.children.length > 0 ? ` · ${selected.children.filter((c) => c.statusCode === 'done').length}/${selected.children.length} 已完成` : ''}</h4>
+            <h4>{t('子任务（{n}）', { n: selected.children.length })}{selected.children.length > 0 ? t(' · {done}/{total} 已完成', { done: selected.children.filter((c) => c.statusCode === 'done').length, total: selected.children.length }) : ''}</h4>
             {selected.children.map((c) => <div key={c.id} style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 4 }}><Badge dict={dictOf('status')} code={c.statusCode} /> <span onClick={() => openTask(c)} style={{ cursor: 'pointer' }}>{c.title}</span></div>)}
-            {selected.children.length === 0 && <div style={{ color: '#999', fontSize: 12 }}>无</div>}
+            {selected.children.length === 0 && <div style={{ color: '#999', fontSize: 12 }}>{t('无')}</div>}
           </div>
         </>
       )}
 
       {detailTab === 'sessions' && (
         <div className="wb-card">
-          <h4>关联会话（{selected.sessions.length}）<span style={{ flex: 1 }} />{!sessionPickerOpen && <button className="wb-btn" onClick={() => openSessionPicker()}><Icon name="plus" />添加已有对话</button>}</h4>
+          <h4>{t('关联会话（{n}）', { n: selected.sessions.length })}<span style={{ flex: 1 }} />{!sessionPickerOpen && <button className="wb-btn" onClick={() => openSessionPicker()}><Icon name="plus" />{t('添加已有对话')}</button>}</h4>
           {selected.sessions.length > 0
             ? (
                 <div className="wb-session-list">
@@ -293,26 +295,26 @@ export function TaskDetailPane({
                       <button key={`${sid}-${role}`} className="wb-session-row" onClick={() => {
                         if (sid === '') return
                         /** 会话页签的行来自历史关联：那条会话可能已被归档或删除，裸切只会静默失败。 */
-                        if (!isSessionUsable(sid)) { setNotice('这条会话已被归档或已删除，无法打开'); return }
+                        if (!isSessionUsable(sid)) { setNotice(t('这条会话已被归档或已删除，无法打开')); return }
                         openSessionInPanel(sid)
                       }} title={roleLabel(role)}>
                         <span className="wb-session-role">{roleLabel(role)}</span>
                         <span className="wb-session-name">{name}</span>
-                        <span className="wb-session-open">打开 ↗</span>
+                        <span className="wb-session-open">{t('打开 ↗')}</span>
                       </button>
                     )
                   })}
                 </div>
               )
-            : <div className="wb-empty">暂无关联会话；点击“添加已有对话”关联，或在任务上启动 AI 会话自动关联。</div>}
+            : <div className="wb-empty">{t('暂无关联会话；点击“添加已有对话”关联，或在任务上启动 AI 会话自动关联。')}</div>}
           {sessionPickerOpen && (
             <div className="wb-session-picker">
               <div className="wb-session-picker-bar">
-                <input className="wb-session-search" placeholder="搜索会话名称 / 工作区" value={sessionPickerQuery} onChange={(e) => setSessionPickerQuery(e.target.value)} autoFocus />
+                <input className="wb-session-search" placeholder={t('搜索会话名称 / 工作区')} value={sessionPickerQuery} onChange={(e) => setSessionPickerQuery(e.target.value)} autoFocus />
                 <select className="wb-session-role-select" value={sessionPickerRole} onChange={(e) => setSessionPickerRole(e.target.value)}>
                   {dictOf('session_role').map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}
                 </select>
-                <button className="wb-btn" onClick={() => closeSessionPicker()}>取消</button>
+                <button className="wb-btn" onClick={() => closeSessionPicker()}>{t('取消')}</button>
               </div>
               <div className="wb-session-picker-list">
                 {sessionCandidates.length > 0
@@ -322,11 +324,11 @@ export function TaskDetailPane({
                         <button key={item.id} className="wb-session-option" disabled={sessionPickerBusy || linked} onClick={() => void linkExistingSession(item.id)}>
                           <span className="wb-session-name">{item.displayTitle}</span>
                           {item.cwd !== undefined && <span className="wb-session-cwd">{item.cwd.split(/[\\/]/).filter(Boolean).pop() ?? item.cwd}</span>}
-                          <span className="wb-session-add">{linked ? '已关联' : '添加'}</span>
+                          <span className="wb-session-add">{linked ? t('已关联') : t('添加')}</span>
                         </button>
                       )
                     })
-                  : <div className="wb-empty">没有找到可添加的会话</div>}
+                  : <div className="wb-empty">{t('没有找到可添加的会话')}</div>}
               </div>
             </div>
           )}
@@ -336,42 +338,42 @@ export function TaskDetailPane({
       {detailTab === 'records' && (
         <>
           <div className="wb-card">
-            <h4>提醒（{selected.reminders.length}）</h4>
+            <h4>{t('提醒（{n}）', { n: selected.reminders.length })}</h4>
             {selected.reminders.map((r) => {
               // 三种终态分开显示：已送达 / 已跳过（太旧）/ 用户已确认 —— 原先把它们都塞在 fired_at 里
               const ackAt = r.acknowledgedAt ?? null
               const skipAt = r.skippedAt ?? null
               const state = ackAt !== null
-                ? `已确认 ${fmtTime(ackAt)}`
+                ? t('已确认 {time}', { time: fmtTime(ackAt) })
                 : skipAt !== null
-                  ? '已跳过（超出补发窗口）'
+                  ? t('已跳过（超出补发窗口）')
                   : r.firedAt === null
-                    ? '未触发'
-                    : `已送达 ${fmtTime(r.firedAt)}`
+                    ? t('未触发')
+                    : t('已送达 {time}', { time: fmtTime(r.firedAt) })
               const settled = ackAt !== null || skipAt !== null || r.firedAt !== null
               return (
                 <div key={r.id} style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
                   <Icon name="bell" size={13} />
-                  {r.offsetMinutes === 0 ? '准时（截止时间）' : `提前 ${r.offsetMinutes} 分钟`} · {r.methodCode === 'os' ? '系统通知' : '页面/桌面通知'} · {state}
-                  {settled && <button className="wb-btn" style={{ padding: '1px 7px', fontSize: 11 }} title="清掉终态、回到未处理，到点会再提醒一次" onClick={() => void resetReminderState(r.id)}>重新武装</button>}
+                  {r.offsetMinutes === 0 ? t('准时（截止时间）') : t('提前 {n} 分钟', { n: r.offsetMinutes })} · {r.methodCode === 'os' ? t('系统通知') : t('页面/桌面通知')} · {state}
+                  {settled && <button className="wb-btn" style={{ padding: '1px 7px', fontSize: 11 }} title={t('清掉终态、回到未处理，到点会再提醒一次')} onClick={() => void resetReminderState(r.id)}>{t('重新武装')}</button>}
                 </div>
               )
             })}
             {selected.task.effectiveDueAt === null
-              ? <div style={{ fontSize: 12, color: '#999' }}>任务还没有截止时间，请先在详情里设置截止时间，再添加提醒。</div>
+              ? <div style={{ fontSize: 12, color: '#999' }}>{t('任务还没有截止时间，请先在详情里设置截止时间，再添加提醒。')}</div>
               : selected.task.statusCode === 'done' || selected.task.statusCode === 'cancelled'
-                ? <div style={{ fontSize: 12, color: '#999' }}>已完成/已取消的任务不再提醒。</div>
+                ? <div style={{ fontSize: 12, color: '#999' }}>{t('已完成/已取消的任务不再提醒。')}</div>
                 : (
                   <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
-                    {[{ offset: 0, label: '准时' }, { offset: 15, label: '提前15分' }, { offset: 30, label: '提前30分' }, { offset: 60, label: '提前1小时' }, { offset: 1440, label: '提前1天' }].map((item) => (
+                    {[{ offset: 0, label: t('准时') }, { offset: 15, label: t('提前15分') }, { offset: 30, label: t('提前30分') }, { offset: 60, label: t('提前1小时') }, { offset: 1440, label: t('提前1天') }].map((item) => (
                       <button key={item.offset} className="wb-btn" disabled={busy} onClick={() => void addTaskReminder(item.offset)}>{item.label}</button>
                     ))}
                   </div>
                 )}
-            <div style={{ fontSize: 12, color: '#999', marginTop: 6 }}>到提醒时间后：页内横幅 + 桌面通知（设置中授权）。超出补发窗口（默认 24 小时）的提醒会自动标为「已跳过」；任何一条只要显示为已送达 / 已跳过 / 已确认，都可以点「重新武装」让它重新提醒。</div>
+            <div style={{ fontSize: 12, color: '#999', marginTop: 6 }}>{t('到提醒时间后：页内横幅 + 桌面通知（设置中授权）。超出补发窗口（默认 24 小时）的提醒会自动标为「已跳过」；任何一条只要显示为已送达 / 已跳过 / 已确认，都可以点「重新武装」让它重新提醒。')}</div>
           </div>
           <div className="wb-card">
-            <h4>复盘记录（{selected.reviews?.length ?? 0}）</h4>
+            <h4>{t('复盘记录（{n}）', { n: selected.reviews?.length ?? 0 })}</h4>
             {(selected.reviews ?? []).map((rv, i) => {
               const reviewId = String(rv.id ?? '')
               const existingKnowledge = taskKnowledge.find((entry) => entry.sourceReviewId === reviewId)
@@ -379,15 +381,15 @@ export function TaskDetailPane({
                 <div key={String(rv.id ?? i)} style={{ marginBottom: 10, paddingBottom: 10, borderBottom: '1px solid var(--wb-border-soft)' }}>
                   <MarkdownText text={String(rv.summary_md ?? '')} />
                   {existingKnowledge !== undefined
-                    ? <button className="wb-btn" style={{ marginTop: 6 }} onClick={() => { knowledge.openEntryById(existingKnowledge.id); setView('knowledge') }}><Icon name="book" />✅ 已沉淀，打开知识条目</button>
-                    : <button className="wb-btn" style={{ marginTop: 6 }} onClick={() => { knowledge.startCreate({ title: `复盘：${selected.task.title}`, contentMd: String(rv.summary_md ?? ''), kindCode: 'lesson', tags: '复盘', sourceTaskId: selected.task.id, sourceReviewId: reviewId, fileLink: '' }); setView('knowledge') }}><Icon name="book" />💡 沉淀为经验</button>}
+                    ? <button className="wb-btn" style={{ marginTop: 6 }} onClick={() => { knowledge.openEntryById(existingKnowledge.id); setView('knowledge') }}><Icon name="book" />{t('✅ 已沉淀，打开知识条目')}</button>
+                    : <button className="wb-btn" style={{ marginTop: 6 }} onClick={() => { knowledge.startCreate({ title: `复盘：${selected.task.title}`, contentMd: String(rv.summary_md ?? ''), kindCode: 'lesson', tags: '复盘', sourceTaskId: selected.task.id, sourceReviewId: reviewId, fileLink: '' }); setView('knowledge') }}><Icon name="book" />{t('💡 沉淀为经验')}</button>}
                 </div>
               )
             })}
-            {(selected.reviews?.length ?? 0) === 0 && <div style={{ fontSize: 12, color: '#999' }}>暂无复盘；已完成任务可用“AI 复盘”。</div>}
+            {(selected.reviews?.length ?? 0) === 0 && <div style={{ fontSize: 12, color: '#999' }}>{t('暂无复盘；已完成任务可用“AI 复盘”。')}</div>}
           </div>
           <div className="wb-card">
-            <h4>变更历史（{selected.events?.length ?? 0}）</h4>
+            <h4>{t('变更历史（{n}）', { n: selected.events?.length ?? 0 })}</h4>
             {(() => {
               const events = selected.events ?? []
               const shown = eventsExpanded ? events : events.slice(-5).reverse()
@@ -417,10 +419,10 @@ export function TaskDetailPane({
                       </div>
                     )
                   })}
-                  {events.length === 0 && <div style={{ fontSize: 12, color: '#999' }}>暂无变更记录。</div>}
+                  {events.length === 0 && <div style={{ fontSize: 12, color: '#999' }}>{t('暂无变更记录。')}</div>}
                   {events.length > 5 && (
                     <button className="wb-btn" style={{ marginTop: 8 }} onClick={() => setEventsExpanded((v) => !v)}>
-                      {eventsExpanded ? '收起' : `展开全部（${events.length} 条）`}
+                      {eventsExpanded ? t('收起') : t('展开全部（{n} 条）', { n: events.length })}
                     </button>
                   )}
                 </>

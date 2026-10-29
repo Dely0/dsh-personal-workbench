@@ -15,8 +15,10 @@ import { WORKBENCH_BUILD_ID } from './buildId.js'
 import { isAiSessionReusable } from './aiSessionReuse.js'
 import { checkHostCapabilities, refuseToStart, type SlotsProbe } from './capabilities.js'
 import {
-  ENTRY_TITLE, OFFICIAL_MAIN_SLOT, OFFICIAL_OVERLAY_SLOT, OFFICIAL_PANEL_LIST_SLOT,
+  ENTRY_TITLE_KEY, OFFICIAL_MAIN_SLOT, OFFICIAL_OVERLAY_SLOT, OFFICIAL_PANEL_LIST_SLOT,
 } from './entryContract.js'
+// 入口文案的语言：侧栏行与会话标题栏按钮由宿主槽位渲染，在 I18nProvider 之外（见该文件文件头）。
+import { entryText } from './entryLocale.js'
 import { ToastHost } from './components/Toast.js'
 import { api } from './api.js'
 // 快速录入域（D17/P6-2）：三个浏览器侧小工具搬进纯模块 —— 快速录入域与 AI 会话域共用。
@@ -1117,13 +1119,13 @@ function WorkbenchHeaderEntry({ workbench }: { workbench: WorkbenchSlotApi }): J
     <button
       type="button"
       className="wb-header-entry"
-      title={active ? '收起工作台' : '打开工作台（任务 / 日历 / 知识库 / 点子）'}
+      title={active ? entryText('收起工作台') : entryText(ENTRY_TITLE_KEY)}
       aria-pressed={active}
       {...(active ? { 'data-active': '' } : {})}
       onClick={() => workbench.toggle()}
     >
       <Icon name="today" size={14} />
-      工作台
+      {entryText('工作台')}
     </button>
   )
 }
@@ -1834,7 +1836,7 @@ export function apply(ctx: unknown): () => void {
      */
     try {
       const disposeList = slots.inject(OFFICIAL_PANEL_LIST_SLOT, () => slots.register(
-        { name: OFFICIAL_PANEL_LIST_SLOT, id: PANEL_NAME, order: -4, label: ENTRY_TITLE },
+        { name: OFFICIAL_PANEL_LIST_SLOT, id: PANEL_NAME, order: -4, label: entryText(ENTRY_TITLE_KEY) },
         // 模块级稳定组件（理由见 WorkbenchPanelEntry）
         WorkbenchPanelEntry as unknown as (props: Record<string, unknown>) => JSX.Element | null,
       ))

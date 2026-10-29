@@ -191,7 +191,7 @@ export function SettingsModal(props: SettingsModalProps): ReactNode {
             <button key={item.key} className={section === item.key ? 'on' : ''} onClick={() => setSection(item.key)}>
               {t(item.label)}
               {item.key === 'wechat' && reminderChannel?.queued !== undefined && reminderChannel.queued > 0 && (
-                <span className="dot" title={`队列中 ${reminderChannel.queued} 条待发`} />
+                <span className="dot" title={t('队列中 {n} 条待发', { n: reminderChannel.queued })} />
               )}
             </button>
           ))}
@@ -223,7 +223,7 @@ export function SettingsModal(props: SettingsModalProps): ReactNode {
                 <input
                   value={settings.defaultWorkspace}
                   onChange={(e) => onSettingsChange({ ...settings, defaultWorkspace: e.target.value })}
-                  placeholder="例如 D:\Code\AI-Workspace"
+                  placeholder={t('例如 D:\\Code\\AI-Workspace')}
                 />
               </div>
               <label className="wb-switch-row">
@@ -362,7 +362,7 @@ export function SettingsModal(props: SettingsModalProps): ReactNode {
 
           {section === 'notify' && (
             <section>
-              <h5>桌面通知</h5>
+              <h5>{t('桌面通知')}</h5>
               <label className="wb-switch-row">
                 <input
                   type="checkbox"
@@ -370,8 +370,8 @@ export function SettingsModal(props: SettingsModalProps): ReactNode {
                   onChange={(e) => onSettingsChange({ ...settings, desktopNotify: e.target.checked })}
                 />
                 <span>
-                  任务到期时弹系统通知
-                  <span className="wb-switch-desc">需要浏览器授权；DSH 页面保持打开（可最小化）即可收到。</span>
+                  {t('任务到期时弹系统通知')}
+                  <span className="wb-switch-desc">{t('需要浏览器授权；DSH 页面保持打开（可最小化）即可收到。')}</span>
                 </span>
               </label>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 8 }}>
@@ -383,17 +383,17 @@ export function SettingsModal(props: SettingsModalProps): ReactNode {
                 */}
                 <span className="wb-hint">{notificationStateText(notifyPermission)}</span>
                 {notifyPermission === 'default' && (
-                  <button className="wb-btn" onClick={onRequestNotifyPermission}>授权浏览器通知</button>
+                  <button className="wb-btn" onClick={onRequestNotifyPermission}>{t('授权浏览器通知')}</button>
                 )}
-                {notifyPermission === 'granted' && <button className="wb-btn" onClick={onSendTestNotification}>发送测试通知</button>}
-                {notifyPermission === 'granted' && <span style={{ fontSize: 12, color: '#2E9B7B' }}>浏览器通知已授权</span>}
+                {notifyPermission === 'granted' && <button className="wb-btn" onClick={onSendTestNotification}>{t('发送测试通知')}</button>}
+                {notifyPermission === 'granted' && <span style={{ fontSize: 12, color: '#2E9B7B' }}>{t('浏览器通知已授权')}</span>}
               </div>
             </section>
           )}
 
           {section === 'recall' && (
             <section>
-              <h5>知识库自动召回</h5>
+              <h5>{t('知识库自动召回')}</h5>
               <label className="wb-switch-row">
                 <input
                   type="checkbox"
@@ -401,27 +401,24 @@ export function SettingsModal(props: SettingsModalProps): ReactNode {
                   onChange={(e) => onSettingsChange({ ...settings, autoKnowledgeRecall: e.target.checked })}
                 />
                 <span>
-                  会话里自动检索并带上相关知识
+                  {t('会话里自动检索并带上相关知识')}
                   <span className="wb-switch-desc">
-                    开启后，动作前 / 报错时 / 写码前 / 验收前会按你的提问自动检索知识库，
-                    命中的条目会以「【工作台知识库】…」出现在会话里（看得见命中了哪几条）。
-                    关闭后不再自动检索与注入，但你仍可以让 AI 用 workbench_search_knowledge 主动查。
-                    单个会话里想临时关掉，直接让 AI 执行 turn_off 即可。
+                    {t('开启后，动作前 / 报错时 / 写码前 / 验收前会按你的提问自动检索知识库， 命中的条目会以「【工作台知识库】…」出现在会话里（看得见命中了哪几条）。 关闭后不再自动检索与注入，但你仍可以让 AI 用 workbench_search_knowledge 主动查。 单个会话里想临时关掉，直接让 AI 执行 turn_off 即可。')}
                   </span>
                 </span>
               </label>
 
               <div className="wb-recall-log">
                 <div className="wb-recall-log-head">
-                  <b>最近的召回记录</b>
-                  <span>检索了哪些关键词、命中哪几条、是否被引用</span>
+                  <b>{t('最近的召回记录')}</b>
+                  <span>{t('检索了哪些关键词、命中哪几条、是否被引用')}</span>
                   <button className="wb-btn" onClick={onRefreshRecallLog} disabled={recallLog.loading}>
-                    {recallLog.loading ? '读取中…' : '刷新'}
+                    {recallLog.loading ? t('读取中…') : t('刷新')}
                   </button>
                 </div>
-                {recallLog.error !== null && <p className="wb-hint">读取失败：{recallLog.error}</p>}
+                {recallLog.error !== null && <p className="wb-hint">{t('读取失败：{message}', { message: recallLog.error })}</p>}
                 {recallLog.error === null && recallLog.lines.length === 0 && (
-                  <p className="wb-hint">还没有召回记录。开启后来一次会话，这里就会出现每次检索的账。</p>
+                  <p className="wb-hint">{t('还没有召回记录。开启后来一次会话，这里就会出现每次检索的账。')}</p>
                 )}
                 {recallLog.lines.length > 0 && (
                   <ul className="wb-recall-log-lines">
@@ -432,12 +429,12 @@ export function SettingsModal(props: SettingsModalProps): ReactNode {
 
               {recallSessionOff.length > 0 && (
                 <div className="wb-recall-sessions">
-                  <b>已单独关闭自动召回的会话</b>
+                  <b>{t('已单独关闭自动召回的会话')}</b>
                   <ul>
                     {recallSessionOff.map((sessionId) => (
                       <li key={sessionId}>
                         <code>{sessionId}</code>
-                        <button className="wb-btn" onClick={() => onRecallSessionOffChange(sessionId, 'clear')}>恢复跟随全局</button>
+                        <button className="wb-btn" onClick={() => onRecallSessionOffChange(sessionId, 'clear')}>{t('恢复跟随全局')}</button>
                       </li>
                     ))}
                   </ul>
@@ -448,9 +445,9 @@ export function SettingsModal(props: SettingsModalProps): ReactNode {
 
           {section === 'wechat' && (
             <section>
-              <h5>微信提醒</h5>
+              <h5>{t('微信提醒')}</h5>
               {reminderChannel === null || reminderPolicy === null ? (
-                <p className="wb-hint">正在读取通道状态…</p>
+                <p className="wb-hint">{t('正在读取通道状态…')}</p>
               ) : (
                 <>
                   <label className="wb-switch-row">
@@ -460,32 +457,32 @@ export function SettingsModal(props: SettingsModalProps): ReactNode {
                       onChange={(e) => onReminderPolicyChange({ ...reminderPolicy, enabled: e.target.checked })}
                     />
                     <span>
-                      启用微信提醒
-                      <span className="wb-switch-desc">关闭时行为与原来完全一致（仅页面横幅 + 桌面通知）。</span>
+                      {t('启用微信提醒')}
+                      <span className="wb-switch-desc">{t('关闭时行为与原来完全一致（仅页面横幅 + 桌面通知）。')}</span>
                     </span>
                   </label>
 
                   {!reminderChannel.installed && (
                     <div className="wb-banner reminder" style={{ margin: '10px 0' }}>
-                      <h4>未检测到 dsh-im</h4>
+                      <h4>{t('未检测到 dsh-im')}</h4>
                       <div style={{ fontSize: 12.5 }}>
-                        微信推送不可用，提醒会回落到页面横幅与桌面通知。安装命令：
+                        {t('微信推送不可用，提醒会回落到页面横幅与桌面通知。安装命令：')}
                         <code style={{ display: 'inline-block', marginTop: 4 }}>pnpm add -g @xmanrui/dsh-im</code>
                       </div>
                     </div>
                   )}
                   {reminderChannel.installed && !reminderChannel.configured && (
                     <div className="wb-banner completion" style={{ margin: '10px 0' }}>
-                      <h4>还没有可用的投递目标</h4>
-                      <div style={{ fontSize: 12.5 }}>请先在微信里给机器人发一条消息（建立 context_token），再点「刷新目标」。</div>
+                      <h4>{t('还没有可用的投递目标')}</h4>
+                      <div style={{ fontSize: 12.5 }}>{t('请先在微信里给机器人发一条消息（建立 context_token），再点「刷新目标」。')}</div>
                     </div>
                   )}
                   {reminderChannel.circuitOpen && (
                     <div className="wb-banner error" style={{ margin: '10px 0' }}>
-                      <h4>微信通道被 iLink 限流</h4>
+                      <h4>{t('微信通道被 iLink 限流')}</h4>
                       <div style={{ fontSize: 12.5 }}>
-                        {reminderChannel.circuitUntil === null ? '' : `${new Date(reminderChannel.circuitUntil).toLocaleTimeString(undefined, { hour12: false })} 前不发送。`}
-                        让手机微信给机器人发一条消息即可立即恢复。
+                        {reminderChannel.circuitUntil === null ? '' : t('{time} 前不发送。', { time: new Date(reminderChannel.circuitUntil).toLocaleTimeString(undefined, { hour12: false }) })}
+                        {t('让手机微信给机器人发一条消息即可立即恢复。')}
                       </div>
                     </div>
                   )}
@@ -493,7 +490,7 @@ export function SettingsModal(props: SettingsModalProps): ReactNode {
                   {reminderChannel.installed && (
                     <div className="wb-field-grid" style={{ marginTop: 10 }}>
                       <label className="wb-field">
-                        <span>机器人</span>
+                        <span>{t('机器人')}</span>
                         <select
                           value={reminderChannel.botId ?? ''}
                           onChange={(e) => {
@@ -502,26 +499,26 @@ export function SettingsModal(props: SettingsModalProps): ReactNode {
                             onSelectTarget(botId, first)
                           }}
                         >
-                          <option value="">选择机器人…</option>
+                          <option value="">{t('选择机器人…')}</option>
                           {(reminderOptions?.bots ?? []).map((bot) => <option key={bot.botId} value={bot.botId}>{bot.label}</option>)}
                         </select>
                       </label>
                       <label className="wb-field">
-                        <span>投递目标</span>
+                        <span>{t('投递目标')}</span>
                         <select
                           value={reminderChannel.targetId ?? ''}
                           onChange={(e) => onSelectTarget(reminderChannel.botId, e.target.value === '' ? null : e.target.value)}
                         >
-                          <option value="">选择投递目标…</option>
+                          <option value="">{t('选择投递目标…')}</option>
                           {targets.map((target) => <option key={target.targetId} value={target.targetId}>{target.label}</option>)}
                         </select>
                       </label>
                       <div className="wb-field">
                         <span>&nbsp;</span>
                         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                          <button className="wb-btn primary" disabled={reminderBusy} onClick={() => void onSaveTarget()}>保存目标</button>
-                          <button className="wb-btn" disabled={reminderBusy} onClick={() => void onRefreshChannel()}>刷新目标</button>
-                          <button className="wb-btn" disabled={reminderBusy || !reminderChannel.configured} onClick={() => void onSendTestMessage()}>发送测试消息</button>
+                          <button className="wb-btn primary" disabled={reminderBusy} onClick={() => void onSaveTarget()}>{t('保存目标')}</button>
+                          <button className="wb-btn" disabled={reminderBusy} onClick={() => void onRefreshChannel()}>{t('刷新目标')}</button>
+                          <button className="wb-btn" disabled={reminderBusy || !reminderChannel.configured} onClick={() => void onSendTestMessage()}>{t('发送测试消息')}</button>
                         </div>
                       </div>
                     </div>
@@ -529,7 +526,7 @@ export function SettingsModal(props: SettingsModalProps): ReactNode {
 
                   <div className="wb-field-grid" style={{ marginTop: 14 }}>
                     <label className="wb-field full">
-                      <span>草稿通知类型（推送到微信）</span>
+                      <span>{t('草稿通知类型（推送到微信）')}</span>
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, paddingTop: 4 }}>
                         {DRAFT_NOTIFY_OPTIONS.map((option) => {
                           const checked = (reminderPolicy.draftNotifyKinds ?? []).includes(option.code)
@@ -544,14 +541,14 @@ export function SettingsModal(props: SettingsModalProps): ReactNode {
                                   onReminderPolicyChange({ ...reminderPolicy, draftNotifyKinds: next })
                                 }}
                               />
-                              {option.label}
+                              {t(option.label)}
                             </label>
                           )
                         })}
                       </div>
                     </label>
                     <label className="wb-field">
-                      <span>即时推送分级</span>
+                      <span>{t('即时推送分级')}</span>
                       <input
                         value={reminderPolicy.immediatePriorities.join(',')}
                         onChange={(e) => onReminderPolicyChange({ ...reminderPolicy, immediatePriorities: splitCodes(e.target.value) })}
@@ -559,7 +556,7 @@ export function SettingsModal(props: SettingsModalProps): ReactNode {
                       />
                     </label>
                     <label className="wb-field">
-                      <span>汇总分级</span>
+                      <span>{t('汇总分级')}</span>
                       <input
                         value={reminderPolicy.digestPriorities.join(',')}
                         onChange={(e) => onReminderPolicyChange({ ...reminderPolicy, digestPriorities: splitCodes(e.target.value) })}
@@ -567,22 +564,22 @@ export function SettingsModal(props: SettingsModalProps): ReactNode {
                       />
                     </label>
                     <label className="wb-field">
-                      <span>每日汇总时间</span>
+                      <span>{t('每日汇总时间')}</span>
                       <input value={reminderPolicy.digestAt} onChange={(e) => onReminderPolicyChange({ ...reminderPolicy, digestAt: e.target.value })} placeholder="09:00" />
                     </label>
                     <label className="wb-field">
-                      <span>静默时段开始</span>
+                      <span>{t('静默时段开始')}</span>
                       <input
                         value={reminderPolicy.quietHours?.start ?? ''}
                         onChange={(e) => onReminderPolicyChange({
                           ...reminderPolicy,
                           quietHours: e.target.value === '' ? null : { start: e.target.value, end: reminderPolicy.quietHours?.end ?? '08:00' },
                         })}
-                        placeholder="22:00（留空=不静默）"
+                        placeholder={t('22:00（留空=不静默）')}
                       />
                     </label>
                     <label className="wb-field">
-                      <span>静默时段结束</span>
+                      <span>{t('静默时段结束')}</span>
                       <input
                         value={reminderPolicy.quietHours?.end ?? ''}
                         onChange={(e) => onReminderPolicyChange({
@@ -593,7 +590,7 @@ export function SettingsModal(props: SettingsModalProps): ReactNode {
                       />
                     </label>
                     <label className="wb-field">
-                      <span>穿透静默的优先级</span>
+                      <span>{t('穿透静默的优先级')}</span>
                       <input
                         value={reminderPolicy.quietHoursBypassPriorities.join(',')}
                         onChange={(e) => onReminderPolicyChange({ ...reminderPolicy, quietHoursBypassPriorities: splitCodes(e.target.value) })}
@@ -601,24 +598,24 @@ export function SettingsModal(props: SettingsModalProps): ReactNode {
                       />
                     </label>
                     <label className="wb-field">
-                      <span>每小时上限</span>
+                      <span>{t('每小时上限')}</span>
                       <input type="number" min={1} max={60} value={reminderPolicy.hourlyLimit}
                         onChange={(e) => onReminderPolicyChange({ ...reminderPolicy, hourlyLimit: Number(e.target.value) })} />
                     </label>
                     <label className="wb-field">
-                      <span>每日上限</span>
+                      <span>{t('每日上限')}</span>
                       <input type="number" min={1} max={500} value={reminderPolicy.dailyLimit}
                         onChange={(e) => onReminderPolicyChange({ ...reminderPolicy, dailyLimit: Number(e.target.value) })} />
                     </label>
                     <label className="wb-field">
-                      <span>补发回溯（小时）</span>
+                      <span>{t('补发回溯（小时）')}</span>
                       <input type="number" min={1} max={168} value={reminderPolicy.catchupWindowHours}
                         onChange={(e) => onReminderPolicyChange({ ...reminderPolicy, catchupWindowHours: Number(e.target.value) })} />
                     </label>
                   </div>
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 12 }}>
-                    <button className="wb-btn primary" disabled={reminderBusy} onClick={() => void onSaveReminderPolicy()}>保存提醒策略</button>
-                    <span className="wb-hint" style={{ margin: 0 }}>关掉浏览器后仍会推送；未安装 dsh-im 时自动回落</span>
+                    <button className="wb-btn primary" disabled={reminderBusy} onClick={() => void onSaveReminderPolicy()}>{t('保存提醒策略')}</button>
+                    <span className="wb-hint" style={{ margin: 0 }}>{t('关掉浏览器后仍会推送；未安装 dsh-im 时自动回落')}</span>
                   </div>
                 </>
               )}
@@ -627,7 +624,7 @@ export function SettingsModal(props: SettingsModalProps): ReactNode {
 
           {section === 'dict' && (
             <section>
-              <h5>字典管理</h5>
+              <h5>{t('字典管理')}</h5>
               <div className="wb-segmented wb-sub-segmented" style={{ marginBottom: 10 }}>
                 {DICT_KINDS.map((item) => (
                   <button
@@ -635,32 +632,32 @@ export function SettingsModal(props: SettingsModalProps): ReactNode {
                     className={`wb-seg ${dictKind === item.key ? 'on' : ''}`}
                     onClick={() => { onDictKindChange(item.key); onDictFormChange(null); onDictEditCodeChange(null); onDictErrorChange(null) }}
                   >
-                    {item.label}
+                    {t(item.label)}
                   </button>
                 ))}
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, gap: 8, flexWrap: 'wrap' }}>
-                <span className="wb-hint" style={{ margin: 0 }}>默认项受保护，不可删除；可编辑名称/颜色/排序/停用</span>
+                <span className="wb-hint" style={{ margin: 0 }}>{t('默认项受保护，不可删除；可编辑名称/颜色/排序/停用')}</span>
                 <button
                   className="wb-btn primary"
                   onClick={() => { onDictEditCodeChange(null); onDictFormChange({ name: '', code: '', color: '#4F86F7', sortOrder: 50 }); onDictErrorChange(null) }}
                 >
-                  新增
+                  {t('新增')}
                 </button>
               </div>
               {dictForm !== null && (
                 <form className="wb-form" style={{ marginBottom: 10 }} onSubmit={(e) => void onSaveDictionary(e)}>
-                  <label>名称<input value={dictForm.name} onChange={(e) => onDictFormChange({ ...dictForm, name: e.target.value })} placeholder="例如：客户沟通" /></label>
+                  <label>{t('名称')}<input value={dictForm.name} onChange={(e) => onDictFormChange({ ...dictForm, name: e.target.value })} placeholder={t('例如：客户沟通')} /></label>
                   <label>
-                    code{dictEditCode !== null ? <span style={{ fontWeight: 400, fontSize: 11 }}>（不可修改）</span> : null}
+                    code{dictEditCode !== null ? <span style={{ fontWeight: 400, fontSize: 11 }}>{t('（不可修改）')}</span> : null}
                     <input value={dictEditCode ?? dictForm.code} disabled={dictEditCode !== null}
-                      onChange={(e) => onDictFormChange({ ...dictForm, code: e.target.value })} placeholder="client_comm（小写英文/下划线/数字）" />
+                      onChange={(e) => onDictFormChange({ ...dictForm, code: e.target.value })} placeholder={t('client_comm（小写英文/下划线/数字）')} />
                   </label>
-                  <label>颜色<input type="color" value={dictForm.color} onChange={(e) => onDictFormChange({ ...dictForm, color: e.target.value })} /></label>
-                  <label>排序<input type="number" value={dictForm.sortOrder} onChange={(e) => onDictFormChange({ ...dictForm, sortOrder: Number(e.target.value) })} /></label>
+                  <label>{t('颜色')}<input type="color" value={dictForm.color} onChange={(e) => onDictFormChange({ ...dictForm, color: e.target.value })} /></label>
+                  <label>{t('排序')}<input type="number" value={dictForm.sortOrder} onChange={(e) => onDictFormChange({ ...dictForm, sortOrder: Number(e.target.value) })} /></label>
                   <div className="full" style={{ display: 'flex', gap: 8 }}>
-                    <button className="wb-btn primary" type="submit">保存</button>
-                    <button className="wb-btn" type="button" onClick={() => { onDictFormChange(null); onDictEditCodeChange(null); onDictErrorChange(null) }}>取消</button>
+                    <button className="wb-btn primary" type="submit">{t('保存')}</button>
+                    <button className="wb-btn" type="button" onClick={() => { onDictFormChange(null); onDictEditCodeChange(null); onDictErrorChange(null) }}>{t('取消')}</button>
                   </div>
                 </form>
               )}
@@ -672,12 +669,12 @@ export function SettingsModal(props: SettingsModalProps): ReactNode {
                     <div key={entry.code} className="wb-row" style={{ cursor: 'default', opacity: entry.active === 0 ? 0.55 : undefined, flexWrap: 'wrap' }}>
                       <span className="wb-chip" style={{ background: `color-mix(in srgb, ${color} 14%, transparent)`, color, border: `1px solid color-mix(in srgb, ${color} 45%, transparent)`, fontWeight: 600 }}>{entry.name}</span>
                       <code style={{ fontSize: 11, color: 'var(--dsw-alias-label-secondary)' }}>{entry.code}</code>
-                      {entry.builtin === 1 && <span className="wb-chip" style={{ background: 'color-mix(in srgb, #888 12%, transparent)', color: 'var(--dsw-alias-label-secondary)', border: '1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.2))' }}>内置</span>}
+                      {entry.builtin === 1 && <span className="wb-chip" style={{ background: 'color-mix(in srgb, #888 12%, transparent)', color: 'var(--dsw-alias-label-secondary)', border: '1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.2))' }}>{t('内置')}</span>}
                       <span style={{ flex: 1 }} />
-                      <button className="wb-btn" onClick={() => { onDictEditCodeChange(entry.code); onDictFormChange({ name: entry.name, code: entry.code, color, sortOrder: entry.sortOrder ?? 50 }); onDictErrorChange(null) }}>编辑</button>
-                      <button className="wb-btn" onClick={() => void onToggleDictionary(entry)}>{entry.active === 1 ? '停用' : '启用'}</button>
+                      <button className="wb-btn" onClick={() => { onDictEditCodeChange(entry.code); onDictFormChange({ name: entry.name, code: entry.code, color, sortOrder: entry.sortOrder ?? 50 }); onDictErrorChange(null) }}>{t('编辑')}</button>
+                      <button className="wb-btn" onClick={() => void onToggleDictionary(entry)}>{entry.active === 1 ? t('停用') : t('启用')}</button>
                       {entry.builtin !== 1 && (
-                        <button className="wb-btn" style={{ color: '#E74C3C', borderColor: 'color-mix(in srgb, #E74C3C 45%, transparent)' }} onClick={() => void onDeleteDictionary(entry)}>删除</button>
+                        <button className="wb-btn" style={{ color: '#E74C3C', borderColor: 'color-mix(in srgb, #E74C3C 45%, transparent)' }} onClick={() => void onDeleteDictionary(entry)}>{t('删除')}</button>
                       )}
                     </div>
                   )

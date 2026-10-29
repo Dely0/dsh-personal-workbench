@@ -31,6 +31,7 @@ import { overlayMountContainer } from '../overlayMount.js'
 import type { ContentItem } from '../listPresentation.js'
 import { placePopover, type PopoverPlacement } from '../popoverPlacement.js'
 import { fmtTime } from '../format.js'
+import { useI18n } from '../i18n.js'
 import type { Dict } from '../viewTypes.js'
 
 export interface IdeaCardItem extends ContentItem {
@@ -81,6 +82,7 @@ export function IdeaCardGrid({ ideas, dicts, selectedId, pickedIds, clusters, on
   onFileInto: (ideaId: string, clusterId: string) => void
   onCreateFolder: () => void
 }): JSX.Element {
+  const { t } = useI18n()
   const [menuIdeaId, setMenuIdeaId] = useState<string | null>(null)
   const [placement, setPlacement] = useState<PopoverPlacement | null>(null)
   const menuRef = useRef<HTMLDivElement | null>(null)
@@ -129,9 +131,9 @@ export function IdeaCardGrid({ ideas, dicts, selectedId, pickedIds, clusters, on
           <span className="wb-idea-foldic">🗂</span>{cluster.title}
         </button>
       ))}
-      {menuIdea.clusterIds.length > 0 && <div className="wb-idea-foldnote">已在 {menuIdea.clusterIds.length} 个文件夹里</div>}
+      {menuIdea.clusterIds.length > 0 && <div className="wb-idea-foldnote">{t('已在 {n} 个文件夹里', { n: menuIdea.clusterIds.length })}</div>}
       <button type="button" data-idea-newfolder onClick={() => { setMenuIdeaId(null); onCreateFolder() }}>
-        <span className="wb-idea-foldic">＋</span>新建文件夹…
+        <span className="wb-idea-foldic">＋</span>{t('新建文件夹…')}
       </button>
     </div>
   )
@@ -158,7 +160,7 @@ export function IdeaCardGrid({ ideas, dicts, selectedId, pickedIds, clusters, on
                 type="button"
                 className="wb-idea-pick"
                 data-idea-pick={idea.id}
-                title={picked ? '取消选择' : '选中（用于 AI 关联）'}
+                title={picked ? t('取消选择') : t('选中（用于 AI 关联）')}
                 aria-pressed={picked}
                 onClick={(e) => { e.stopPropagation(); onTogglePick(idea.id) }}
               >
@@ -175,14 +177,14 @@ export function IdeaCardGrid({ ideas, dicts, selectedId, pickedIds, clusters, on
                   className="wb-idea-foldbtn"
                   data-idea-fold={idea.id}
                   disabled={clusters.length === 0}
-                  title={clusters.length === 0 ? '先在右上角新建一个文件夹' : '归入文件夹（一个点子可属于多个）'}
+                  title={clusters.length === 0 ? t('先在右上角新建一个文件夹') : t('归入文件夹（一个点子可属于多个）')}
                   onClick={(e) => {
                     e.stopPropagation()
                     setPlacement(null)
                     setMenuIdeaId((prev) => (prev === idea.id ? null : idea.id))
                   }}
                 >
-                  归入文件夹 ▾
+                  {t('归入文件夹 ▾')}
                 </button>
               </div>
             </div>

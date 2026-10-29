@@ -88,7 +88,7 @@ export function officialRegistrationComplete(slots: unknown, panelId: string): b
  * 用短标签（「工作台」）去查永远查不到。
  *
  * @param root - 查询起点（通常是 `document`）。
- * @param label - 注册时给的 `label`（= `ENTRY_TITLE`）。
+ * @param label - 注册时给的 `label`（= `entryText(ENTRY_TITLE_KEY)`，必须与注册用同一个解析结果）。
  */
 export function officialPanelRowRendered(root: ParentNode, label: string): boolean {
   try {
@@ -97,10 +97,14 @@ export function officialPanelRowRendered(root: ParentNode, label: string): boole
 }
 
 /**
- * 入口**文案**：既是侧栏面板行的 `label`（宿主渲染成 aria-label / tooltip），
- * 也是会话标题栏按钮的 title 来源。改它要同步 `test/panelState.test.mjs` 之外的相关断言。
+ * 入口**文案的 key**（issue #12）：既是侧栏面板行的 `label`（宿主渲染成
+ * aria-label / tooltip），也是会话标题栏按钮的 title 来源。
+ *
+ * 中文原文即 key：渲染/注册时经 `entryText()` 走 `EN_MESSAGES`，未翻译原样回中文。
+ * ⚠️ 注册与 `officialPanelRowRendered` 的查询必须用**同一个解析结果**
+ * （都取 `entryText(ENTRY_TITLE_KEY)`），否则按 aria-label 找那一行会永远找不到。
  */
-export const ENTRY_TITLE = '打开工作台（任务 / 日历 / 知识库 / 点子）'
+export const ENTRY_TITLE_KEY = '打开工作台（任务 / 日历 / 知识库 / 点子）'
 
 /**
  * `--wb-*` 令牌层：**每一项都带回退值，且回退值跟随明暗**。

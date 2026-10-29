@@ -70,21 +70,22 @@ export function capacityAriaLabel(capacity: CapacityLedger): string {
     + `未排入 ${capacity.unscheduledCount} 条 / 建议投入合计 ${capacity.unscheduledSuggestedMinutes} 分钟。`
 }
 
-const RULE_TEXTS = (defaultEstimateMinutes: number): Array<{ title: string; body: string }> => [
-  { title: '「已排」只算当天计划', body: '已排 = 当天的「计划投入」分钟之和。没有排进当天计划的任务，即使今天到期也不计入 —— 它们出现在下面的「未排入」区，可以一键排入。' },
-  { title: '计划投入是快照', body: '每条计划项的分钟数在排入那一刻就冻结：之后改任务的「预计耗时」不会回头改写它。要改就单独改这一条的计划投入。' },
-  { title: '历史投入不自动减', body: '任务完成/取消/归档、或者今日投入已结束时，那一天的投入仍然算在已排里（它是那天的计划记录）。只有你移除该日计划项或删除整份计划才会减少。' },
-  { title: '未排入只是候选', body: `下面的「未排入」是你今天可能做的事，每条显示建议投入（任务的预计耗时，没填就按默认 ${defaultEstimateMinutes} 分钟，可在设置里改）。建议投入不计入已排，避免把两件事混成一个数字。` },
-  { title: '逾期不改变已排', body: '「显示逾期待办候选」只决定逾期的未完成任务要不要出现在候选里，不改变已排，也不会把它们自动排进计划。' },
-  { title: '不含实际工时', body: '这里没有计时器：计划投入是你打算投多少，今日投入是否结束是你自己的判断，两者都不是实际工时，也不会自动累加任务进度。' },
-  { title: '提醒与日历不受影响', body: '提醒、逾期判定与日历上的到期展示仍按「截止时间」走，本次改造只动了「今天要投入多少」这件事。' },
+const RULE_TEXTS = (defaultEstimateMinutes: number, t: (key: string, params?: Record<string, string | number>) => string): Array<{ title: string; body: string }> => [
+  { title: t('「已排」只算当天计划'), body: t('已排 = 当天的「计划投入」分钟之和。没有排进当天计划的任务，即使今天到期也不计入 —— 它们出现在下面的「未排入」区，可以一键排入。') },
+  { title: t('计划投入是快照'), body: t('每条计划项的分钟数在排入那一刻就冻结：之后改任务的「预计耗时」不会回头改写它。要改就单独改这一条的计划投入。') },
+  { title: t('历史投入不自动减'), body: t('任务完成/取消/归档、或者今日投入已结束时，那一天的投入仍然算在已排里（它是那天的计划记录）。只有你移除该日计划项或删除整份计划才会减少。') },
+  { title: t('未排入只是候选'), body: t('下面的「未排入」是你今天可能做的事，每条显示建议投入（任务的预计耗时，没填就按默认 {n} 分钟，可在设置里改）。建议投入不计入已排，避免把两件事混成一个数字。', { n: defaultEstimateMinutes }) },
+  { title: t('逾期不改变已排'), body: t('「显示逾期待办候选」只决定逾期的未完成任务要不要出现在候选里，不改变已排，也不会把它们自动排进计划。') },
+  { title: t('不含实际工时'), body: t('这里没有计时器：计划投入是你打算投多少，今日投入是否结束是你自己的判断，两者都不是实际工时，也不会自动累加任务进度。') },
+  { title: t('提醒与日历不受影响'), body: t('提醒、逾期判定与日历上的到期展示仍按「截止时间」走，本次改造只动了「今天要投入多少」这件事。') },
 ]
 
 function AuditTable({ rows }: { rows: CapacityPlanRow[] }): JSX.Element {
+  const { t } = useI18n()
   return (
     <table className="wb-cap-audit">
       <thead>
-        <tr><th>任务</th><th>优先级</th><th>分钟</th><th>来源</th></tr>
+        <tr><th>{t('任务')}</th><th>{t('优先级')}</th><th>{t('分钟')}</th><th>{t('来源')}</th></tr>
       </thead>
       <tbody>
         {rows.map((row) => (
@@ -109,18 +110,19 @@ function UnscheduledTable({ rows, defaultEstimateMinutes, onAddToPlan, addingTas
   onAddToPlan?: (taskId: string, minutes: number) => Promise<void>
   addingTaskId?: string | null
 }): JSX.Element {
+  const { t } = useI18n()
   return (
     <table className="wb-cap-audit">
       <thead>
-        <tr><th>任务</th><th>优先级</th><th>建议投入</th><th>来源</th><th /></tr>
+        <tr><th>{t('任务')}</th><th>{t('优先级')}</th><th>{t('建议投入')}</th><th>{t('来源')}</th><th /></tr>
       </thead>
       <tbody>
         {rows.map((row) => {
           const labels: string[] = []
-          if (row.dueToday) labels.push('今天到期')
-          if (row.overdue) labels.push('逾期')
-          if (row.inProgress) labels.push('在推进')
-          if (row.usedDefaultEstimate) labels.push(`按默认 ${defaultEstimateMinutes}`)
+          if (row.dueToday) labels.push(t('今天到期'))
+          if (row.overdue) labels.push(t('逾期'))
+          if (row.inProgress) labels.push(t('在推进'))
+          if (row.usedDefaultEstimate) labels.push(t('按默认 {n}', { n: defaultEstimateMinutes }))
           return (
             <tr key={row.taskId}>
               <td className="t" title={row.title}>{row.title}</td>
@@ -135,7 +137,7 @@ function UnscheduledTable({ rows, defaultEstimateMinutes, onAddToPlan, addingTas
                     disabled={addingTaskId !== null && addingTaskId !== undefined}
                     onClick={() => void onAddToPlan(row.taskId, row.suggestedMinutes)}
                   >
-                    {addingTaskId === row.taskId ? '排入中…' : '排入今日'}
+                    {addingTaskId === row.taskId ? t('排入中…') : t('排入今日')}
                   </button>
                 )}
               </td>
@@ -152,10 +154,11 @@ function UnscheduledTable({ rows, defaultEstimateMinutes, onAddToPlan, addingTas
  * 界面要说清"哪一天的计划读不出来"以及"原数据没被改动"。
  */
 function UnreadableNotice({ reason }: { reason: string }): JSX.Element {
+  const { t } = useI18n()
   return (
     <div className="wb-cap-unreadable" role="alert" style={{ fontSize: 12, lineHeight: 1.7, color: 'var(--dsw-alias-label-secondary)', padding: '6px 2px' }}>
-      <b>今日容量不可计算</b>：{reason}。<br />
-      原数据没有被改动，也不会被自动覆盖。请先备份数据库，再手工修复该日计划的 <code>items_json</code>，或显式清空这份计划。
+      <b>{t('今日容量不可计算')}</b>：{reason}。<br />
+      {t('原数据没有被改动，也不会被自动覆盖。请先备份数据库，再手工修复该日计划的')} <code>items_json</code>{t('，或显式清空这份计划。')}
     </div>
   )
 }
@@ -198,11 +201,11 @@ export function CapacityRulePanel(props: CapacityRulePanelProps): JSX.Element {
           <span className="wb-cap-rule-sum">
             {capacity.readable
               ? <>
-                  已排 <b>{capacity.planned}</b> min（{capacity.plannedCount} 条，已结束 {capacity.doneMinutes} min） ·
-                  可投入 <b>{dailyCapacityMinutes}</b> min · 余 <b>{capacity.free}</b> min{capacity.over ? ' · 超支' : ''}
-                  {capacity.unscheduledCount > 0 ? ` · 未排入 ${capacity.unscheduledCount} 条 / 建议 ${capacity.unscheduledSuggestedMinutes} min` : ''}
+                  {t('已排')} <b>{capacity.planned}</b> {t('min（{n} 条，已结束 {done} min）', { n: capacity.plannedCount, done: capacity.doneMinutes })}
+                  {t(' · 可投入')} <b>{dailyCapacityMinutes}</b> {t('min · 余')} <b>{capacity.free}</b> min{capacity.over ? t(' · 超支') : ''}
+                  {capacity.unscheduledCount > 0 ? t(' · 未排入 {n} 条 / 建议 {m} min', { n: capacity.unscheduledCount, m: capacity.unscheduledSuggestedMinutes }) : ''}
                 </>
-              : <><b>不可计算</b>：{capacity.reason ?? '计划数据无法解析'}</>}
+              : <><b>{t('不可计算')}</b>：{capacity.reason ?? t('计划数据无法解析')}</>}
           </span>
         )}
       </div>
@@ -210,16 +213,16 @@ export function CapacityRulePanel(props: CapacityRulePanelProps): JSX.Element {
       {expanded && (
         <div className="wb-cap-rule-body">
           <ol className="wb-cap-rules">
-            {RULE_TEXTS(defaultEstimateMinutes).map((rule) => (
+            {RULE_TEXTS(defaultEstimateMinutes, t).map((rule) => (
               <li key={rule.title}><b>{rule.title}</b>：{rule.body}</li>
             ))}
           </ol>
 
-          {!capacity.readable && <UnreadableNotice reason={capacity.reason ?? '计划数据无法解析'} />}
+          {!capacity.readable && <UnreadableNotice reason={capacity.reason ?? t('计划数据无法解析')} />}
 
           {capacity.diagnostics.length > 0 && (
             <div className="wb-cap-diagnostics" style={{ fontSize: 12, lineHeight: 1.7, padding: '4px 2px' }}>
-              <div><b>数据提示（{capacity.diagnostics.length} 条）</b></div>
+              <div><b>{t('数据提示（{n} 条）', { n: capacity.diagnostics.length })}</b></div>
               <ul className="wb-cap-rules">
                 {capacity.diagnostics.map((text) => <li key={text}>{text}</li>)}
               </ul>
@@ -227,19 +230,19 @@ export function CapacityRulePanel(props: CapacityRulePanelProps): JSX.Element {
           )}
 
           <div className="wb-cap-audit-wrap">
-            <div className="wb-cap-audit-title">账本 · 已排明细（{capacity.plannedItems.length} 条 / 合计 {capacity.planned} min）</div>
+            <div className="wb-cap-audit-title">{t('账本 · 已排明细（{n} 条 / 合计 {m} min）', { n: capacity.plannedItems.length, m: capacity.planned })}</div>
             {capacity.plannedItems.length === 0
-              ? <div className="wb-cap-audit-empty">今天还没有排入任何计划投入（「已排」= 0）。下面的未排入区可以直接排入。</div>
+              ? <div className="wb-cap-audit-empty">{t('今天还没有排入任何计划投入（「已排」= 0）。下面的未排入区可以直接排入。')}</div>
               : <AuditTable rows={capacity.plannedItems} />}
-            <div className="wb-cap-audit-total">合计 = 已排 <b>{capacity.planned}</b> min（其中今日投入已结束 <b>{capacity.doneMinutes}</b> min）</div>
+            <div className="wb-cap-audit-total">{t('合计 = 已排')} <b>{capacity.planned}</b> {t('min（其中今日投入已结束')} <b>{capacity.doneMinutes}</b> {t('min）')}</div>
           </div>
 
           <div className="wb-cap-unscheduled">
             <div className="wb-cap-overdue-head">
-              未排入候选 <b>{capacity.unscheduledCount}</b> 条 / 建议投入合计 <b>{capacity.unscheduledSuggestedMinutes}</b> min —— 默认不计入「已排」
+              {t('未排入候选')} <b>{capacity.unscheduledCount}</b> {t('条 / 建议投入合计')} <b>{capacity.unscheduledSuggestedMinutes}</b> {t('min —— 默认不计入「已排」')}
             </div>
             {capacity.unscheduledCount === 0
-              ? <div className="wb-cap-audit-empty">没有未排入的候选（今天到期的、在推进的、已排入的都已经在计划里，或者逾期开关没打开）。</div>
+              ? <div className="wb-cap-audit-empty">{t('没有未排入的候选（今天到期的、在推进的、已排入的都已经在计划里，或者逾期开关没打开）。')}</div>
               : <UnscheduledTable rows={capacity.unscheduled} defaultEstimateMinutes={defaultEstimateMinutes} onAddToPlan={onAddToPlan} addingTaskId={addingTaskId} />}
           </div>
 
@@ -249,12 +252,12 @@ export function CapacityRulePanel(props: CapacityRulePanelProps): JSX.Element {
               checked={includeOverdue}
               onChange={(e) => onIncludeOverdueChange(e.target.checked)}
             />
-            <span>显示逾期待办候选</span>
-            <span className="hint" title="只影响逾期的未完成任务是否出现在候选里；不改「已排」，也不会自动排进计划">?</span>
+            <span>{t('显示逾期待办候选')}</span>
+            <span className="hint" title={t('只影响逾期的未完成任务是否出现在候选里；不改「已排」，也不会自动排进计划')}>?</span>
           </label>
 
           <div className="wb-cap-foot">
-            默认投入 {defaultEstimateMinutes} 分钟（在设置里改） · 口径见 docs/adr/0002-capacity-reads-daily-plan.md
+            {t('默认投入')} {defaultEstimateMinutes} {t('分钟（在设置里改） · 口径见')} docs/adr/0002-capacity-reads-daily-plan.md
           </div>
         </div>
       )}

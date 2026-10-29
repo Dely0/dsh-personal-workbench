@@ -211,24 +211,25 @@ function dueText(value: unknown): string {
   return formatted === '' ? value : formatted
 }
 
-function minutesText(value: unknown): string {
+function minutesText(value: unknown, t: (key: string, params?: Record<string, string | number>) => string): string {
   if (typeof value !== 'number' || !Number.isFinite(value)) return ''
-  if (value < 60) return `${value} 分钟`
+  if (value < 60) return t('{n} 分钟', { n: value })
   const hours = Math.floor(value / 60)
   const rest = value % 60
-  return rest === 0 ? `${hours} 小时` : `${hours} 小时 ${rest} 分`
+  return rest === 0 ? t('{h} 小时', { h: hours }) : t('{h} 小时 {m} 分', { h: hours, m: rest })
 }
 
 /** 子任务清单（可含一层 children），用于 task / subtask_plan 草稿。 */
 function SubtaskList({ items, depth = 0 }: { items: Array<Record<string, unknown>>; depth?: number }): JSX.Element {
+  const { t } = useI18n()
   return (
     <>
       {items.map((item, i) => (
         <div key={i} style={{ marginLeft: depth === 0 ? 0 : 14, margin: '3px 0' }}>
           <span style={{ color: 'var(--dsw-alias-label-secondary)' }}>{depth === 0 ? '•' : '◦'}</span>{' '}
-          <b>{String(item.title ?? '(未命名)')}</b>
-          {typeof item.estimated_minutes === 'number' && <span style={{ color: 'var(--dsw-alias-label-secondary)' }}> · {minutesText(item.estimated_minutes)}</span>}
-          {typeof item.estimatedMinutes === 'number' && <span style={{ color: 'var(--dsw-alias-label-secondary)' }}> · {minutesText(item.estimatedMinutes)}</span>}
+          <b>{String(item.title ?? t('(未命名)'))}</b>
+          {typeof item.estimated_minutes === 'number' && <span style={{ color: 'var(--dsw-alias-label-secondary)' }}> · {minutesText(item.estimated_minutes, t)}</span>}
+          {typeof item.estimatedMinutes === 'number' && <span style={{ color: 'var(--dsw-alias-label-secondary)' }}> · {minutesText(item.estimatedMinutes, t)}</span>}
           {typeof item.type_code === 'string' && <span style={{ color: 'var(--dsw-alias-label-secondary)' }}> · {item.type_code}</span>}
           {typeof item.typeCode === 'string' && <span style={{ color: 'var(--dsw-alias-label-secondary)' }}> · {item.typeCode}</span>}
           {typeof item.description === 'string' && item.description !== '' && (
@@ -254,28 +255,29 @@ function MemoryScopeField({ enabled, scope, onEnabledChange, onScopeChange, prev
   /** 将写入哪些条目的摘要 —— 让"会外发什么"在确认前就可见，不做静默外发。 */
   preview: string
 }): JSX.Element {
+  const { t } = useI18n()
   return (
     <div style={{ marginTop: 10, paddingTop: 8, borderTop: '1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.22))' }}>
       <div style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)', marginBottom: 6 }}>
-        🧠 同步到团队记忆库（默认 private：复盘可能含客户信息，不确定就保持 private 或干脆不同步）
+        {t('🧠 同步到团队记忆库（默认 private：复盘可能含客户信息，不确定就保持 private 或干脆不同步）')}
       </div>
       <label style={{ display: 'block', fontSize: 13, margin: '4px 0' }}>
-        <input type="checkbox" checked={enabled} onChange={(e) => onEnabledChange(e.target.checked)} /> 确认时写入团队记忆库
+        <input type="checkbox" checked={enabled} onChange={(e) => onEnabledChange(e.target.checked)} /> {t('确认时写入团队记忆库')}
       </label>
       <label style={{ display: 'block', fontSize: 13, margin: '4px 0', opacity: enabled ? 1 : 0.5 }}>
-        可见性：
+        {t('可见性：')}
         <select
           value={scope}
           disabled={!enabled}
           onChange={(e) => onScopeChange(e.target.value === 'team' ? 'team' : 'private')}
           style={{ marginLeft: 6 }}
         >
-          <option value="private">private（只有我自己能检索）</option>
-          <option value="team">team（团队可见，确认不含客户信息再选）</option>
+          <option value="private">{t('private（只有我自己能检索）')}</option>
+          <option value="team">{t('team（团队可见，确认不含客户信息再选）')}</option>
         </select>
       </label>
       <div style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)', marginTop: 4, lineHeight: 1.7 }}>
-        {enabled ? `将写入：${preview}` : '不会写入团队记忆库（只回写任务详情）。'}
+        {enabled ? t('将写入：{preview}', { preview }) : t('不会写入团队记忆库（只回写任务详情）。')}
       </div>
     </div>
   )
@@ -289,16 +291,16 @@ function MemoryScopeField({ enabled, scope, onEnabledChange, onScopeChange, prev
  * 这里只做"给用户看"的近似（不拼回链、不落盘），所以允许独立实现；
  * 但**条数**必须一致，否则确认前提示的条数会对不上实际写入数。
  */
-export function reviewMemoryNotes(payload: Record<string, unknown>): string[] {
+export function reviewMemoryNotes(payload: Record<string, unknown>, t: (key: string, params?: Record<string, string | number>) => string): string[] {
   const lessons = Array.isArray(payload.lessons)
     ? payload.lessons.filter((item): item is Record<string, unknown> => typeof item === 'object' && item !== null)
     : []
   if (lessons.length === 0) {
     const summary = String(payload.summaryMd ?? '').trim()
-    return summary === '' ? [] : ['复盘正文（1 条）']
+    return summary === '' ? [] : [t('复盘正文（1 条）')]
   }
   return lessons.map((lesson, index) => (
-    typeof lesson.title === 'string' && lesson.title.trim() !== '' ? lesson.title.trim() : `复盘教训 ${index + 1}`
+    typeof lesson.title === 'string' && lesson.title.trim() !== '' ? lesson.title.trim() : t('复盘教训 {n}', { n: index + 1 })
   ))
 }
 
@@ -316,10 +318,10 @@ export function DraftBanner({ draft, onDone, runtime, closePanel, kindName, onPr
    * （有结构化教训 → 每条一条；没有 → 整篇复盘一条）。
    * 它同时用于确认前的"将写入什么"提示，和确认后的条数校验。
    */
-  const memoryNotes = draft.kindCode === 'review' ? reviewMemoryNotes(draft.payload) : []
+  const memoryNotes = draft.kindCode === 'review' ? reviewMemoryNotes(draft.payload, t) : []
   const memoryPreview = memoryNotes.length === 0
-    ? '（复盘正文为空，不会写入任何条目）'
-    : `${memoryNotes.length} 条` + `（${memoryNotes.slice(0, 3).map((title) => `「${title}」`).join('、')}${memoryNotes.length > 3 ? ` 等 ${memoryNotes.length} 条` : ''}）`
+    ? t('（复盘正文为空，不会写入任何条目）')
+    : t('{n} 条', { n: memoryNotes.length }) + t('（{titles}{more}）', { titles: memoryNotes.slice(0, 3).map((title) => `「${title}」`).join('、'), more: memoryNotes.length > 3 ? t(' 等 {n} 条', { n: memoryNotes.length }) : '' })
   const act = async (path: string, body?: Record<string, unknown>): Promise<void> => {
     if (busy) return
     setBusy(true)
@@ -343,11 +345,11 @@ export function DraftBanner({ draft, onDone, runtime, closePanel, kindName, onPr
         const written = memory.written ?? 0
         const skipped = memory.skipped ?? 0
         if (typeof memory.degradedReason === 'string' && memory.degradedReason !== '') {
-          onNotice?.(`复盘已写回任务；团队记忆降级写入（${memory.degradedReason}）`, 'warning')
+          onNotice?.(t('复盘已写回任务；团队记忆降级写入（{reason}）', { reason: memory.degradedReason }), 'warning')
         } else if (written > 0) {
-          onNotice?.(`复盘已写回任务，并写入团队记忆 ${written} 条（private/team 见复盘设置）`, 'success')
+          onNotice?.(t('复盘已写回任务，并写入团队记忆 {n} 条（private/team 见复盘设置）', { n: written }), 'success')
         } else if (skipped > 0) {
-          onNotice?.(`复盘已写回任务；这 ${skipped} 条此前已写入过团队记忆，未重复写入`, 'success')
+          onNotice?.(t('复盘已写回任务；这 {n} 条此前已写入过团队记忆，未重复写入', { n: skipped }), 'success')
         }
       }
       /**
@@ -383,7 +385,7 @@ export function DraftBanner({ draft, onDone, runtime, closePanel, kindName, onPr
        */
       const message = error instanceof Error ? error.message : String(error)
       const alreadySettled = /already (abandoned|confirmed)|is not pending|not found/i.test(message)
-      if (!alreadySettled) onNotice?.(`操作失败：${message}`, 'warning')
+      if (!alreadySettled) onNotice?.(t('操作失败：{message}', { message }), 'warning')
       onDismissed?.()
       onDone()
 
@@ -419,7 +421,7 @@ export function DraftBanner({ draft, onDone, runtime, closePanel, kindName, onPr
     expertPayload !== null && expertPayload.ok ? expertPayload.payload.phase : 'unknown',
     busy || expertWired === false,
     expertWired === false
-      ? { code: 'create-unavailable', message: '当前界面没有接上专家草稿动作（装配缺失），无法校验或安装。' }
+      ? { code: 'create-unavailable', message: t('当前界面没有接上专家草稿动作（装配缺失），无法校验或安装。') }
       : expertError,
   )
   const runExpert = async (kind: 'validate' | 'confirm'): Promise<void> => {
@@ -431,11 +433,11 @@ export function DraftBanner({ draft, onDone, runtime, closePanel, kindName, onPr
         const outcome = await expertActions.validate(expertView)
         if (outcome.draft !== null) setExpertDraft(outcome.draft)
         if (outcome.ok === false) {
-          setExpertError({ code: outcome.code ?? 'validate-failed', message: outcome.message ?? '校验失败。' })
+          setExpertError({ code: outcome.code ?? 'validate-failed', message: outcome.message ?? t('校验失败。') })
         } else if (outcome.problems.length > 0) {
-          setExpertError({ code: 'draft-not-validated', message: `校验没通过：${outcome.problems.join('；')}` })
+          setExpertError({ code: 'draft-not-validated', message: t('校验没通过：{problems}', { problems: outcome.problems.join('；') }) })
         } else {
-          onNotice?.('校验通过，可以确认安装了。', 'success')
+          onNotice?.(t('校验通过，可以确认安装了。'), 'success')
         }
         return
       }
@@ -450,16 +452,16 @@ export function DraftBanner({ draft, onDone, runtime, closePanel, kindName, onPr
         setExpertDraft(outcome.refreshed)
         setExpertError({
           code: outcome.code ?? 'version-conflict',
-          message: `${outcome.message ?? '这份内容已经变了。'}预览已刷新成最新版本；没有替你自动确认，请核对后重新校验再确认。`,
+          message: t('{message}预览已刷新成最新版本；没有替你自动确认，请核对后重新校验再确认。', { message: outcome.message ?? t('这份内容已经变了。') }),
         })
         return
       }
-      setExpertError({ code: outcome.code ?? 'confirm-failed', message: outcome.message ?? '安装失败。' })
+      setExpertError({ code: outcome.code ?? 'confirm-failed', message: outcome.message ?? t('安装失败。') })
     } catch (error) {
       setExpertError({ code: 'confirm-failed', message: error instanceof Error ? error.message : String(error) })
     } finally { setBusy(false) }
   }
-  const presentation = describeDraft(draft, kindName)
+  const presentation = describeDraft(draft, kindName, t)
   /**
    * 「回到…会话」：切到那个会话，并把这条横幅收起来。
    *
@@ -498,11 +500,11 @@ export function DraftBanner({ draft, onDone, runtime, closePanel, kindName, onPr
    */
   const openSession = (): void => {
     if (presentation.sessionId === '') {
-      onNotice?.('这份草稿没有关联会话（可能是手动创建的），无法跳回。', 'warning')
+      onNotice?.(t('这份草稿没有关联会话（可能是手动创建的），无法跳回。'), 'warning')
       return
     }
     if (isSessionUsable !== undefined && !isSessionUsable(presentation.sessionId)) {
-      onNotice?.('这条会话已被归档或删除，无法跳回；可在工作台重新发起同一件事。', 'warning')
+      onNotice?.(t('这条会话已被归档或删除，无法跳回；可在工作台重新发起同一件事。'), 'warning')
       return
     }
     let failure = ''
@@ -522,7 +524,7 @@ export function DraftBanner({ draft, onDone, runtime, closePanel, kindName, onPr
     window.setTimeout(() => {
       try { closePanel() } catch { /* 面板收起失败不影响跳转 */ }
     }, 0)
-    if (failure !== '') onNotice?.(`切换会话失败：${failure}`, 'warning')
+    if (failure !== '') onNotice?.(t('切换会话失败：{message}', { message: failure }), 'warning')
   }
   const canDefer = presentation.canDefer !== false
   const deferBody = draft.kindCode === 'review'
@@ -554,14 +556,14 @@ export function DraftBanner({ draft, onDone, runtime, closePanel, kindName, onPr
              */
             <>
               {canDefer && (
-                <button className="wb-btn" disabled={busy} title={presentation.deferHint ?? DEFER_HINT} onClick={() => void act(`/api/workbench/drafts/${draft.id}/defer`, deferBody)}>
+                <button className="wb-btn" disabled={busy} title={t(presentation.deferHint ?? DEFER_HINT)} onClick={() => void act(`/api/workbench/drafts/${draft.id}/defer`, deferBody)}>
                   {t(presentation.deferLabel ?? DEFER_LABEL)}
                 </button>
               )}
               <button
                 className="wb-btn"
                 disabled={busy || expertVersion === null}
-                title={expertVersion === null ? '读不出这一版的版本号，先别放弃' : `放弃 v${expertVersion}`}
+                title={expertVersion === null ? t('读不出这一版的版本号，先别放弃') : t('放弃 v{v}', { v: expertVersion })}
                 onClick={() => void act(`/api/workbench/drafts/${draft.id}/abandon`, { expectedVersion: expertVersion })}
               >
                 {t(presentation.abandonLabel)}
@@ -580,7 +582,7 @@ export function DraftBanner({ draft, onDone, runtime, closePanel, kindName, onPr
                 {t(presentation.confirmLabel)}
               </button>
               {canDefer && (
-                <button className="wb-btn" disabled={busy} title={presentation.deferHint ?? DEFER_HINT} onClick={() => void act(`/api/workbench/drafts/${draft.id}/defer`, deferBody)}>
+                <button className="wb-btn" disabled={busy} title={t(presentation.deferHint ?? DEFER_HINT)} onClick={() => void act(`/api/workbench/drafts/${draft.id}/defer`, deferBody)}>
                   {t(presentation.deferLabel ?? DEFER_LABEL)}
                 </button>
               )}
@@ -613,8 +615,7 @@ export function DraftBanner({ draft, onDone, runtime, closePanel, kindName, onPr
               fontSize: 12.5, lineHeight: 1.6,
             }}
           >
-            ⚠️ 这不是刚才那一份：上一份（<b>{switchedFrom.kindCode}</b>）收起后，
-            系统把下面这一份递补上来了。请确认内容无误再操作，避免误确认。
+            {t('⚠️ 这不是刚才那一份：上一份（')}<b>{switchedFrom.kindCode}</b>{t('）收起后，系统把下面这一份递补上来了。请确认内容无误再操作，避免误确认。')}
           </div>
         )}
         {isExpert ? (
@@ -656,7 +657,7 @@ export function DraftBanner({ draft, onDone, runtime, closePanel, kindName, onPr
 }
 
 /** 各草稿类型的展示描述（纯函数，便于单测）。 */
-function describeDraft(draft: DraftView, kindName: (kind: string, code: string) => string): DraftPresentation {
+function describeDraft(draft: DraftView, kindName: (kind: string, code: string) => string, t: (key: string, params?: Record<string, string | number>) => string): DraftPresentation {
   /**
    * 专家草稿**在碰 payload 之前就分流**（P8 / 方案 §9.4）。
    *
@@ -690,12 +691,12 @@ function describeDraft(draft: DraftView, kindName: (kind: string, code: string) 
   if (draft.kindCode === 'idea_cluster') {
     const clusters = Array.isArray(payload.clusters) ? payload.clusters as Array<{ title?: string; summary?: string; idea_titles?: string[] }> : []
     return {
-      title: <>🧠 点子王提案待确认（{clusters.length}）</>,
+      title: <>🧠 {t('点子王提案待确认（{n}）', { n: clusters.length })}</>,
       body: (
         <>
           {clusters.map((cluster, i) => (
             <div key={i} style={{ marginBottom: 10 }}>
-              <b>{cluster.title ?? `点子王 ${i + 1}`}</b>
+              <b>{cluster.title ?? t('点子王 {v}', { v: i + 1 })}</b>
               {cluster.summary !== undefined && cluster.summary !== '' && (
                 <div style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)' }}>{cluster.summary}</div>
               )}
@@ -704,7 +705,7 @@ function describeDraft(draft: DraftView, kindName: (kind: string, code: string) 
               </div>
             </div>
           ))}
-          {clusters.length === 0 && <div style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)' }}>（该提案没有任何点子，确认后不会创建点子王）</div>}
+          {clusters.length === 0 && <div style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)' }}>{t('（该提案没有任何点子，确认后不会创建点子王）')}</div>}
         </>
       ),
       confirmLabel: '确认生成点子王',
@@ -721,27 +722,27 @@ function describeDraft(draft: DraftView, kindName: (kind: string, code: string) 
     const sourceClusterId = typeof payload.sourceClusterId === 'string' ? payload.sourceClusterId : ''
     const sourceIdeaIds = Array.isArray(payload.sourceIdeaIds) ? payload.sourceIdeaIds as string[] : []
     return {
-      title: <>🚀 点子落地任务提案（{tasks.length}）</>,
+      title: <>🚀 {t('点子落地任务提案（{n}）', { n: tasks.length })}</>,
       body: (
         <>
           {summary !== '' && <div style={{ fontSize: 13, marginBottom: 6 }}>{summary}</div>}
           {(sourceClusterId !== '' || sourceIdeaIds.length > 0) && (
             <div style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)', marginBottom: 6 }}>
-              来源：{sourceClusterId !== '' ? `点子王 ${sourceClusterId.slice(0, 8)}` : ''}
-              {sourceIdeaIds.length > 0 ? ` · ${sourceIdeaIds.length} 个点子` : ''}
+              {t('来源：')}{sourceClusterId !== '' ? t('点子王 {v}', { v: sourceClusterId.slice(0, 8) }) : ''}
+              {sourceIdeaIds.length > 0 ? t(' · {n} 个点子', { n: sourceIdeaIds.length }) : ''}
             </div>
           )}
           <ol style={{ margin: '4px 0 8px 20px', padding: 0, fontSize: 14, lineHeight: 1.7 }}>
             {tasks.map((task, i) => (
               <li key={i} style={{ margin: '3px 0' }}>
-                <b>{task.title ?? '(未命名任务)'}</b>
+                <b>{task.title ?? t('(未命名任务)')}</b>
                 {task.description !== undefined && task.description !== '' && (
                   <span style={{ color: 'var(--dsw-alias-label-secondary)' }}> — {String(task.description).slice(0, 60)}</span>
                 )}
               </li>
             ))}
           </ol>
-          {tasks.length === 0 && <div style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)' }}>（没有任何任务，确认后不会创建）</div>}
+          {tasks.length === 0 && <div style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)' }}>{t('（没有任何任务，确认后不会创建）')}</div>}
         </>
       ),
       confirmLabel: '确认转为任务',
@@ -754,7 +755,7 @@ function describeDraft(draft: DraftView, kindName: (kind: string, code: string) 
 
   if (draft.kindCode === 'knowledge') {
     return {
-      title: <>💡 知识条目待确认（{kindName('knowledge_kind', String(payload.kindCode ?? 'lesson'))}）</>,
+      title: <>💡 {t('知识条目待确认（{kind}）', { kind: kindName('knowledge_kind', String(payload.kindCode ?? 'lesson')) })}</>,
       /**
        * 正文整体交给 `KnowledgeDraftBody`：它会在最前面渲染「本会话已提交 N 次 /
        * 前几次的内容已被覆盖 / 草稿 id」——覆盖**必须在用户点确认前**就看得见
@@ -770,16 +771,16 @@ function describeDraft(draft: DraftView, kindName: (kind: string, code: string) 
   }
 
   if (draft.kindCode === 'report') {
-    const period = payload.periodCode === 'week' ? '周报' : '日报'
+    const period = payload.periodCode === 'week' ? t('周报') : t('日报')
     const stats = typeof payload.stats === 'object' && payload.stats !== null ? payload.stats as Record<string, unknown> : undefined
     return {
-      title: <>📄 报告草稿待确认（{period} {String(payload.periodStart ?? '')}）</>,
+      title: <>📄 {t('报告草稿待确认（{period} {date}）', { period, date: String(payload.periodStart ?? '') })}</>,
       body: (
         <>
           <div style={{ fontWeight: 600, marginBottom: 6 }}>{String(payload.title ?? '')}</div>
           {stats !== undefined && (
             <div style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)', marginBottom: 6 }}>
-              统计：{Object.entries(stats).filter(([, v]) => typeof v === 'number' || typeof v === 'string').map(([k, v]) => `${k}=${String(v)}`).join(' · ') || '（无）'}
+              {t('统计：')}{Object.entries(stats).filter(([, v]) => typeof v === 'number' || typeof v === 'string').map(([k, v]) => `${k}=${String(v)}`).join(' · ') || t('（无）')}
             </div>
           )}
           <MarkdownText text={String(payload.summaryMd ?? '')} />
@@ -797,21 +798,21 @@ function describeDraft(draft: DraftView, kindName: (kind: string, code: string) 
     const items = Array.isArray(payload.items) ? payload.items as Array<{ title?: string; note?: string; order?: number }> : []
     const summary = String(payload.summary ?? '')
     return {
-      title: <>✨ 今日计划提案待确认（{String(payload.planDate ?? '')}）</>,
+      title: <>✨ {t('今日计划提案待确认（{date}）', { date: String(payload.planDate ?? '') })}</>,
       body: (
         <>
           {summary !== '' && <div style={{ fontSize: 14, lineHeight: 1.7, marginBottom: 6 }}>{summary}</div>}
           <ol style={{ margin: '4px 0 8px 20px', padding: 0, fontSize: 14, lineHeight: 1.7 }}>
             {items.map((item, i) => (
               <li key={i} style={{ margin: '3px 0' }}>
-                <b>{item.title ?? '(未命名任务)'}</b>
+                <b>{item.title ?? t('(未命名任务)')}</b>
                 {item.note !== undefined && item.note !== '' && (
                   <span style={{ color: 'var(--dsw-alias-label-secondary)' }}> — {item.note}</span>
                 )}
               </li>
             ))}
           </ol>
-          {items.length === 0 && <div style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)' }}>（当天没有可排的任务，确认后不改变现有计划）</div>}
+          {items.length === 0 && <div style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)' }}>{t('（当天没有可排的任务，确认后不改变现有计划）')}</div>}
         </>
       ),
       confirmLabel: '确认应用排序',
@@ -826,19 +827,19 @@ function describeDraft(draft: DraftView, kindName: (kind: string, code: string) 
     const lessons = Array.isArray(payload.lessons) ? payload.lessons as Array<{ title?: string; content?: string }> : []
     const taskId = typeof payload.taskId === 'string' ? payload.taskId : ''
     return {
-      title: <>📄 复盘草稿待确认{lessons.length > 0 ? `（${lessons.length} 条教训）` : ''}</>,
+      title: <>📄 {t('复盘草稿待确认')}{lessons.length > 0 ? t('（{n} 条教训）', { n: lessons.length }) : ''}</>,
       body: (
         <>
-          {taskId !== '' && <Field label="任务">{taskId.slice(0, 8)}</Field>}
+          {taskId !== '' && <Field label={t('任务')}>{taskId.slice(0, 8)}</Field>}
           {lessons.length > 0 && (
             <div style={{ margin: '6px 0 10px' }}>
               {/* 这里**不能**提"团队记忆"：这句是无条件渲染的，而团队记忆是内部系统
                   （v1.14.58）—— 开源用户看不到那个功能，看到这个词只会困惑。
                   教训本身会随复盘写进任务的复盘记录，措辞照这个事实写。 */}
-              <div style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)', marginBottom: 4 }}>结构化教训（每条会单独记入本次复盘）：</div>
+              <div style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)', marginBottom: 4 }}>{t('结构化教训（每条会单独记入本次复盘）：')}</div>
               {lessons.map((lesson, i) => (
                 <div key={i} style={{ fontSize: 13, margin: '3px 0' }}>
-                  <b>{lesson.title ?? `教训 ${i + 1}`}</b>
+                  <b>{lesson.title ?? t('教训 {n}', { n: i + 1 })}</b>
                   {lesson.content !== undefined && lesson.content !== '' && (
                     <span style={{ color: 'var(--dsw-alias-label-secondary)' }}> — {String(lesson.content).slice(0, 120)}</span>
                   )}
@@ -863,14 +864,14 @@ function describeDraft(draft: DraftView, kindName: (kind: string, code: string) 
     const taskId = typeof payload.taskId === 'string' ? payload.taskId : ''
     const taskTitle = typeof payload.taskTitle === 'string' ? payload.taskTitle : ''
     return {
-      title: <>✅ 执行完成，待你验收</>,
+      title: <>✅ {t('执行完成，待你验收')}</>,
       body: (
         <>
-          <Field label="任务">{taskTitle !== '' ? taskTitle : taskId.slice(0, 8)}</Field>
-          {taskTitle !== '' && taskId !== '' && <Field label="任务 id">{taskId.slice(0, 8)}</Field>}
+          <Field label={t('任务')}>{taskTitle !== '' ? taskTitle : taskId.slice(0, 8)}</Field>
+          {taskTitle !== '' && taskId !== '' && <Field label={t('任务 id')}>{taskId.slice(0, 8)}</Field>}
           <div style={{ fontSize: 13, marginTop: 6, whiteSpace: 'pre-wrap' }}>{String(payload.summary ?? '')}</div>
           {typeof payload.feedback === 'string' && payload.feedback !== '' && (
-            <div style={{ fontSize: 12, marginTop: 6, color: 'var(--dsw-alias-label-secondary)' }}>上次反馈处理：{String(payload.feedback)}</div>
+            <div style={{ fontSize: 12, marginTop: 6, color: 'var(--dsw-alias-label-secondary)' }}>{t('上次反馈处理：')}{String(payload.feedback)}</div>
           )}
         </>
       ),
@@ -891,15 +892,15 @@ function describeDraft(draft: DraftView, kindName: (kind: string, code: string) 
     const parentTaskId = typeof payload.parentTaskId === 'string' ? payload.parentTaskId : ''
     const rationale = String(payload.rationale ?? '')
     return {
-      title: <>待确认：子任务提案（{subtasks.length}）</>,
+      title: <>{t('待确认：子任务提案（{n}）', { n: subtasks.length })}</>,
       body: (
         <>
-          {parentTaskId !== '' && <Field label="父任务">{parentTaskId.slice(0, 8)}</Field>}
-          {rationale !== '' && <div style={{ fontSize: 13, margin: '6px 0', lineHeight: 1.7 }}>拆分思路：{rationale}</div>}
+          {parentTaskId !== '' && <Field label={t('父任务')}>{parentTaskId.slice(0, 8)}</Field>}
+          {rationale !== '' && <div style={{ fontSize: 13, margin: '6px 0', lineHeight: 1.7 }}>{t('拆分思路：')}{rationale}</div>}
           <div style={{ fontSize: 13, lineHeight: 1.8 }}>
             <SubtaskList items={subtasks} />
           </div>
-          {subtasks.length === 0 && <div style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)' }}>（提案为空，确认后不会创建任何子任务）</div>}
+          {subtasks.length === 0 && <div style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)' }}>{t('（提案为空，确认后不会创建任何子任务）')}</div>}
         </>
       ),
       confirmLabel: '确认入册',
@@ -913,31 +914,31 @@ function describeDraft(draft: DraftView, kindName: (kind: string, code: string) 
   // task 草稿：原先是"标题 · 类型 · 优先级"一行，信息量不足以判断 AI 建得对不对。
   const description = String(payload.description ?? '')
   const due = dueText(payload.dueAt)
-  const estimate = minutesText(payload.estimatedMinutes)
+  const estimate = minutesText(payload.estimatedMinutes, t)
   const workspace = typeof payload.workspacePath === 'string' ? payload.workspacePath : ''
   const aiPolicy = String(payload.aiPolicyCode ?? '')
   const allDay = payload.allDay === true
   return {
-    title: <>待确认：任务草稿</>,
+    title: <>{t('待确认：任务草稿')}</>,
     body: (
       <>
         <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 8 }}>{String(payload.title ?? '')}</div>
-        <Field label="类型 / 优先级">
+        <Field label={t('类型 / 优先级')}>
           {String(payload.typeCode ?? '')} · {String(payload.priorityCode ?? '')}
-          {aiPolicy !== '' ? ` · AI 策略 ${aiPolicy}` : ''}
+          {aiPolicy !== '' ? t(' · AI 策略 {policy}', { policy: aiPolicy }) : ''}
         </Field>
-        <Field label="截止">{due === '' ? '（未设置）' : `${due}${allDay ? '（全天）' : ''}`}</Field>
-        <Field label="预计耗时">{estimate === '' ? '（未设置）' : estimate}</Field>
-        <Field label="工作区">{workspace === '' ? '（跟随父任务/默认工作区）' : workspace}</Field>
+        <Field label={t('截止')}>{due === '' ? t('（未设置）') : `${due}${allDay ? t('（全天）') : ''}`}</Field>
+        <Field label={t('预计耗时')}>{estimate === '' ? t('（未设置）') : estimate}</Field>
+        <Field label={t('工作区')}>{workspace === '' ? t('（跟随父任务/默认工作区）') : workspace}</Field>
         <div style={{ marginTop: 10, fontSize: 13 }}>
-          <div style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)', marginBottom: 4 }}>描述：</div>
+          <div style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)', marginBottom: 4 }}>{t('描述：')}</div>
           {description.trim() === ''
-            ? <div style={{ color: 'var(--dsw-alias-label-secondary)' }}>（无描述）</div>
-            : <MarkdownText text={description.length > 2000 ? `${description.slice(0, 2000)}\n\n…（已截断，完整内容以确认后任务详情为准）` : description} />}
+            ? <div style={{ color: 'var(--dsw-alias-label-secondary)' }}>{t('（无描述）')}</div>
+            : <MarkdownText text={description.length > 2000 ? `${description.slice(0, 2000)}\n\n…${t('（已截断，完整内容以确认后任务详情为准）')}` : description} />}
         </div>
         {subtasks.length > 0 && (
           <div style={{ marginTop: 10, fontSize: 13 }}>
-            <div style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)', marginBottom: 4 }}>将同时创建 {subtasks.length} 个子任务：</div>
+            <div style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)', marginBottom: 4 }}>{t('将同时创建 {n} 个子任务：', { n: subtasks.length })}</div>
             <SubtaskList items={subtasks} />
           </div>
         )}
