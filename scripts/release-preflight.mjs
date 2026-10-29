@@ -106,13 +106,22 @@ function run(command, { cwd = ROOT, env = {} } = {}) {
   return { code: result.status === null ? 1 : result.status, out: `${result.stdout ?? ''}${result.stderr ?? ''}` }
 }
 
+/**
+ * Windows 的 schannel 在**撤销检查端点不可达**时会直接握手失败
+ * （`CRYPT_E_REVOCATION_OFFLINE` / `failed to receive handshake`），
+ * 典型现场：走本机代理访问 GitHub、或 VPN 抖动时。
+ * `--ssl-revoke-best-effort` 的语义是"查得到就查，查不到继续" ——
+ * 发布门禁要判的是**产物哈希与 tag**，不该被一次离线撤销检查判成"发布失败"。
+ */
+const TLS = '--ssl-revoke-best-effort'
+
 /** 直连 HTTP（**绕开 npm 本地缓存**）：用 curl.exe 拿 `{code, out}`。 */
 function curl(url, extra = []) {
-  return run(`curl.exe -sS --max-time 120 -o NUL -w "%{http_code}" ${extra.join(' ')} "${url}"`)
+  return run(`curl.exe -sS ${TLS} --max-time 120 -o NUL -w "%{http_code}" ${extra.join(' ')} "${url}"`)
 }
 
 function curlJson(url, extra = []) {
-  return run(`curl.exe -sS --max-time 120 ${extra.join(' ')} "${url}"`)
+  return run(`curl.exe -sS ${TLS} --max-time 120 ${extra.join(' ')} "${url}"`)
 }
 
 const results = []
@@ -219,7 +228,7 @@ function gateArtifact() {
   if (tarballStatus === 200) {
     const tmp = join(ROOT, '_local-build', `preflight-${VERSION}.tgz`)
     mkdirSync(join(ROOT, '_local-build'), { recursive: true })
-    run(`curl.exe -sSL --max-time 300 -o "${tmp}" "${tarballUrl}"`)
+    run(`curl.exe -sSL ${TLS} --max-time 300 -o "${tmp}" "${tarballUrl}"`)
     const h = run(`node -e "const c=require('crypto'),f=require('fs');console.log(c.createHash('sha1').update(f.readFileSync(process.argv[1])).digest('hex'))" "${tmp}"`)
     sha1 = h.out.trim().split(/\r?\n/).pop() ?? null
   }
@@ -247,7 +256,7 @@ function gateArtifact() {
 function gateGitHubRelease() {
   banner('发布后 2/2 GitHub Release（走本机代理，公开端点不需要 token）')
   const proxy = process.env.DSH_GITHUB_PROXY ?? 'http://127.0.0.1:5782'
-  const r = run(`curl.exe -sS --max-time 60 -x ${proxy} -H "User-Agent: dsh-preflight" -H "Accept: application/vnd.github+json" https://api.github.com/repos/Dely0/dsh-personal-workbench/releases/latest`)
+  const r = run(`curl.exe -sS ${TLS} --max-time 60 -x ${proxy} -H "User-Agent: dsh-preflight" -H "Accept: application/vnd.github+json" https://api.github.com/repos/Dely0/dsh-personal-workbench/releases/latest`)
   let tag = null
   try { tag = JSON.parse(r.out).tag_name ?? null } catch { tag = null }
   const ok = tag === `v${VERSION}`
