@@ -166,11 +166,19 @@ ${panelContainerCss({ view: VIEW_ATTR, official: OFFICIAL_ATTR, active: ACTIVE_A
    scripts/verify/suites/workspace-picker.mjs 的 elementFromPoint 诊断抓出来的。
    ⚠️ 本段在模板字符串里，**不能出现反引号**。 */
 .wb-modal-mask { position:fixed; inset:0; z-index:320; pointer-events:auto; background:rgba(0,0,0,.55); display:flex; align-items:center; justify-content:center; }
-.wb-modal { width:min(520px, 92vw); background:var(--dsw-alias-bg-layer-2, #1c1c1f); border:1px solid var(--dsw-alias-border-l1, rgba(255,255,255,.25)); border-radius:14px; padding:18px; box-shadow:0 18px 50px rgba(0,0,0,.4); color:var(--dsw-alias-label-primary, #eee); font-family:var(--dsw-font-family, system-ui); }
+/* ⚠️ max-height + overflow-y 是 issue #17 的判据：这个弹窗里塞着补充要求、角色选择器、
+   19 项技能列表和模型选择器，1080p / 150% 缩放下比视口还高。没有高度上限时，内容会上下
+   同时溢出 .wb-modal，而遮罩是 position:fixed; inset:0 居中 —— 页面滚动救不回来，底部
+   的「取消 / 开始」整个跑到屏幕外，用户点了「AI 执行」却找不到「开始」，执行会话根本
+   没被创建。上限用 88vh，与 .wb-dialog 同口径；内部滚动，遮罩本身不动。 */
+.wb-modal { width:min(520px, 92vw); max-height:min(88vh,900px); overflow-y:auto; overscroll-behavior:contain; background:var(--dsw-alias-bg-layer-2, #1c1c1f); border:1px solid var(--dsw-alias-border-l1, rgba(255,255,255,.25)); border-radius:14px; padding:18px; box-shadow:0 18px 50px rgba(0,0,0,.4); color:var(--dsw-alias-label-primary, #eee); font-family:var(--dsw-font-family, system-ui); }
 .wb-modal h4 { margin:0 0 8px; }
 .wb-modal p { margin:0 0 12px; font-size:12.5px; color:var(--dsw-alias-label-secondary); }
 .wb-modal textarea { width:100%; min-height:110px; box-sizing:border-box; background:var(--dsw-alias-bg-base,#17171a); border:1px solid var(--dsw-alias-border-l1, rgba(255,255,255,.2)); color:inherit; border-radius:10px; padding:10px; font:inherit; resize:vertical; }
-.wb-modal-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:12px; }
+/* 底部按钮常驻（issue #17 的另一半）：滚动的是 .wb-modal，按钮不能再跟着内容走。
+   bottom:-18px 抵消 .wb-modal 的下内边距，让底栏贴住滚动容器下缘；背景同弹窗底色，
+   内容从它下面滚过去时不会透出字。 */
+.wb-modal-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:12px; position:sticky; bottom:-18px; padding:10px 0 2px; background:var(--dsw-alias-bg-layer-2, #1c1c1f); }
 /* 技能选择器（AI 会话前的提示词弹窗内） */
 .wb-skill-picker { margin-top:12px; border:1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.22)); border-radius:10px; padding:10px; background: color-mix(in srgb, var(--dsw-alias-label-primary, #fff) 3%, transparent); }
 .wb-skill-picker-head { display:flex; align-items:center; justify-content:space-between; font-size:12.5px; color:var(--dsw-alias-label-primary); margin-bottom:8px; }
