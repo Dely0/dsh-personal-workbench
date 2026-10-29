@@ -94,6 +94,7 @@ pnpm build && pnpm dev:install   # 装盘到本机 profile（装完重启 dsh we
 
 | 版本 | 要点 |
 |---|---|
+| **1.17.2** | **两处「点开就废」的可用性修复**：① **模型选择器一个模型都列不出来**（[issue #19](https://github.com/Dely0/dsh-personal-workbench/issues/19) / PR [#20](https://github.com/Dely0/dsh-personal-workbench/pull/20)，[@SnowNight777](https://github.com/SnowNight777)）—— DSH 0.2.1-rc.3 上宿主 `directoryFor(sessionId)` 先查 `sessions.scope()`，scope 只在有人 `retain()` 之后才物化，而 `ModelPicker` 自己挑会话却从不 retain ⇒ 先报 `ui-model-selection: session "…" resolved no scope`，补掉后首次建目录再报 `cannot get property "remote.session" without inject`（cordis traceable 服务把服务实例 `ctx` 影射成调用方 ctx）。本版取目录前按契约 retain（引用计数、卸载/切会话释放）、挑会话口径收敛到 `pickDirectorySessionId()`、调用宿主服务改走 `ctx.inject(['remote.session'])` 的子 ctx（可选依赖，不把没装该 provider 的机器整块面板 pending），重试判据只认 `resolved no scope` / `resolved no binding`。② **「AI 执行」弹窗拿不到「开始」**（[issue #17](https://github.com/Dely0/dsh-personal-workbench/issues/17) / PR [#21](https://github.com/Dely0/dsh-personal-workbench/pull/21)，[@WUWAN01](https://github.com/WUWAN01) 报告）—— `.wb-modal` 无高度上限、操作栏走普通文档流，1080p/150% 下弹窗高于视口、底部「取消/开始」被推到屏幕外且整页滚动救不回来（`task_sessions` 0 行）；本版加 `max-height:min(88vh,900px)`、`overflow-y:auto`、`overscroll-behavior:contain`，底栏改 `position:sticky` 并补图层底色，附「缺一条规则就红」的 CSS 判据与实机双相位探针 `scripts/repro/repro-issue17-modal-overflow.mjs`。同版合入 i18n 深度翻译二轮（[PR #18](https://github.com/Dely0/dsh-personal-workbench/pull/18)，[@Chewbacca96](https://github.com/Chewbacca96)）。详见 [docs/releases/v1.17.2.md](docs/releases/v1.17.2.md) |
 | **1.17.1** | **修复 issue #15：点子页「新建 / 重命名文件夹」点了没反应**（v1.16.3 客户端拆分的残留）—— 五个「新建文件夹」入口与卡片 hover 的 ✎ 从 1.16.3 起只改 `folderForm` 状态、**没有任何组件读它**，于是没弹窗、没请求、没报错；本版按拆分前的 DOM 恢复文件夹弹窗（新建/重命名两模式、Enter 提交、Esc/遮罩取消、空标题禁用），并让 `Modal` 优先聚焦 `[data-autofocus]` 主字段（否则焦点落在关闭按钮上，打字没反应）。同版新增 `test/ideasFolderForm.test.mjs`（hook 暴露的状态/动作必须有渲染层读者，防"只写不读"静默丢失回归），并修掉验收链在英文界面下的两处假红（「返回对话」定位改共享表达式、expert 真实模型跳过显式登记）。详见 [`docs/releases/v1.17.1.md`](docs/releases/v1.17.1.md) |
 | **1.17.0** | **角色库/专家 UI 可用性 + 英文界面（i18n）+ 宿主浮层挂载**：修掉专家草稿预览一字一行/横向溢出、设置页「继续修改」后弹窗不关、「查看草稿」被设置弹窗遮挡、界面露出 `**` 与角色来源标签重复；设置新增**语言**（自动/中文/English），顶栏、设置、角色库/专家、快速录入、任务表单与知识库等顶层界面支持英文，语言保存后重启仍保留；浮层改为优先挂宿主 `[data-shell-overlay]` 层并补 `pointer-events`，修复桌面端设置弹窗与模型列表被面板盖住（[issue #14](https://github.com/Dely0/dsh-personal-workbench/issues/14)）。英文界面见 [issue #12](https://github.com/Dely0/dsh-personal-workbench/issues/12)。详见 [`docs/releases/v1.17.0.md`](docs/releases/v1.17.0.md) |
 | **1.16.5** | **合入外部贡献：工作台样式节点丢失后的自愈**（[issue #9](https://github.com/Dely0/dsh-personal-workbench/issues/9) / [PR #10](https://github.com/Dely0/dsh-personal-workbench/pull/10)，[@SnowNight777](https://github.com/SnowNight777)）—— 插件活动期间 `style[data-dsh-personal-workbench-style]` 被删掉后约 **600ms** 内自动重建，关闭态面板不再"无样式弹出并覆盖界面"；观察者挂在**插件实例**上（不是模块级），`cleanup()` 先 `disposed = true` 再 `disconnect()`。同版修掉 **main 连续 33 次红的 CI**：`test/db.test.mjs` 那条"同链计划项"断言的**场景**从 2026-10-01 起就写错了、且 `finally` 里的清理异常会顶替断言失败（正是它被长期读成"Windows EPERM 假失败"的原因），CI run **#84** 双绿。详见 [`docs/releases/v1.16.5.md`](docs/releases/v1.16.5.md) |
@@ -134,6 +135,18 @@ pnpm build && pnpm dev:install   # 装盘到本机 profile（装完重启 dsh we
 - **[@Chewbacca96](https://github.com/Chewbacca96)** —— v1.17.0 的 UI localization（issue [#12](https://github.com/Dely0/dsh-personal-workbench/issues/12)）需求与边界定义。
 - **[@SnowNight777](https://github.com/SnowNight777)** —— v1.17.0 的宿主浮层挂载修复（issue [#14](https://github.com/Dely0/dsh-personal-workbench/issues/14)）提供了真实测量、`elementFromPoint` 证据与可直接落地的方案；此前 v1.15.3 / v1.16.5 的贡献见下。
 - [@tujunwenjie](https://github.com/tujunwenjie)、[@lhmhz](https://github.com/lhmhz) —— issue 诊断报告。
+- **[@SnowNight777](https://github.com/SnowNight777)** —— **v1.17.2 的模型选择器修复**（issue
+  [#19](https://github.com/Dely0/dsh-personal-workbench/issues/19) / PR
+  [#20](https://github.com/Dely0/dsh-personal-workbench/pull/20)）：报告自带两条根因（`retain()` 之后 scope 才物化；
+  cordis traceable 服务把服务实例 `ctx` 影射成调用方 ctx，于是宿主里那句 `this.ctx.remote.session` 要求调用方 inject），
+  并先划清「不能把可选 provider 写进 `inject`」的边界；PR 在 DSH 0.2.1-rc.3 桌面端实测通过。
+  此前 v1.15.3 / v1.16.5 / v1.17.0 的贡献见下。
+- **[@WUWAN01](https://github.com/WUWAN01)** —— **v1.17.2 的「AI 执行」弹窗视口缺陷**（issue
+  [#17](https://github.com/Dely0/dsh-personal-workbench/issues/17)）：报告含完整 DOM 结构、`lib/client.js:155` 的
+  `.wb-modal-mask` 规则位置、`task_sessions` 0 行证据与可直接落地的修补建议（高度上限 / 内部滚动 / sticky 底栏），
+  并指出 `lib/client/styles.js` 运行时并未被加载。
+- **[@Chewbacca96](https://github.com/Chewbacca96)** —— v1.17.2 的 **i18n 深度翻译二轮**（PR
+  [#18](https://github.com/Dely0/dsh-personal-workbench/pull/18)）：面板入口、草稿横幅、设置、容量规则、任务详情与点子 Tab。
 - **内置角色库**含两个 MIT 上游（`novotnyllc/dotnet-artisan`、`K-Dense-AI/scientific-agents`）的领域角色，
   完整署名与「我们改了什么」见 [`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md)。
 
@@ -200,6 +213,9 @@ verification chain in [`scripts/dev-verify.mjs`](scripts/dev-verify.mjs).
 
 ## Credits & License
 
-Community project, not affiliated with DeepSeek; provided as-is. External contributions and bundled
+Community project, not affiliated with DeepSeek; provided as-is. **v1.17.2** ships fixes and translations
+from [@SnowNight777](https://github.com/SnowNight777) (model picker, #19/#20),
+[@WUWAN01](https://github.com/WUWAN01) (AI-run modal viewport, #17) and
+[@Chewbacca96](https://github.com/Chewbacca96) (deeper i18n pass, #18). External contributions and bundled
 MIT-licensed persona sources are listed in [`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md).
 Licensed under [MIT](./LICENSE).

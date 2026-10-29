@@ -176,8 +176,8 @@ const MUTATIONS = [
   {
     name: 'P1 面板自己 reduce 求和「已排」（第二份实现，与纯函数迟早不一致）',
     file: PANEL,
-    from: '          已排 <b>{capacity.planned}</b> min（{capacity.plannedCount} 条，已结束 {capacity.doneMinutes} min） ·',
-    to: '          已排 <b>{capacity.plannedItems.reduce((sum, row) => sum + row.minutes, 0)}</b> min（{capacity.plannedCount} 条，已结束 {capacity.doneMinutes} min） ·',
+    from: `                  {t('已排')} <b>{capacity.planned}</b> {t('min（{n} 条，已结束 {done} min）', { n: capacity.plannedCount, done: capacity.doneMinutes })}`,
+    to: `                  {t('已排')} <b>{capacity.plannedItems.reduce((sum, row) => sum + row.minutes, 0)}</b> {t('min（{n} 条，已结束 {done} min）', { n: capacity.plannedCount, done: capacity.doneMinutes })}`,
     tests: WIRING_TESTS,
   },
   {
