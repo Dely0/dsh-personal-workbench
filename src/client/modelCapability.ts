@@ -222,7 +222,7 @@ export type ModelDirectoryOutcome =
  * @param readService - 读宿主服务的函数（调用方传 `ctx.get` 的封装）。
  * @param sessionId - 要解析目录的会话 id（空 = 会话还没就绪）。
  */
-export function resolveModelDirectoryOutcome(
+function resolveModelDirectoryOnce(
   readService: () => unknown,
   sessionId: string,
 ): ModelDirectoryOutcome {
@@ -270,6 +270,78 @@ export function resolveModelDirectoryOutcome(
 
 /** 关闭菜单时宿主失败原因的机器判据（宿主原文里点名了这两件事，就别硬翻成"不支持"）。 */
 const HOST_DIRECTORY_FAILURE_PATTERN = /no scope|no binding|inactive context|inactive/i
+
+/**
+ * **重试**判据：只有"这个会话的 scope / binding 还没物化"才值得补一次持有。
+ *
+ * 故意比上面那条**窄**：`inactive context`（fiber 已销毁）也会被上面那条命中用于措辞，
+ * 但它跟"没人 retain"是两回事 —— 那种情况下补 retain 同样会失败，重试只会把真实成因
+ * 埋到第二层报错里。两个判据各管一件事，不许合并省事。
+ */
+const RETAINABLE_SCOPE_PATTERN = /resolved no scope|resolved no binding/i
+
+/**
+ * 「这个会话的 scope 不在，先补一次持有再重试」—— **由调用方注入**，本模块不认识 `sessions`。
+ *
+ * 为什么是钩子而不是自己调用 `sessions.retain()`：本模块的硬约束是"不自己取 ctx"，
+ * 所以持有（以及它的引用计数与释放）属于 `modelDirectorySession.ts` 的 `hold.acquire()`，
+ * 这里只拿到一个"补过了没有"的布尔答案。
+ */
+export interface ModelDirectoryRetryHook {
+  /** @returns `true` = 已经补上持有，可以重试一次；`false` = 补不上（旧宿主/retain 抛错）。 */
+  readonly ensureScope?: (sessionId: string) => boolean
+}
+
+/**
+ * 目录解析的**对外唯一入口**：先解析一次，失败且成因是"scope 不在"时补一次持有再重试。
+ *
+ * ## 为什么要重试（2026-10-26 桌面端 DSH 0.2.1-rc.3 实测）
+ *
+ * 宿主的模型选择 provider 在 `directoryFor(sessionId)` 里先查 `sessions.scope(sessionId)`：
+ *
+ * ```text
+ * ui-model-selection: session "310293e7-…" resolved no scope
+ * ```
+ *
+ * 而 scope **只在有人 `retain()` 过这个会话之后才存在**（`retainScope()` 里
+ * `this.scopes.get(id) ?? this.materializeScope(id)`）。主视图（`mainView`）与右侧栏
+ * （`sidebarView`）各自会 retain，所以会话界面上的模型选择器一直正常；本插件在选择器里
+ * 自己解析目录、自己没 retain —— 工作台面板打开时主视图往往没有会话，于是兜底到
+ * `sessions.list.ids[0]`，那个会话没人持有 ⇒ 每次点开模型按钮都是红字，**选不了模型**。
+ *
+ * 所以口径是：**先按原样解析**（正常路径行为一字未变），只有在宿主明确说"scope/binding
+ * 不在"时才向调用方要一次持有，然后**重试一次**。重试仍失败时把"补过持有"这件事
+ * 写进原因里 —— 下一层排查不必再怀疑是不是少了一次 retain。
+ *
+ * ⚠️ 重试**只做一次**：`ensureScope` 返回 `false`（旧宿主没有 `retain`、或 retain 抛错）
+ * 时原样返回第一次的结果，绝不静默降级成"没有可用模型"。
+ *
+ * @param readService - 读宿主服务的函数（调用方传 `ctx.get` 的封装）。
+ * @param sessionId - 要解析目录的会话 id（空 = 会话还没就绪）。
+ * @param retry - 可选重试钩子；不传 = 与旧行为完全一致。
+ */
+export function resolveModelDirectoryOutcome(
+  readService: () => unknown,
+  sessionId: string,
+  retry?: ModelDirectoryRetryHook,
+): ModelDirectoryOutcome {
+  const first = resolveModelDirectoryOnce(readService, sessionId)
+  if (first.ok) return first
+  /**
+   * 只有"服务在场、会话也在，但宿主说这个会话没有 scope/binding"才值得重试：
+   * `code === 'service'` 是没装 provider（retain 也救不了），`inactive context` 是
+   * fiber 已销毁（同上），两者都不该被重试掩盖成因。
+   */
+  if (first.code !== 'session' || !RETAINABLE_SCOPE_PATTERN.test(first.detail)) return first
+  if (retry?.ensureScope?.(sessionId) !== true) return first
+  const second = resolveModelDirectoryOnce(readService, sessionId)
+  if (second.ok) return second
+  return {
+    ok: false,
+    code: second.code,
+    detail: `${second.detail}（已按宿主契约先 retain 该会话再重试一次，仍取不到模型目录）`,
+  }
+}
 
 /** 菜单要列什么：整份目录列表，还是"只给一个清空出口"（附带原因）。 */
 export interface ModelMenuDecision {

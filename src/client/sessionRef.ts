@@ -163,3 +163,164 @@ function safeRelease(reference: { release?: () => void } | null | undefined): vo
     /* 释放阶段的异常一律吞掉：它不代表业务失败 */
   }
 }
+
+// ---------------------------------------------------------------- 会话持有（retain 登记表）
+
+/**
+ * 会话**持有**登记表 —— 与上面的 `acquireSession()` 同属"借会话"的唯一实现。
+ *
+ * ## 为什么住在同一个文件（2026-10-26，桌面端 DSH 0.2.1-rc.3）
+ *
+ * 宿主把判据改成"只查**已被 retain 的** scope"之后，凡是要"先拿到会话、再问宿主关于它的事"
+ * 的路径都得先 `retain()` 一次：
+ *
+ * | 用途 | 出口 | 生命周期 |
+ * |---|---|---|
+ * | 发消息（要 binding 里的 session） | `acquireSession()` | 一次调用，`finally` 释放 |
+ * | 让宿主"认识"这个会话（例如读会话模型目录） | `createSessionHold().acquire()` | 界面挂载期间，按使用者计数 |
+ *
+ * 两者必须**只有一处**：仓里的 `test/panelCss.test.mjs` 用源码扫描钉住"借会话不许出现在
+ * 业务代码里"，因为"同一个语义被独立计算多次"是本项目最大的 bug 类别。所以这份登记表
+ * 放在本文件，而不是塞进调用它的组件或某个专题模块。
+ *
+ * ## 为什么持有**不取 binding**
+ *
+ * 宿主的 `directoryFor(sessionId)` 只要 scope 存在就能解析（`retainScope()` 里
+ * `this.scopes.get(id) ?? this.materializeScope(id)` 会同步物化 scope 和 binding），
+ * 而 `binding` 这个 getter 在引用被 release 之后**会抛** —— 不取它，就没这条坑。
+ * 需要 binding 的路径仍然走 `acquireSession()`（那里已经处理了 release 之后再读的问题）。
+ *
+ * ## 反面案例（真实事故）
+ *
+ * 工作台的模型选择器原先自己挑会话、自己 `directoryFor()`，从不 retain：主视图没有会话时
+ * 兜底到 `sessions.list.ids[0]`，那个会话没人持有 ⇒ 每次点开都是
+ * `ui-model-selection: session "…" resolved no scope`，一个模型都列不出来。
+ */
+
+/** 宿主 `sessions.retain()` 返回的引用（只声明持有登记需要的两个成员）。 */
+export interface SessionHoldReference {
+  /** 宿主 open 完成（或失败）时结算；失败会让引用作废，登记表据此回收。 */
+  readonly ready?: Promise<unknown>
+  release?(): void
+}
+
+/**
+ * 宿主的会话持有面（`sessions` 服务的一个子集）。
+ *
+ * 两个成员**都是可选的**：`retain` 从 0.1.7-rc.2 才有，`retainInfo` 更晚；缺任何一个
+ * 都只意味着"这条能力用不上"，不意味着调用方要崩。
+ */
+export interface SessionHoldSessions {
+  retain?(id: string, options: { source: string }): SessionHoldReference | undefined
+  retainInfo?(id: string): { getSnapshot(): { readonly retainedBy?: Record<string, number> } } | undefined
+}
+
+/** 持有登记表的对外形状（每个使用者持一颗不透明的 `holder` 对象做身份）。 */
+export interface SessionHold {
+  /**
+   * 登记一个使用者（同一 `holder` 重复登记是幂等的）。
+   *
+   * @returns `true` = 此刻本插件**确实持有**该会话（新 retain 成功，或此前已持有）；
+   *          `false` = 没持有（会话 id 为空 / 宿主没有 `retain` / **别人已经持有** /
+   *          retain 抛错）—— 调用方不得据此认为后续一定能成功，但可以据此决定是否重试。
+   */
+  acquire(sessions: SessionHoldSessions | undefined, sessionId: string, holder: object): boolean
+  /** 注销一个使用者；计数归零才真正 `release()`（重复注销无副作用）。 */
+  release(sessionId: string, holder: object): void
+  /** 此刻是否持有该会话。 */
+  holding(sessionId: string): boolean
+  /** 该会话的使用者数量（诊断与测试用）。 */
+  holderCount(sessionId: string): number
+}
+
+/** 是否**有任何来源**正持有该会话（`undefined` / 空表 ⇒ false = 不知道）。 */
+export function hasAnyRetention(retainedBy: Record<string, number> | undefined): boolean {
+  if (retainedBy === undefined || retainedBy === null) return false
+  for (const count of Object.values(retainedBy)) {
+    if (typeof count === 'number' && count > 0) return true
+  }
+  return false
+}
+
+/** 读宿主当前对该会话的持有快照（拿不到 ⇒ `undefined` = 不知道）。 */
+function readRetainedBy(sessions: SessionHoldSessions, sessionId: string): Record<string, number> | undefined {
+  try {
+    return sessions.retainInfo?.(sessionId)?.getSnapshot?.()?.retainedBy
+  } catch {
+    return undefined
+  }
+}
+
+/** 一份 `retain()` 引用 + 正在使用它的使用者集合。 */
+interface HeldSession {
+  readonly reference: SessionHoldReference
+  readonly holders: Set<object>
+}
+
+/**
+ * 建一份持有登记表（**每个使用者界面一份，绝不共享** —— 共享会让释放时机变成猜）。
+ *
+ * @param source - 写给宿主看的来源标签（默认与本插件发消息时同一个来源，便于排查）。
+ */
+export function createSessionHold(source: string = RETAIN_SOURCE): SessionHold {
+  const held = new Map<string, HeldSession>()
+
+  /** 释放并删档；**只做一次**（重复 release 会让宿主的引用计数减多）。 */
+  const drop = (sessionId: string): void => {
+    const entry = held.get(sessionId)
+    if (entry === undefined) return
+    held.delete(sessionId)
+    entry.holders.clear()
+    safeRelease(entry.reference)
+  }
+
+  return {
+    acquire(sessions, sessionId, holder) {
+      if (sessionId === '') return false
+      const existing = held.get(sessionId)
+      if (existing !== undefined) {
+        existing.holders.add(holder)
+        return true
+      }
+      if (sessions === undefined || sessions === null || typeof sessions.retain !== 'function') return false
+      // 别人已经持有（多半是 mainView）⇒ scope 本来就在，再 retain 只是白跑一次宿主 open
+      if (hasAnyRetention(readRetainedBy(sessions, sessionId))) return false
+      let reference: SessionHoldReference | undefined
+      try {
+        reference = sessions.retain(sessionId, { source })
+      } catch (error) {
+        // 不静默：失败必须可观测（规范第 4 条），但也不把异常抛给用户界面
+        console.warn(
+          `[workbench] retain 会话 ${sessionId} 失败，本次拿不到会话级能力（例如模型目录）：`
+          + (error instanceof Error ? error.message : String(error)),
+        )
+        return false
+      }
+      if (reference === undefined || reference === null) return false
+      const entry: HeldSession = { reference, holders: new Set<object>([holder]) }
+      held.set(sessionId, entry)
+      /**
+       * 宿主 open 失败时引用作废：只把它从登记表里摘掉，**不**在这里 release ——
+       * 宿主已经在拒绝路径上自行释放过，重复释放会让别人的计数被减多。
+       * `then(undefined, …)` 同时吃掉 rejection，避免未处理拒绝刷控制台。
+       */
+      void reference.ready?.then(undefined, () => {
+        if (held.get(sessionId) === entry) held.delete(sessionId)
+      })
+      return true
+    },
+    release(sessionId, holder) {
+      const entry = held.get(sessionId)
+      if (entry === undefined) return
+      entry.holders.delete(holder)
+      if (entry.holders.size > 0) return
+      drop(sessionId)
+    },
+    holding(sessionId) {
+      return held.has(sessionId)
+    },
+    holderCount(sessionId) {
+      return held.get(sessionId)?.holders.size ?? 0
+    },
+  }
+}
