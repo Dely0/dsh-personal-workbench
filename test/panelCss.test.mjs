@@ -244,3 +244,37 @@ test('间距：日期面板任务页签与下方内容必须留出间隔（写�
    */
   assert.match(dayPanel, /data-day-tree=\{activeTab\}/, '内容区必须带 data-day-tree（间距判据要能量到它），且值取兜底后的页签')
 })
+
+/**
+ * issue #17（2026-10-24 用户实测）：点「AI 执行」弹出「补充 AI 提示词」后，弹窗比视口还高，
+ * 底部「取消 / 开始」被推到屏幕外，且弹窗自己不能滚 —— 用户以为点了没反应，执行会话从未被创建。
+ *
+ * 两条判据缺一条就会复发：
+ * 1. `.wb-modal` 必须有视口高度上限 + 内部滚动（否则内容上下同时溢出，固定的遮罩救不回来）；
+ * 2. `.wb-modal-actions` 必须常驻（sticky），否则按钮跟着内容一起滚出去。
+ */
+test('视口：AI 提示词弹窗必须有高度上限且内部滚动，底部按钮常驻（issue #17）', () => {
+  const styles = readFileSync(new URL('../src/client/styles.ts', import.meta.url), 'utf8')
+  /** 取一条 CSS 规则（选择器 + 到第一个右花括号为止的正文）。 */
+  const ruleOf = (selector) => {
+    const start = styles.indexOf(selector + ' {')
+    if (start < 0) return null
+    const end = styles.indexOf('}', start)
+    return styles.slice(start, end + 1)
+  }
+  const modal = ruleOf('.wb-modal')
+  assert.ok(modal !== null, 'styles.ts 里找不到 .wb-modal 规则')
+  assert.match(modal, /max-height:\s*min\(88vh/,
+    '.wb-modal 必须有视口高度上限（88vh 口径）—— 没有上限时弹窗比屏幕还高，底部按钮不可达（issue #17）')
+  assert.match(modal, /overflow-y:\s*auto/,
+    '.wb-modal 必须能内部滚动 —— 遮罩是 position:fixed 居中，整页滚动救不回被挤出视口的按钮')
+  assert.match(modal, /overscroll-behavior:\s*contain/,
+    '内部滚动要吃掉滚动链，避免滚到底后把面板一起滚动')
+
+  const actions = ruleOf('.wb-modal-actions')
+  assert.ok(actions !== null, 'styles.ts 里找不到 .wb-modal-actions 规则')
+  assert.match(actions, /position:\s*sticky/,
+    '操作按钮必须常驻（position:sticky），不能跟着内容滚出弹窗（issue #17）')
+  assert.match(actions, /bottom:\s*-?\d/,
+    'sticky 需要 bottom 偏移才贴得住滚动容器下缘（-18px 用来抵消 .wb-modal 的 padding）')
+})
